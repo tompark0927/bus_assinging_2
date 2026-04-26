@@ -1,0 +1,123 @@
+{
+  "common": {
+    "loading": "불러오는 중...",
+    "error": "오류가 발생했습니다",
+    "retry": "다시 시도",
+    "save": "저장",
+    "cancel": "취소",
+    "delete": "삭제",
+    "edit": "수정",
+    "create": "등록",
+    "search": "검색",
+    "confirm": "확인",
+    "close": "닫기",
+    "back": "뒤로",
+    "next": "다음",
+    "prev": "이전",
+    "all": "전체",
+    "noData": "데이터가 없습니다",
+    "yes": "예",
+    "no": "아니오"
+  },
+  "auth": {
+    "login": "로그인",
+    "logout": "로그아웃",
+    "email": "이메일",
+    "password": "비밀번호",
+    "companyCode": "회사 코드",
+    "loginFailed": "로그인에 실패했습니다",
+    "welcome": "안녕하세요, {{name}}님!"
+  },
+  "nav": {
+    "dashboard": "대시보드",
+    "schedule": "배차표",
+    "drivers": "기사 관리",
+    "buses": "버스 관리",
+    "routes": "노선 관리",
+    "dayoff": "휴무 요청",
+    "emergency": "긴급 슬롯",
+    "attendance": "근태 (52시간)",
+    "payroll": "급여 관리",
+    "safety": "안전 관리",
+    "inspection": "차량 점검",
+    "maintenance": "차량 정비",
+    "approvals": "결재함",
+    "board": "게시판",
+    "messages": "메시지",
+    "rules": "회사 규칙",
+    "audit": "감사 로그",
+    "myData": "내 데이터 관리"
+  },
+  "dashboard": {
+    "title": "대시보드",
+    "totalDrivers": "전체 기사",
+    "activeToday": "오늘 근무",
+    "pendingApprovals": "대기중 결재",
+    "emergencyDrops": "긴급 슬롯",
+    "todaySchedule": "오늘 배차 현황",
+    "recentPosts": "최근 게시글"
+  },
+  "schedule": {
+    "title": "배차표",
+    "generate": "배차표 생성",
+    "publish": "배차표 발행",
+    "export": "Excel 내보내기",
+    "aiRecommend": "AI 추천",
+    "draft": "초안",
+    "published": "발행됨",
+    "archived": "보관",
+    "morning": "조",
+    "afternoon": "석",
+    "fullDay": "종"
+  },
+  "drivers": {
+    "title": "기사 관리",
+    "total": "전체 기사",
+    "main": "정규 기사",
+    "spare": "예비 기사",
+    "inactive": "비활성",
+    "name": "이름",
+    "employeeId": "사원번호",
+    "phone": "전화번호",
+    "type": "구분",
+    "route": "배정 노선",
+    "licenseExpiry": "면허 만료"
+  },
+  "roles": {
+    "OWNER": "대표이사",
+    "DIRECTOR": "관리소장",
+    "ADMIN": "관리자",
+    "DISPATCH": "배차담당",
+    "HR": "총무/인사",
+    "ACCOUNTING": "경리",
+    "SAFETY_MGR": "안전관리",
+    "DRIVER": "기사"
+  },
+  "status": {
+    "pending": "대기중",
+    "approved": "승인",
+    "rejected": "반려",
+    "open": "미처리",
+    "filled": "대체완료",
+    "cancelled": "취소",
+    "present": "출근",
+    "late": "지각",
+    "absent": "결근",
+    "onLeave": "휴무"
+  },
+  "theme": {
+    "light": "라이트",
+    "dark": "다크",
+    "system": "시스템"
+  },
+  "shortcuts": {
+    "title": "키보드 단축키",
+    "search": "전체 검색",
+    "closeModal": "모달 닫기",
+    "help": "단축키 도움말"
+  },
+  "language": {
+    "ko": "한국어",
+    "en": "English"
+  }
+}

@@ -1,0 +1,315 @@
+version: "2"
+type: frontend
+tech_stack:
+  - React
+  - TypeScript
+  - Vite
+  - TailwindCSS
+  - React Router v6
+  - TanStack Query
+  - Zustand
+  - Axios
+  - framer-motion
+
+routes:
+  - path: /
+    file: src/pages/LandingPage.tsx
+    auth_required: false
+    description: B2B SaaS landing page with USPs, ROI calculator, and contact form
+  - path: /login
+    file: src/pages/LoginPage.tsx
+    auth_required: false
+    description: Login with company code, email, and password
+  - path: /dashboard
+    file: src/pages/DashboardPage.tsx
+    auth_required: true
+    description: Admin dashboard with KPI stats and today schedule
+  - path: /dashboard/drivers
+    file: src/pages/DriversPage.tsx
+    auth_required: true
+    description: Driver management CRUD
+  - path: /dashboard/buses
+    file: src/pages/BusesPage.tsx
+    auth_required: true
+    description: Bus fleet management CRUD
+  - path: /dashboard/routes
+    file: src/pages/RoutesPage.tsx
+    auth_required: true
+    description: Bus route management CRUD
+  - path: /dashboard/schedule
+    file: src/pages/SchedulePage.tsx
+    auth_required: true
+    description: Monthly schedule grid with AI generation and publishing
+  - path: /dashboard/dayoff
+    file: src/pages/DayOffPage.tsx
+    auth_required: true
+    description: Day-off request management and approval flow
+  - path: /dashboard/emergency
+    file: src/pages/EmergencyPage.tsx
+    auth_required: true
+    description: Emergency slot drop and fill management
+  - path: /dashboard/maintenance
+    file: src/pages/MaintenancePage.tsx
+    auth_required: true
+    description: Vehicle maintenance records and scheduling
+  - path: /dashboard/chatbot
+    file: src/pages/ChatBotPage.tsx
+    auth_required: true
+    description: AI chatbot assistant for scheduling queries
+  - path: /dashboard/rules
+    file: src/pages/RulesPage.tsx
+    auth_required: true
+    description: Company rules management used by AI scheduler
+
+features:
+  - name: Landing Page
+    description: Public B2B landing page with ROI calculator and contact form
+    files:
+      - src/pages/LandingPage.tsx
+    entry_route: /
+    user_interactions:
+      - View hero section with USPs
+      - Adjust ROI calculator sliders for bus count and employee count
+      - Fill and submit contact form with name and phone number
+      - Click "데모 체험하기" button to navigate to login
+    api_calls:
+      - method: POST
+        endpoint: /api/contacts
+    auth_required: false
+
+  - name: User Login
+    description: Login with company code, email, and password
+    files:
+      - src/pages/LoginPage.tsx
+      - src/store/authStore.ts
+      - src/services/api.ts
+    entry_route: /login
+    user_interactions:
+      - Fill company code field (e.g. demo)
+      - Fill email field (e.g. demo@busync.com)
+      - Fill password field (e.g. demo)
+      - Click login button
+      - See success toast and redirect to /dashboard
+      - See error toast on wrong credentials
+    api_calls:
+      - method: POST
+        endpoint: /api/auth/login
+    auth_required: false
+
+  - name: Dashboard
+    description: Main dashboard with KPI cards and today's schedule
+    files:
+      - src/pages/DashboardPage.tsx
+    entry_route: /dashboard
+    user_interactions:
+      - View KPI cards showing active drivers, buses, routes, emergency count
+      - View today's schedule slots
+    api_calls:
+      - method: GET
+        endpoint: /api/users?role=DRIVER&isActive=true
+      - method: GET
+        endpoint: /api/buses
+      - method: GET
+        endpoint: /api/routes
+      - method: GET
+        endpoint: /api/emergency?status=OPEN
+      - method: GET
+        endpoint: /api/dayoff?status=PENDING
+      - method: GET
+        endpoint: /api/schedules/{year}/{month}
+    auth_required: true
+
+  - name: Driver Management
+    description: Create, view, edit and deactivate drivers
+    files:
+      - src/pages/DriversPage.tsx
+    entry_route: /dashboard/drivers
+    user_interactions:
+      - View list of all drivers
+      - Search drivers by name
+      - Click "기사 등록" button to open modal
+      - Fill driver form with name, phone, email, employee ID, driver type
+      - Submit form to create new driver
+      - Click edit button on existing driver to update
+      - Click trash icon to deactivate driver
+    api_calls:
+      - method: GET
+        endpoint: /api/users?role=DRIVER
+      - method: POST
+        endpoint: /api/users
+      - method: PUT
+        endpoint: /api/users/{id}
+      - method: DELETE
+        endpoint: /api/users/{id}
+    auth_required: true
+
+  - name: Bus Management
+    description: Create, view, edit and delete buses
+    files:
+      - src/pages/BusesPage.tsx
+    entry_route: /dashboard/buses
+    user_interactions:
+      - View bus cards grid
+      - Click "버스 등록" to open create modal
+      - Fill bus number, plate, model, year, capacity, route
+      - Submit to create bus
+      - Click edit to update bus
+      - Click delete icon to remove bus
+    api_calls:
+      - method: GET
+        endpoint: /api/buses
+      - method: POST
+        endpoint: /api/buses
+      - method: PUT
+        endpoint: /api/buses/{id}
+      - method: DELETE
+        endpoint: /api/buses/{id}
+    auth_required: true
+
+  - name: Route Management
+    description: Create, view, edit routes and assign drivers
+    files:
+      - src/pages/RoutesPage.tsx
+    entry_route: /dashboard/routes
+    user_interactions:
+      - View list of routes with driver assignments
+      - Click "노선 추가" to create a new route
+      - Fill route number, name, start and end points
+      - Submit to create
+      - Assign or remove driver from route
+    api_calls:
+      - method: GET
+        endpoint: /api/routes
+      - method: POST
+        endpoint: /api/routes
+      - method: PUT
+        endpoint: /api/routes/{id}
+      - method: POST
+        endpoint: /api/routes/{id}/assign
+      - method: DELETE
+        endpoint: /api/routes/{id}/assign/{driverId}
+    auth_required: true
+
+  - name: Schedule Management
+    description: View, generate, publish and edit monthly dispatch schedule
+    files:
+      - src/pages/SchedulePage.tsx
+    entry_route: /dashboard/schedule
+    user_interactions:
+      - Navigate months with left/right arrow buttons
+      - View schedule grid for current month
+      - Click "배차 생성" to open generation modal
+      - Set work days and rest days count
+      - Click confirm to auto-generate schedule
+      - Click "발행" to publish schedule to drivers
+      - Click "엑셀" to export schedule
+    api_calls:
+      - method: GET
+        endpoint: /api/schedules/{year}/{month}
+      - method: POST
+        endpoint: /api/schedules/generate
+      - method: PUT
+        endpoint: /api/schedules/{year}/{month}/publish
+      - method: GET
+        endpoint: /api/schedules/{year}/{month}/export
+    auth_required: true
+
+  - name: Day-Off Request Management
+    description: View and approve/reject driver day-off requests
+    files:
+      - src/pages/DayOffPage.tsx
+    entry_route: /dashboard/dayoff
+    user_interactions:
+      - View list of day-off requests with status filter
+      - Click "승인" button to approve request
+      - Click "반려" button to reject request with note
+    api_calls:
+      - method: GET
+        endpoint: /api/dayoff
+      - method: PUT
+        endpoint: /api/dayoff/{id}/review
+    auth_required: true
+
+  - name: Emergency Slot Management
+    description: Manage emergency slot drops when a driver can't make their shift
+    files:
+      - src/pages/EmergencyPage.tsx
+    entry_route: /dashboard/emergency
+    user_interactions:
+      - View open emergency drops
+      - View who filled the slot
+      - See real-time status of dropped slots
+    api_calls:
+      - method: GET
+        endpoint: /api/emergency
+    auth_required: true
+
+  - name: Vehicle Maintenance
+    description: Track and schedule vehicle maintenance records
+    files:
+      - src/pages/MaintenancePage.tsx
+    entry_route: /dashboard/maintenance
+    user_interactions:
+      - View maintenance records in a table
+      - Click "정비 등록" to add new record
+      - Select bus, maintenance type, and scheduled date
+      - Submit to create new maintenance record
+      - Click "완료 처리" to mark as complete
+    api_calls:
+      - method: GET
+        endpoint: /api/maintenance
+      - method: POST
+        endpoint: /api/maintenance
+      - method: PUT
+        endpoint: /api/maintenance/{id}
+    auth_required: true
+
+  - name: AI Chatbot
+    description: AI assistant (Claude) for scheduling queries and route suggestions
+    files:
+      - src/pages/ChatBotPage.tsx
+    entry_route: /dashboard/chatbot
+    user_interactions:
+      - View chat sessions list
+      - Start a new chat session
+      - Type a message and press send
+      - See AI response appear in chat
+    api_calls:
+      - method: GET
+        endpoint: /api/chat/sessions
+      - method: POST
+        endpoint: /api/chat/sessions
+      - method: POST
+        endpoint: /api/chat/sessions/{id}/messages
+    auth_required: true
+
+  - name: Company Rules
+    description: Manage company dispatch rules used by AI scheduler
+    files:
+      - src/pages/RulesPage.tsx
+    entry_route: /dashboard/rules
+    user_interactions:
+      - View list of rules
+      - Click "규칙 추가" to manually add a rule
+      - Fill rule title and content
+      - Submit to save rule
+      - Delete a rule
+    api_calls:
+      - method: GET
+        endpoint: /api/rules
+      - method: POST
+        endpoint: /api/rules
+      - method: DELETE
+        endpoint: /api/rules/{id}
+    auth_required: true
+
+known_limitations:
+  - issue: Spline 3D scene on landing page uses a placeholder URL and may not load
+    location: src/pages/LandingPage.tsx
+    impact: 3D hero visuals may not display; CSS gradient fallback shown
+  - issue: Kakao login requires valid VITE_KAKAO_JS_KEY and registered app
+    location: src/pages/LoginPage.tsx
+    impact: Kakao login tab is non-functional without valid key
+  - issue: Phone OTP login requires active SMS gateway (CoolSMS)
+    location: src/pages/LoginPage.tsx
+    impact: Phone OTP tab is non-functional without SMS credentials

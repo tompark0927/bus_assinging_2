@@ -1,0 +1,21 @@
+{
+  "name": "busync",
+  "version": "1.0.0",
+  "description": "Busync - 버스 배차 자동화 SaaS 플랫폼",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev --workspace=packages/backend",
+    "dev:web": "npm run dev --workspace=packages/admin-web",
+    "dev:mobile": "npm run dev --workspace=packages/mobile",
+    "build:backend": "npm run build --workspace=packages/backend",
+    "build:web": "npm run build --workspace=packages/admin-web"
+  },
+  "overrides": {
+    "expo-keep-awake": "~12.8.2",
+    "react": "18.2.0",
+    "react-native": "0.74.5"
+  }
+}

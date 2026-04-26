@@ -1,0 +1,16 @@
+{
+  "status": "commited",
+  "type": "frontend",
+  "scope": "codebase",
+  "localEndpoint": "http://localhost:3000",
+  "executionArgs": {
+    "projectName": "bus-assinging-2",
+    "projectPath": "/Users/tompark/Desktop/bus-assinging-2",
+    "testIds": [],
+    "additionalInstruction": "Login credentials: companyCode=demo, email=demo@busync.com, password=demo. After login, navigate to /dashboard. All protected routes are under /dashboard/*. Test all pages for basic rendering and key user interactions.",
+    "serverMode": "development",
+    "envs": {
+      "API_KEY": "sk-user-rhe2Fd1e4xhCFoxGKAGhR5nJyDbAyQ8TLS-De01vbyPxUL9WXn72pcjASsEct1qnqswufGY5M4qcKBUJrdgVV7uYR6gEhpZM8xrmKNFazfesi2mYNin-tXjup2Q5WAekOxA"
+    }
+  }
+}

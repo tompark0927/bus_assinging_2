@@ -1,0 +1,123 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "error": "An error occurred",
+    "retry": "Retry",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "search": "Search",
+    "confirm": "Confirm",
+    "close": "Close",
+    "back": "Back",
+    "next": "Next",
+    "prev": "Previous",
+    "all": "All",
+    "noData": "No data available",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "auth": {
+    "login": "Login",
+    "logout": "Logout",
+    "email": "Email",
+    "password": "Password",
+    "companyCode": "Company Code",
+    "loginFailed": "Login failed",
+    "welcome": "Hello, {{name}}!"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "schedule": "Schedule",
+    "drivers": "Drivers",
+    "buses": "Buses",
+    "routes": "Routes",
+    "dayoff": "Day-off Requests",
+    "emergency": "Emergency Slots",
+    "attendance": "Attendance (52h)",
+    "payroll": "Payroll",
+    "safety": "Safety",
+    "inspection": "Vehicle Inspection",
+    "maintenance": "Maintenance",
+    "approvals": "Approvals",
+    "board": "Board",
+    "messages": "Messages",
+    "rules": "Company Rules",
+    "audit": "Audit Log",
+    "myData": "My Data"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "totalDrivers": "Total Drivers",
+    "activeToday": "Active Today",
+    "pendingApprovals": "Pending Approvals",
+    "emergencyDrops": "Emergency Slots",
+    "todaySchedule": "Today's Schedule",
+    "recentPosts": "Recent Posts"
+  },
+  "schedule": {
+    "title": "Schedule",
+    "generate": "Generate Schedule",
+    "publish": "Publish Schedule",
+    "export": "Export to Excel",
+    "aiRecommend": "AI Recommend",
+    "draft": "Draft",
+    "published": "Published",
+    "archived": "Archived",
+    "morning": "AM",
+    "afternoon": "PM",
+    "fullDay": "Full"
+  },
+  "drivers": {
+    "title": "Driver Management",
+    "total": "Total Drivers",
+    "main": "Regular Drivers",
+    "spare": "Spare Drivers",
+    "inactive": "Inactive",
+    "name": "Name",
+    "employeeId": "Employee ID",
+    "phone": "Phone",
+    "type": "Type",
+    "route": "Assigned Route",
+    "licenseExpiry": "License Expiry"
+  },
+  "roles": {
+    "OWNER": "CEO",
+    "DIRECTOR": "Director",
+    "ADMIN": "Admin",
+    "DISPATCH": "Dispatcher",
+    "HR": "HR",
+    "ACCOUNTING": "Accounting",
+    "SAFETY_MGR": "Safety Manager",
+    "DRIVER": "Driver"
+  },
+  "status": {
+    "pending": "Pending",
+    "approved": "Approved",
+    "rejected": "Rejected",
+    "open": "Open",
+    "filled": "Filled",
+    "cancelled": "Cancelled",
+    "present": "Present",
+    "late": "Late",
+    "absent": "Absent",
+    "onLeave": "On Leave"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "search": "Search",
+    "closeModal": "Close Modal",
+    "help": "Shortcut Help"
+  },
+  "language": {
+    "ko": "한국어",
+    "en": "English"
+  }
+}

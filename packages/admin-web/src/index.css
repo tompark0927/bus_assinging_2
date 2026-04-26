@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+  }
+  .dark body,
+  body.dark {
+    @apply bg-gray-900 text-gray-100;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-white text-gray-700 px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors font-medium dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600 dark:hover:bg-gray-700;
+  }
+  .btn-danger {
+    @apply bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors font-medium;
+  }
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6 dark:bg-gray-800 dark:border-gray-700;
+  }
+  .input {
+    @apply w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100;
+  }
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  .form-input {
+    @apply w-full border border-gray-200 rounded-xl px-4 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100;
+  }
+}
+
+/* ── 페이드인 애니메이션 (Framer Motion 대체) ── */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+.animate-fade-in-up {
+  animation: fadeInUp 0.3s ease-out both;
+}
+.animate-fade-in-scale {
+  animation: fadeInScale 0.3s ease-out both;
+}
+
+/* ── 배차표 인쇄 최적화 ── */
+@media print {
+  /* 사이드바, 헤더, 버튼 등 숨기기 */
+  nav, aside,
+  [data-print-hide],
+  .btn-primary, .btn-secondary, .btn-danger,
+  button:not([data-print-show]) {
+    display: none !important;
+  }
+
+  /* 전체 레이아웃: 여백 없이 */
+  body {
+    background: white !important;
+    color: black !important;
+    font-size: 10pt !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .card {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+
+  /* 배차표 그리드: 페이지에 맞추기 */
+  table {
+    font-size: 8pt !important;
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+
+  table th, table td {
+    border: 1px solid #000 !important;
+    padding: 2px 4px !important;
+    background: white !important;
+    color: black !important;
+  }
+
+  table th {
+    background: #e5e7eb !important;
+    font-weight: bold !important;
+  }
+
+  /* 색상 유지 (슬롯 상태) */
+  .bg-blue-100, .bg-blue-50 { background: #dbeafe !important; }
+  .bg-red-100, .bg-red-50 { background: #fee2e2 !important; }
+  .bg-green-100, .bg-green-50 { background: #d1fae5 !important; }
+  .bg-gray-100, .bg-gray-50 { background: #f3f4f6 !important; }
+  .bg-orange-100, .bg-orange-50 { background: #ffedd5 !important; }
+
+  /* 가로 방향 */
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+
+  /* 페이지 넘김 방지 */
+  tr { page-break-inside: avoid; }
+}
