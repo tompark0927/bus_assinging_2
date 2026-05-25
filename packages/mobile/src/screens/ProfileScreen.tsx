@@ -74,16 +74,16 @@ export default function ProfileScreen() {
           </View>
         ) : (
           <View style={styles.statsRow}>
-            <View style={[styles.statCard, { backgroundColor: colors.primaryGhost }]}>
-              <Text style={[styles.statNum, { color: colors.primary }]}>{summary?.workDays ?? 0}</Text>
+            <View style={styles.statCard}>
+              <Text style={styles.statNum}>{summary?.workDays ?? 0}</Text>
               <Text style={styles.statLabel}>{t('schedule.workDays')}</Text>
             </View>
-            <View style={[styles.statCard, { backgroundColor: colors.successSoft }]}>
-              <Text style={[styles.statNum, { color: colors.successDeep }]}>{summary?.restDays ?? 0}</Text>
+            <View style={styles.statCard}>
+              <Text style={styles.statNum}>{summary?.restDays ?? 0}</Text>
               <Text style={styles.statLabel}>{t('schedule.restDays')}</Text>
             </View>
-            <View style={[styles.statCard, { backgroundColor: colors.warningSoft }]}>
-              <Text style={[styles.statNum, { color: colors.warningDeep }]}>{summary?.acceptedSubstitutes ?? 0}</Text>
+            <View style={styles.statCard}>
+              <Text style={styles.statNum}>{summary?.acceptedSubstitutes ?? 0}</Text>
               <Text style={styles.statLabel}>{t('profile.acceptedSubstitutes')}</Text>
             </View>
           </View>
@@ -350,9 +350,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     paddingVertical: spacing.md,
     alignItems: 'center',
+    backgroundColor: colors.bgAlt,
+    borderWidth: 1,
+    borderColor: colors.borderSoft,
   },
-  statNum: { fontSize: typography['3xl'], fontWeight: weight.extrabold, letterSpacing: -0.5 },
-  statLabel: { fontSize: typography.base, color: colors.textBody, marginTop: 2, fontWeight: weight.semibold },
+  statNum: { fontSize: typography['3xl'], fontWeight: weight.extrabold, letterSpacing: -0.5, color: colors.primary },
+  statLabel: { fontSize: typography.base, color: colors.textMuted, marginTop: 2, fontWeight: weight.semibold },
 
   menuItem: {
     flexDirection: 'row',
