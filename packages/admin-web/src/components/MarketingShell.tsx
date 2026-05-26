@@ -44,16 +44,16 @@ export function MarketingNav() {
 
   return (
     <nav className="sticky top-0 z-40 bg-white/80 dark:bg-gray-950/80 backdrop-blur-md border-b border-gray-200 dark:border-white/10">
-      <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
         <Link to="/" className="flex items-center shrink-0" aria-label="Busync 홈">
           <img
             src="/busync-lockup.png"
             alt="Busync"
-            className="h-9 w-auto object-contain dark:bg-white dark:rounded-lg dark:px-2 dark:py-1"
+            className="h-12 w-auto object-contain dark:bg-white dark:rounded-lg dark:px-2 dark:py-1"
           />
         </Link>
 
-        <div className="hidden md:flex items-center gap-6 text-sm font-medium text-gray-600 dark:text-gray-300">
+        <div className="hidden md:flex items-center gap-8 text-base font-medium text-gray-600 dark:text-gray-300">
           {NAV_ITEMS.map((item) => (
             <button
               key={item.label}
@@ -72,13 +72,13 @@ export function MarketingNav() {
         <div className="flex gap-3">
           <Link
             to="/login"
-            className="hidden sm:inline-flex items-center text-sm font-medium px-4 py-2 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+            className="hidden sm:inline-flex items-center text-base font-medium px-5 py-2.5 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
           >
             로그인
           </Link>
           <Link
             to="/register"
-            className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2 rounded-lg transition-colors"
+            className="bg-blue-600 hover:bg-blue-700 text-white text-base font-semibold px-6 py-2.5 rounded-lg transition-colors"
           >
             무료 시작
           </Link>
