@@ -278,10 +278,6 @@ function BusesTab() {
     queryKey: ['buses'],
     queryFn: () => busesApi.list().then((r) => r.data.data),
   });
-  const { data: routes = [] } = useQuery<Route[]>({
-    queryKey: ['routes'],
-    queryFn: () => routesApi.list().then((r) => r.data.data),
-  });
 
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -299,12 +295,6 @@ function BusesTab() {
     onError: (e) => toast.error(extractError(e)),
   });
 
-  const routeName = (id: number | null) => {
-    if (!id) return '-';
-    const r = routes.find((x) => x.id === id);
-    return r ? `${r.routeNumber}번` : `#${id}`;
-  };
-
   return (
     <>
       <Toolbar searchValue={q} onSearch={setQ} searchPlaceholder="차번·차종 검색" onCreate={() => setCreating(true)} createLabel="버스 추가" count={filtered.length} />
@@ -318,7 +308,6 @@ function BusesTab() {
                 <Th>차종</Th>
                 <Th>연식</Th>
                 <Th>정원</Th>
-                <Th>노선</Th>
                 <Th>상태</Th>
                 <Th align="right">액션</Th>
               </tr>
@@ -331,7 +320,6 @@ function BusesTab() {
                   <Td>{b.model || '-'}</Td>
                   <Td>{b.year || '-'}</Td>
                   <Td>{b.capacity}석</Td>
-                  <Td>{routeName(b.routeId)}</Td>
                   <Td><Badge color={b.isActive ? 'green' : 'gray'}>{b.isActive ? '운행' : '운휴'}</Badge></Td>
                   <Td align="right">
                     <div className="inline-flex gap-1">
@@ -351,7 +339,6 @@ function BusesTab() {
       {(creating || editing) && (
         <BusFormModal
           initial={editing}
-          routes={routes}
           onClose={() => { setEditing(null); setCreating(false); }}
           onSaved={() => { qc.invalidateQueries({ queryKey: ['buses'] }); setEditing(null); setCreating(false); }}
         />
@@ -360,25 +347,24 @@ function BusesTab() {
   );
 }
 
-function BusFormModal({ initial, routes, onClose, onSaved }: { initial: Bus | null; routes: Route[]; onClose: () => void; onSaved: () => void }) {
+function BusFormModal({ initial, onClose, onSaved }: { initial: Bus | null; onClose: () => void; onSaved: () => void }) {
   const isEdit = !!initial;
   const [busNumber, setBusNumber] = useState(initial?.busNumber || '');
   const [plateNumber, setPlateNumber] = useState(initial?.plateNumber || '');
   const [model, setModel] = useState(initial?.model || '');
   const [year, setYear] = useState<string>(initial?.year ? String(initial.year) : '');
   const [capacity, setCapacity] = useState<string>(String(initial?.capacity || 40));
-  const [routeId, setRouteId] = useState<string>(initial?.routeId ? String(initial.routeId) : '');
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
 
   const save = useMutation({
     mutationFn: () => {
+      // 배정 노선(routeId)은 UI에서 제거됨 — payload 에 포함하지 않아 기존 DB 값/솔버 로직을 보존한다.
       const payload: Record<string, unknown> = {
         busNumber: busNumber.trim(),
         plateNumber: plateNumber.trim(),
         model: model.trim() || null,
         year: year ? parseInt(year, 10) : null,
         capacity: parseInt(capacity, 10) || 40,
-        routeId: routeId ? parseInt(routeId, 10) : null,
         isActive,
       };
       return isEdit ? busesApi.update(initial!.id, payload) : busesApi.create(payload);
@@ -397,17 +383,7 @@ function BusFormModal({ initial, routes, onClose, onSaved }: { initial: Bus | nu
         <FormField label="차종"><Input value={model} onChange={setModel} placeholder="현대 슈퍼에어로시티" /></FormField>
         <FormField label="연식"><Input value={year} onChange={setYear} placeholder="2024" /></FormField>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <FormField label="정원"><Input value={capacity} onChange={setCapacity} placeholder="40" /></FormField>
-        <FormField label="배정 노선">
-          <select className={inputCls} value={routeId} onChange={(e) => setRouteId(e.target.value)}>
-            <option value="">미배정</option>
-            {routes.map((r) => (
-              <option key={r.id} value={r.id}>{r.routeNumber}번 — {r.name}</option>
-            ))}
-          </select>
-        </FormField>
-      </div>
+      <FormField label="정원"><Input value={capacity} onChange={setCapacity} placeholder="40" /></FormField>
       <label className="flex items-center gap-2 text-[15px] text-gray-700 dark:text-gray-300">
         <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
         운행 중
@@ -431,6 +407,12 @@ function RoutesTab() {
   const { data: list = [], isLoading } = useQuery<Route[]>({
     queryKey: ['routes'],
     queryFn: () => routesApi.list().then((r) => r.data.data),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: number) => routesApi.delete(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['routes'] }); toast.success('삭제되었습니다.'); },
+    onError: (e) => toast.error(extractError(e)),
   });
 
   const filtered = useMemo(() => {
@@ -467,7 +449,12 @@ function RoutesTab() {
                   <Td>{r.endPoint || '-'}</Td>
                   <Td><Badge color={r.isActive ? 'green' : 'gray'}>{r.isActive ? '운행' : '운휴'}</Badge></Td>
                   <Td align="right">
-                    <IconBtn title="수정" onClick={() => setEditing(r)}><Pencil size={16} /></IconBtn>
+                    <div className="inline-flex gap-1">
+                      <IconBtn title="수정" onClick={() => setEditing(r)}><Pencil size={16} /></IconBtn>
+                      <IconBtn title="삭제" danger onClick={() => { if (confirm(`${r.routeNumber}번 노선을 삭제하시겠어요?`)) remove.mutate(r.id); }}>
+                        <Trash2 size={16} />
+                      </IconBtn>
+                    </div>
                   </Td>
                 </tr>
               ))}

@@ -184,6 +184,7 @@ export const routesApi = {
   get: (id: number) => api.get(`/routes/${id}`),
   create: (data: Record<string, unknown>) => api.post('/routes', data),
   update: (id: number, data: Record<string, unknown>) => api.put(`/routes/${id}`, data),
+  delete: (id: number) => api.delete(`/routes/${id}`),
   assignDriver: (routeId: number, driverId: number, startDate: string) =>
     api.post(`/routes/${routeId}/assign`, { driverId, startDate }),
   removeDriver: (routeId: number, driverId: number) =>
