@@ -127,14 +127,11 @@ export default function Layout() {
         <div className="h-20 px-6 flex items-center border-b border-gray-700">
           <div className="flex items-center justify-between gap-3 w-full">
             <div className="min-w-0">
-              <div className="bg-white rounded-xl px-3 py-2 inline-block ring-1 ring-white/15 shadow-sm">
-                <img
-                  src="/busync-lockup.png"
-                  alt="Busync"
-                  className="h-7 w-auto object-contain"
-                />
-              </div>
-              <p className="mt-2 text-sm text-gray-400 truncate">{company?.name || '배차 관리 시스템'}</p>
+              <img
+                src="/busync-lockup.png"
+                alt="Busync"
+                className="h-8 w-auto object-contain"
+              />
             </div>
             <button
               onClick={() => setSidebarOpen(false)}
@@ -213,9 +210,7 @@ export default function Layout() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-base font-semibold truncate">{user?.name}</p>
-              <p className="text-sm text-gray-400">{
-                ({ OWNER: '대표이사', DIRECTOR: '관리소장', ADMIN: '관리자', DISPATCH: '배차담당', HR: '총무/인사', ACCOUNTING: '경리', SAFETY_MGR: '안전관리', DRIVER: '기사' } as Record<string, string>)[userRole] || userRole
-              }</p>
+              <p className="text-sm text-gray-400 truncate">{company?.name || '배차 관리 시스템'}</p>
             </div>
           </div>
 
