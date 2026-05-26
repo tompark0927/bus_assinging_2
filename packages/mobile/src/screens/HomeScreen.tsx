@@ -32,7 +32,7 @@ interface Slot {
   date: string;
   isRestDay: boolean;
   status: string;
-  route: { routeNumber: string; name: string };
+  route: { routeNumber: string; name: string; startPoint?: string | null; endPoint?: string | null };
   bus?: { busNumber: string };
   shift: string;
 }
@@ -281,6 +281,7 @@ export default function HomeScreen() {
               <Text style={styles.restDaySub}>{t('home.restDaySub')}</Text>
             </View>
           ) : (
+            <>
             <View style={styles.todaySchedule}>
               <View style={styles.routeBadge}>
                 <Text style={styles.routeNum}>{todaySlot.route.routeNumber}</Text>
@@ -329,6 +330,17 @@ export default function HomeScreen() {
                 </Text>
               </View>
             </View>
+
+            {todaySlot.route.startPoint && todaySlot.route.endPoint && (
+              <View style={styles.routePathBar}>
+                <Ionicons name="location-outline" size={15} color={colors.primary} />
+                <Text style={styles.routePathText} numberOfLines={1}>{todaySlot.route.startPoint}</Text>
+                <Ionicons name="arrow-forward" size={14} color={colors.textSubtle} style={{ marginHorizontal: 6 }} />
+                <Ionicons name="flag-outline" size={15} color={colors.successDeep} />
+                <Text style={styles.routePathText} numberOfLines={1}>{todaySlot.route.endPoint}</Text>
+              </View>
+            )}
+            </>
           )}
         </View>
 
@@ -635,6 +647,21 @@ const styles = StyleSheet.create({
   statusNormal: { backgroundColor: colors.successSoft },
   statusDropped: { backgroundColor: colors.dangerSoft },
   statusFilled: { backgroundColor: colors.primaryGhost },
+  routePathBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSoft,
+  },
+  routePathText: {
+    fontSize: typography.base,
+    color: colors.textBody,
+    fontWeight: weight.semibold,
+    flexShrink: 1,
+    marginLeft: 4,
+  },
   statusChipText: {
     fontSize: typography.sm,
     fontWeight: weight.bold,
