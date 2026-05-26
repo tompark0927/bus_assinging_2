@@ -152,11 +152,6 @@ export default function RegisterPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center p-4">
-      {/* Background decoration */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] opacity-20 pointer-events-none">
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-400 to-blue-600 blur-[120px] rounded-full" />
-      </div>
-
       <div className="w-full max-w-lg relative z-10">
         {/* Logo */}
         <div className="text-center mb-8">
@@ -167,7 +162,6 @@ export default function RegisterPage() {
               className="h-[52px] w-auto object-contain dark:bg-white dark:rounded-lg dark:px-2 dark:py-1"
             />
           </Link>
-          <p className="text-gray-500 dark:text-gray-400 mt-3 text-sm">14일 무료 체험 &middot; 신용카드 불필요</p>
         </div>
 
         {/* Step indicator */}

@@ -15,6 +15,10 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
+  // 회원가입 페이지와 동일한 입력 필드 스타일
+  const inputCls =
+    'w-full bg-white dark:bg-white/5 border border-gray-300 dark:border-white/10 focus:border-blue-500 rounded-xl px-4 py-3.5 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all text-base';
+
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -35,13 +39,8 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Decorative blob — same as Register */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] opacity-20 pointer-events-none">
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-400 to-blue-600 blur-[120px] rounded-full" />
-      </div>
-
-      <div className="w-full max-w-md relative z-10">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center p-4">
+      <div className="w-full max-w-lg relative z-10">
         {/* Brand header */}
         <div className="text-center mb-8">
           <Link to="/" className="inline-flex items-center justify-center" aria-label="Busync 홈">
@@ -56,36 +55,36 @@ export default function LoginPage() {
 
         {/* Card */}
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-2xl p-8 shadow-xl shadow-black/5 dark:shadow-black/30">
-          <form onSubmit={handleEmailLogin} className="space-y-4">
+          <form onSubmit={handleEmailLogin} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">회사 코드</label>
+              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">회사 코드</label>
               <input
                 type="text"
                 value={companyCode}
                 onChange={(e) => setCompanyCode(e.target.value)}
-                className="input"
+                className={inputCls}
                 placeholder="회사 코드"
                 required
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">아이디 (이메일)</label>
+              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">아이디 (이메일)</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="input"
+                className={inputCls}
                 placeholder="admin@your-company.co.kr"
                 required
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">비밀번호</label>
+              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">비밀번호</label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="input"
+                className={inputCls}
                 placeholder="••••••••"
                 required
               />
@@ -94,7 +93,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="btn-primary w-full py-3 text-base"
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-4 rounded-xl font-semibold text-base transition-colors"
             >
               {loading ? '로그인 중...' : '로그인'}
             </button>
