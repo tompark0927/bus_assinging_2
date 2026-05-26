@@ -130,7 +130,7 @@ export default function Layout() {
               <img
                 src="/busync-lockup.png"
                 alt="Busync"
-                className="h-8 w-auto object-contain"
+                className="h-11 w-auto object-contain"
               />
             </div>
             <button

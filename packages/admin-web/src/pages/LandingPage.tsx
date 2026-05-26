@@ -134,7 +134,7 @@ export default function LandingPage() {
       {/* ============================================================ */}
       {/*  Hero                                                         */}
       {/* ============================================================ */}
-      <section id="hero" className="relative pt-28 pb-20 lg:pt-40 lg:pb-32 overflow-hidden">
+      <section id="hero" className="relative pt-[108px] pb-20 lg:pt-[156px] lg:pb-32 overflow-hidden">
         {/* Decorative blobs */}
         <div className="absolute -top-24 -right-24 w-96 h-96 bg-blue-400/20 dark:bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute -bottom-32 -left-32 w-[500px] h-[500px] bg-blue-300/10 dark:bg-blue-600/5 rounded-full blur-3xl pointer-events-none" />
