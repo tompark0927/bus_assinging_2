@@ -1,0 +1,667 @@
+import { useMemo, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  Database,
+  Users,
+  Bus as BusIcon,
+  Map,
+  Plus,
+  Pencil,
+  Trash2,
+  X,
+  Loader2,
+  Search,
+  KeyRound,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
+import { usersApi, busesApi, routesApi } from '../services/api';
+
+/* ────────────────────────────────────────────
+   Types
+   ──────────────────────────────────────────── */
+
+type Tab = 'drivers' | 'buses' | 'routes';
+
+interface Driver {
+  id: number;
+  name: string;
+  phone: string | null;
+  employeeId: string;
+  driverType: 'MAIN' | 'SPARE' | null;
+  assignedBusNumber: string | null;
+  isActive: boolean;
+  licenseExpiresAt?: string | null;
+  qualificationExpiresAt?: string | null;
+}
+
+interface Bus {
+  id: number;
+  busNumber: string;
+  plateNumber: string;
+  model?: string | null;
+  year?: number | null;
+  capacity: number;
+  routeId: number | null;
+  isActive: boolean;
+}
+
+interface Route {
+  id: number;
+  routeNumber: string;
+  name: string;
+  startPoint?: string | null;
+  endPoint?: string | null;
+  isActive: boolean;
+}
+
+/* ────────────────────────────────────────────
+   Page
+   ──────────────────────────────────────────── */
+
+export default function BasicDataPage() {
+  const [tab, setTab] = useState<Tab>('drivers');
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-[32px] font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+            <Database className="w-7 h-7 text-blue-500" />
+            기초 데이터
+          </h1>
+          <p className="text-[16px] text-gray-500 dark:text-gray-400 mt-1">
+            기사·버스·노선 등록 및 관리. AI 배차의 입력 데이터입니다.
+          </p>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="border-b border-gray-200 dark:border-white/10">
+        <div className="flex gap-1">
+          <TabButton active={tab === 'drivers'} icon={<Users size={16} />} label="기사" onClick={() => setTab('drivers')} />
+          <TabButton active={tab === 'buses'} icon={<BusIcon size={16} />} label="버스" onClick={() => setTab('buses')} />
+          <TabButton active={tab === 'routes'} icon={<Map size={16} />} label="노선" onClick={() => setTab('routes')} />
+        </div>
+      </div>
+
+      {tab === 'drivers' && <DriversTab />}
+      {tab === 'buses' && <BusesTab />}
+      {tab === 'routes' && <RoutesTab />}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────
+   Drivers Tab
+   ──────────────────────────────────────────── */
+
+function DriversTab() {
+  const qc = useQueryClient();
+  const [q, setQ] = useState('');
+  const [editing, setEditing] = useState<Driver | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const { data: list = [], isLoading } = useQuery<Driver[]>({
+    queryKey: ['users', 'DRIVER'],
+    queryFn: () => usersApi.list({ role: 'DRIVER' }).then((r) => r.data.data),
+  });
+
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return list;
+    return list.filter((d) =>
+      d.name.toLowerCase().includes(t) ||
+      d.employeeId.toLowerCase().includes(t) ||
+      (d.phone || '').includes(t),
+    );
+  }, [list, q]);
+
+  const remove = useMutation({
+    mutationFn: (id: number) => usersApi.delete(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['users', 'DRIVER'] }); toast.success('삭제되었습니다.'); },
+    onError: (e) => toast.error(extractError(e)),
+  });
+
+  const resetPwd = useMutation({
+    mutationFn: (id: number) => usersApi.resetPassword(id),
+    onSuccess: (res) => {
+      const np = (res.data as { data?: { newPassword?: string }; newPassword?: string })?.data?.newPassword || (res.data as { newPassword?: string })?.newPassword;
+      toast.success(np ? `초기화 완료. 새 비밀번호: ${np}` : '비밀번호가 초기화되었습니다.', { duration: 6000 });
+    },
+    onError: (e) => toast.error(extractError(e)),
+  });
+
+  return (
+    <>
+      <Toolbar
+        searchValue={q}
+        onSearch={setQ}
+        searchPlaceholder="이름·사번·전화번호 검색"
+        onCreate={() => setCreating(true)}
+        createLabel="기사 추가"
+        count={filtered.length}
+      />
+
+      {isLoading ? (
+        <Loading />
+      ) : filtered.length === 0 ? (
+        <Empty label="등록된 기사가 없습니다" />
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5">
+          <table className="w-full text-[15px]">
+            <thead className="bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-300">
+              <tr>
+                <Th>이름</Th>
+                <Th>사번</Th>
+                <Th>전화번호</Th>
+                <Th>구분</Th>
+                <Th>담당 버스</Th>
+                <Th>상태</Th>
+                <Th align="right">액션</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-white/10">
+              {filtered.map((d) => (
+                <tr key={d.id} className="hover:bg-gray-50 dark:hover:bg-white/[0.02]">
+                  <Td className="font-medium text-gray-900 dark:text-gray-100">{d.name}</Td>
+                  <Td className="font-mono text-gray-500">{d.employeeId}</Td>
+                  <Td>{d.phone || '-'}</Td>
+                  <Td>
+                    <Badge color={d.driverType === 'MAIN' ? 'blue' : d.driverType === 'SPARE' ? 'amber' : 'gray'}>
+                      {d.driverType === 'MAIN' ? '메인' : d.driverType === 'SPARE' ? '스페어' : '-'}
+                    </Badge>
+                  </Td>
+                  <Td>{d.assignedBusNumber || '-'}</Td>
+                  <Td>
+                    <Badge color={d.isActive ? 'green' : 'gray'}>{d.isActive ? '활성' : '비활성'}</Badge>
+                  </Td>
+                  <Td align="right">
+                    <div className="inline-flex gap-1">
+                      <IconBtn title="비밀번호 초기화" onClick={() => { if (confirm(`${d.name} 기사 비밀번호를 초기화하시겠어요?`)) resetPwd.mutate(d.id); }}>
+                        <KeyRound size={16} />
+                      </IconBtn>
+                      <IconBtn title="수정" onClick={() => setEditing(d)}>
+                        <Pencil size={16} />
+                      </IconBtn>
+                      <IconBtn title="삭제" danger onClick={() => { if (confirm(`${d.name} 기사를 삭제하시겠어요?`)) remove.mutate(d.id); }}>
+                        <Trash2 size={16} />
+                      </IconBtn>
+                    </div>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(creating || editing) && (
+        <DriverFormModal
+          initial={editing}
+          onClose={() => { setEditing(null); setCreating(false); }}
+          onSaved={() => { qc.invalidateQueries({ queryKey: ['users', 'DRIVER'] }); setEditing(null); setCreating(false); }}
+        />
+      )}
+    </>
+  );
+}
+
+function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null; onClose: () => void; onSaved: () => void }) {
+  const isEdit = !!initial;
+  const [name, setName] = useState(initial?.name || '');
+  const [phone, setPhone] = useState(initial?.phone || '');
+  const [employeeId, setEmployeeId] = useState(initial?.employeeId || '');
+  const [driverType, setDriverType] = useState<'MAIN' | 'SPARE'>((initial?.driverType as 'MAIN' | 'SPARE') || 'MAIN');
+  const [assignedBusNumber, setAssignedBusNumber] = useState(initial?.assignedBusNumber || '');
+  const [isActive, setIsActive] = useState(initial?.isActive ?? true);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const payload: Record<string, unknown> = {
+        name: name.trim(),
+        phone: phone.trim() || null,
+        employeeId: employeeId.trim(),
+        role: 'DRIVER',
+        driverType,
+        assignedBusNumber: assignedBusNumber.trim() || null,
+        isActive,
+      };
+      return isEdit ? usersApi.update(initial!.id, payload) : usersApi.create(payload);
+    },
+    onSuccess: () => { toast.success(isEdit ? '수정 완료' : '등록 완료'); onSaved(); },
+    onError: (e) => toast.error(extractError(e)),
+  });
+
+  return (
+    <FormModal title={isEdit ? '기사 수정' : '기사 추가'} onClose={onClose}>
+      <FormField label="이름" required>
+        <Input value={name} onChange={setName} placeholder="홍길동" />
+      </FormField>
+      <FormField label="사번" required hint={isEdit ? '변경 시 비밀번호도 함께 갱신될 수 있습니다.' : '신규 기사 비밀번호 = 사번 (첫 로그인 시 변경 권장)'}>
+        <Input value={employeeId} onChange={setEmployeeId} placeholder="DRV001" disabled={isEdit} />
+      </FormField>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="전화번호">
+          <Input value={phone} onChange={setPhone} placeholder="010-0000-0000" />
+        </FormField>
+        <FormField label="구분">
+          <select className={inputCls} value={driverType} onChange={(e) => setDriverType(e.target.value as 'MAIN' | 'SPARE')}>
+            <option value="MAIN">메인 (정·부 페어 소속)</option>
+            <option value="SPARE">스페어 (예비)</option>
+          </select>
+        </FormField>
+      </div>
+      <FormField label="담당 버스 번호" hint="메인 기사만. 같은 버스에 정·부 2명을 같은 번호로 연결.">
+        <Input value={assignedBusNumber} onChange={setAssignedBusNumber} placeholder="2292" />
+      </FormField>
+      <label className="flex items-center gap-2 text-[15px] text-gray-700 dark:text-gray-300">
+        <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+        활성 (배차 대상)
+      </label>
+
+      <ModalFooter onCancel={onClose} onSave={() => save.mutate()} saving={save.isPending} />
+    </FormModal>
+  );
+}
+
+/* ────────────────────────────────────────────
+   Buses Tab
+   ──────────────────────────────────────────── */
+
+function BusesTab() {
+  const qc = useQueryClient();
+  const [q, setQ] = useState('');
+  const [editing, setEditing] = useState<Bus | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const { data: list = [], isLoading } = useQuery<Bus[]>({
+    queryKey: ['buses'],
+    queryFn: () => busesApi.list().then((r) => r.data.data),
+  });
+  const { data: routes = [] } = useQuery<Route[]>({
+    queryKey: ['routes'],
+    queryFn: () => routesApi.list().then((r) => r.data.data),
+  });
+
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return list;
+    return list.filter((b) =>
+      b.busNumber.toLowerCase().includes(t) ||
+      b.plateNumber.toLowerCase().includes(t) ||
+      (b.model || '').toLowerCase().includes(t),
+    );
+  }, [list, q]);
+
+  const remove = useMutation({
+    mutationFn: (id: number) => busesApi.delete(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['buses'] }); toast.success('삭제되었습니다.'); },
+    onError: (e) => toast.error(extractError(e)),
+  });
+
+  const routeName = (id: number | null) => {
+    if (!id) return '-';
+    const r = routes.find((x) => x.id === id);
+    return r ? `${r.routeNumber}번` : `#${id}`;
+  };
+
+  return (
+    <>
+      <Toolbar searchValue={q} onSearch={setQ} searchPlaceholder="차번·차종 검색" onCreate={() => setCreating(true)} createLabel="버스 추가" count={filtered.length} />
+      {isLoading ? <Loading /> : filtered.length === 0 ? <Empty label="등록된 버스가 없습니다" /> : (
+        <div className="overflow-hidden rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5">
+          <table className="w-full text-[15px]">
+            <thead className="bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-300">
+              <tr>
+                <Th>차번</Th>
+                <Th>번호판</Th>
+                <Th>차종</Th>
+                <Th>연식</Th>
+                <Th>정원</Th>
+                <Th>노선</Th>
+                <Th>상태</Th>
+                <Th align="right">액션</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-white/10">
+              {filtered.map((b) => (
+                <tr key={b.id} className="hover:bg-gray-50 dark:hover:bg-white/[0.02]">
+                  <Td className="font-mono font-medium">{b.busNumber}</Td>
+                  <Td className="font-mono text-gray-500">{b.plateNumber}</Td>
+                  <Td>{b.model || '-'}</Td>
+                  <Td>{b.year || '-'}</Td>
+                  <Td>{b.capacity}석</Td>
+                  <Td>{routeName(b.routeId)}</Td>
+                  <Td><Badge color={b.isActive ? 'green' : 'gray'}>{b.isActive ? '운행' : '운휴'}</Badge></Td>
+                  <Td align="right">
+                    <div className="inline-flex gap-1">
+                      <IconBtn title="수정" onClick={() => setEditing(b)}><Pencil size={16} /></IconBtn>
+                      <IconBtn title="삭제" danger onClick={() => { if (confirm(`${b.busNumber}호를 삭제하시겠어요?`)) remove.mutate(b.id); }}>
+                        <Trash2 size={16} />
+                      </IconBtn>
+                    </div>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(creating || editing) && (
+        <BusFormModal
+          initial={editing}
+          routes={routes}
+          onClose={() => { setEditing(null); setCreating(false); }}
+          onSaved={() => { qc.invalidateQueries({ queryKey: ['buses'] }); setEditing(null); setCreating(false); }}
+        />
+      )}
+    </>
+  );
+}
+
+function BusFormModal({ initial, routes, onClose, onSaved }: { initial: Bus | null; routes: Route[]; onClose: () => void; onSaved: () => void }) {
+  const isEdit = !!initial;
+  const [busNumber, setBusNumber] = useState(initial?.busNumber || '');
+  const [plateNumber, setPlateNumber] = useState(initial?.plateNumber || '');
+  const [model, setModel] = useState(initial?.model || '');
+  const [year, setYear] = useState<string>(initial?.year ? String(initial.year) : '');
+  const [capacity, setCapacity] = useState<string>(String(initial?.capacity || 40));
+  const [routeId, setRouteId] = useState<string>(initial?.routeId ? String(initial.routeId) : '');
+  const [isActive, setIsActive] = useState(initial?.isActive ?? true);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const payload: Record<string, unknown> = {
+        busNumber: busNumber.trim(),
+        plateNumber: plateNumber.trim(),
+        model: model.trim() || null,
+        year: year ? parseInt(year, 10) : null,
+        capacity: parseInt(capacity, 10) || 40,
+        routeId: routeId ? parseInt(routeId, 10) : null,
+        isActive,
+      };
+      return isEdit ? busesApi.update(initial!.id, payload) : busesApi.create(payload);
+    },
+    onSuccess: () => { toast.success(isEdit ? '수정 완료' : '등록 완료'); onSaved(); },
+    onError: (e) => toast.error(extractError(e)),
+  });
+
+  return (
+    <FormModal title={isEdit ? '버스 수정' : '버스 추가'} onClose={onClose}>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="차번" required><Input value={busNumber} onChange={setBusNumber} placeholder="2292" /></FormField>
+        <FormField label="번호판" required><Input value={plateNumber} onChange={setPlateNumber} placeholder="인천70바2292" /></FormField>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="차종"><Input value={model} onChange={setModel} placeholder="현대 슈퍼에어로시티" /></FormField>
+        <FormField label="연식"><Input value={year} onChange={setYear} placeholder="2024" /></FormField>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="정원"><Input value={capacity} onChange={setCapacity} placeholder="40" /></FormField>
+        <FormField label="배정 노선">
+          <select className={inputCls} value={routeId} onChange={(e) => setRouteId(e.target.value)}>
+            <option value="">미배정</option>
+            {routes.map((r) => (
+              <option key={r.id} value={r.id}>{r.routeNumber}번 — {r.name}</option>
+            ))}
+          </select>
+        </FormField>
+      </div>
+      <label className="flex items-center gap-2 text-[15px] text-gray-700 dark:text-gray-300">
+        <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+        운행 중
+      </label>
+
+      <ModalFooter onCancel={onClose} onSave={() => save.mutate()} saving={save.isPending} />
+    </FormModal>
+  );
+}
+
+/* ────────────────────────────────────────────
+   Routes Tab
+   ──────────────────────────────────────────── */
+
+function RoutesTab() {
+  const qc = useQueryClient();
+  const [q, setQ] = useState('');
+  const [editing, setEditing] = useState<Route | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const { data: list = [], isLoading } = useQuery<Route[]>({
+    queryKey: ['routes'],
+    queryFn: () => routesApi.list().then((r) => r.data.data),
+  });
+
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return list;
+    return list.filter((r) =>
+      r.routeNumber.toLowerCase().includes(t) ||
+      r.name.toLowerCase().includes(t),
+    );
+  }, [list, q]);
+
+  return (
+    <>
+      <Toolbar searchValue={q} onSearch={setQ} searchPlaceholder="노선번호·이름 검색" onCreate={() => setCreating(true)} createLabel="노선 추가" count={filtered.length} />
+      {isLoading ? <Loading /> : filtered.length === 0 ? <Empty label="등록된 노선이 없습니다" /> : (
+        <div className="overflow-hidden rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5">
+          <table className="w-full text-[15px]">
+            <thead className="bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-300">
+              <tr>
+                <Th>번호</Th>
+                <Th>이름</Th>
+                <Th>기점</Th>
+                <Th>종점</Th>
+                <Th>상태</Th>
+                <Th align="right">액션</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-white/10">
+              {filtered.map((r) => (
+                <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-white/[0.02]">
+                  <Td className="font-mono font-medium">{r.routeNumber}번</Td>
+                  <Td>{r.name}</Td>
+                  <Td>{r.startPoint || '-'}</Td>
+                  <Td>{r.endPoint || '-'}</Td>
+                  <Td><Badge color={r.isActive ? 'green' : 'gray'}>{r.isActive ? '운행' : '운휴'}</Badge></Td>
+                  <Td align="right">
+                    <IconBtn title="수정" onClick={() => setEditing(r)}><Pencil size={16} /></IconBtn>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(creating || editing) && (
+        <RouteFormModal
+          initial={editing}
+          onClose={() => { setEditing(null); setCreating(false); }}
+          onSaved={() => { qc.invalidateQueries({ queryKey: ['routes'] }); setEditing(null); setCreating(false); }}
+        />
+      )}
+    </>
+  );
+}
+
+function RouteFormModal({ initial, onClose, onSaved }: { initial: Route | null; onClose: () => void; onSaved: () => void }) {
+  const isEdit = !!initial;
+  const [routeNumber, setRouteNumber] = useState(initial?.routeNumber || '');
+  const [name, setName] = useState(initial?.name || '');
+  const [startPoint, setStartPoint] = useState(initial?.startPoint || '');
+  const [endPoint, setEndPoint] = useState(initial?.endPoint || '');
+  const [isActive, setIsActive] = useState(initial?.isActive ?? true);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const payload: Record<string, unknown> = {
+        routeNumber: routeNumber.trim(),
+        name: name.trim(),
+        startPoint: startPoint.trim() || null,
+        endPoint: endPoint.trim() || null,
+        isActive,
+      };
+      return isEdit ? routesApi.update(initial!.id, payload) : routesApi.create(payload);
+    },
+    onSuccess: () => { toast.success(isEdit ? '수정 완료' : '등록 완료'); onSaved(); },
+    onError: (e) => toast.error(extractError(e)),
+  });
+
+  return (
+    <FormModal title={isEdit ? '노선 수정' : '노선 추가'} onClose={onClose}>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="노선 번호" required><Input value={routeNumber} onChange={setRouteNumber} placeholder="16" /></FormField>
+        <FormField label="이름" required><Input value={name} onChange={setName} placeholder="16번" /></FormField>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="기점"><Input value={startPoint} onChange={setStartPoint} placeholder="가좌동" /></FormField>
+        <FormField label="종점"><Input value={endPoint} onChange={setEndPoint} placeholder="동춘동" /></FormField>
+      </div>
+      <label className="flex items-center gap-2 text-[15px] text-gray-700 dark:text-gray-300">
+        <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+        운행 중
+      </label>
+
+      <ModalFooter onCancel={onClose} onSave={() => save.mutate()} saving={save.isPending} />
+    </FormModal>
+  );
+}
+
+/* ────────────────────────────────────────────
+   Shared atoms
+   ──────────────────────────────────────────── */
+
+const inputCls = 'w-full bg-white dark:bg-white/5 border border-gray-300 dark:border-white/10 rounded-xl px-3 py-2.5 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-60';
+
+function TabButton({ active, icon, label, onClick }: { active: boolean; icon: React.ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-3 inline-flex items-center gap-2 border-b-2 text-[15px] font-medium transition ${
+        active
+          ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+          : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+      }`}
+    >
+      {icon}{label}
+    </button>
+  );
+}
+
+function Toolbar({ searchValue, onSearch, searchPlaceholder, onCreate, createLabel, count }: { searchValue: string; onSearch: (v: string) => void; searchPlaceholder: string; onCreate: () => void; createLabel: string; count: number }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="relative flex-1 max-w-md">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input
+          value={searchValue}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder={searchPlaceholder}
+          className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-gray-300 dark:border-white/10 bg-white dark:bg-white/5 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+        />
+      </div>
+      <span className="text-[14px] text-gray-500 dark:text-gray-400">{count}건</span>
+      <div className="ml-auto">
+        <button onClick={onCreate} className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white inline-flex items-center gap-2 text-[15px] font-medium">
+          <Plus size={16} />{createLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Th({ children, align }: { children: React.ReactNode; align?: 'left' | 'right' }) {
+  return <th className={`px-4 py-3 text-${align || 'left'} text-[13px] font-semibold uppercase tracking-wide`}>{children}</th>;
+}
+function Td({ children, className, align }: { children: React.ReactNode; className?: string; align?: 'left' | 'right' }) {
+  return <td className={`px-4 py-3 text-${align || 'left'} ${className || ''}`}>{children}</td>;
+}
+
+function Badge({ color, children }: { color: 'green' | 'blue' | 'amber' | 'red' | 'gray'; children: React.ReactNode }) {
+  const cls = {
+    green: 'bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-300',
+    blue: 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300',
+    amber: 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300',
+    red: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300',
+    gray: 'bg-gray-100 text-gray-600 dark:bg-white/10 dark:text-gray-300',
+  }[color];
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[12px] font-medium ${cls}`}>{children}</span>;
+}
+
+function IconBtn({ children, onClick, title, danger }: { children: React.ReactNode; onClick: () => void; title: string; danger?: boolean }) {
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      className={`p-2 rounded-lg transition ${
+        danger
+          ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10'
+          : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-white/5'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Empty({ label }: { label: string }) {
+  return <div className="text-center py-16 text-gray-400 dark:text-gray-500 text-[15px]">{label}</div>;
+}
+function Loading() {
+  return (
+    <div className="flex items-center justify-center py-16">
+      <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
+    </div>
+  );
+}
+
+function FormModal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
+      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-white/10">
+          <h3 className="text-[19px] font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5"><X size={18} /></button>
+        </div>
+        <div className="p-6 space-y-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function FormField({ label, hint, required, children }: { label: string; hint?: string; required?: boolean; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-[14px] font-medium text-gray-700 dark:text-gray-200 mb-1.5">
+        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      </label>
+      {children}
+      {hint && <p className="text-[13px] text-gray-400 mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+function Input({ value, onChange, placeholder, disabled }: { value: string; onChange: (v: string) => void; placeholder?: string; disabled?: boolean }) {
+  return <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={inputCls} />;
+}
+
+function ModalFooter({ onCancel, onSave, saving }: { onCancel: () => void; onSave: () => void; saving: boolean }) {
+  return (
+    <div className="flex justify-end gap-2 pt-2">
+      <button onClick={onCancel} className="px-4 py-2.5 rounded-xl border border-gray-300 dark:border-white/10 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 text-[15px]">취소</button>
+      <button onClick={onSave} disabled={saving} className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white inline-flex items-center gap-2 text-[15px] font-medium">
+        {saving && <Loader2 size={16} className="animate-spin" />}
+        저장
+      </button>
+    </div>
+  );
+}
+
+function extractError(err: unknown): string {
+  return (err as { response?: { data?: { message?: string; error?: { message?: string } } } })?.response?.data?.error?.message
+    || (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+    || '오류가 발생했습니다.';
+}

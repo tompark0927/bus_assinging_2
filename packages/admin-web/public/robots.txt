@@ -1,0 +1,16 @@
+# Busync — robots.txt
+# 마케팅 페이지는 인덱싱 허용, 인증 필요한 어드민 라우트는 차단.
+
+User-agent: *
+Allow: /
+Allow: /pricing
+Allow: /support
+Allow: /login
+Allow: /register
+
+# 어드민 영역 — 인증 필요. 검색엔진 크롤링 의미 없고 메뉴 구조 노출 우려.
+Disallow: /dashboard
+Disallow: /dashboard/*
+Disallow: /api
+
+Sitemap: https://busync.kr/sitemap.xml
