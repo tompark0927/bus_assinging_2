@@ -366,7 +366,7 @@ export default function LandingPage() {
                     value={contactName}
                     onChange={(e) => setContactName(e.target.value)}
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-white/10 rounded-xl px-4 py-3 text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
-                    placeholder="회사명"
+                    placeholder="홍길동 / OO버스"
                   />
                 </div>
                 <div>
@@ -377,7 +377,7 @@ export default function LandingPage() {
                     value={contactPhone}
                     onChange={(e) => setContactPhone(e.target.value)}
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-white/10 rounded-xl px-4 py-3 text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
-                    placeholder="010-0000-0000"
+                    placeholder="010-1234-5678"
                   />
                 </div>
                 <button

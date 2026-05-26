@@ -353,7 +353,7 @@ function ContactForm() {
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
           required
-          placeholder="010-0000-0000"
+          placeholder="010-1234-5678"
           className={inputCls}
         />
       </Field>
@@ -363,7 +363,7 @@ function ContactForm() {
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="example@company.com"
+          placeholder="name@company.com"
           className={inputCls}
         />
       </Field>

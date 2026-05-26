@@ -315,10 +315,10 @@ export default function OnboardingPage() {
                       <div className="mt-3 space-y-2 max-h-72 overflow-y-auto pr-1">
                         {imported.drivers.map((d, i) => (
                           <div key={i} className="bg-white rounded-lg p-3 border border-gray-200 grid grid-cols-2 gap-2">
-                            <EditInput value={d.name} placeholder="이름"
+                            <EditInput value={d.name} placeholder="홍길동"
                               onChange={v => setImported(p => p ? { ...p, drivers: p.drivers.map((x, idx) => idx === i ? { ...x, name: v } : x) } : p)} />
                             <div className="flex gap-2">
-                              <EditInput value={d.phone} placeholder="전화번호"
+                              <EditInput value={d.phone} placeholder="010-1234-5678"
                                 onChange={v => setImported(p => p ? { ...p, drivers: p.drivers.map((x, idx) => idx === i ? { ...x, phone: v } : x) } : p)} />
                               <button onClick={() => setImported(p => p ? { ...p, drivers: p.drivers.filter((_, idx) => idx !== i) } : p)}
                                 className="text-red-400 hover:text-red-600 flex-shrink-0"><Trash2 size={14} /></button>

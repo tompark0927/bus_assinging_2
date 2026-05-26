@@ -256,11 +256,11 @@ function AccountFormModal({ initial, onClose, onSaved }: { initial: Account | nu
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>이메일</label>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="hong@example.com" className={inputCls} />
+              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" className={inputCls} />
             </div>
             <div>
               <label className={labelCls}>전화번호</label>
-              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="010-0000-0000" className={inputCls} />
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="010-1234-5678" className={inputCls} />
             </div>
           </div>
           <div>

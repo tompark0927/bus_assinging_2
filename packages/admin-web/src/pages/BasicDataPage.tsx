@@ -242,7 +242,7 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
       </FormField>
       <div className="grid grid-cols-2 gap-3">
         <FormField label="전화번호">
-          <Input value={phone} onChange={setPhone} placeholder="010-0000-0000" />
+          <Input value={phone} onChange={setPhone} placeholder="010-1234-5678" />
         </FormField>
         <FormField label="구분">
           <select className={inputCls} value={driverType} onChange={(e) => setDriverType(e.target.value as 'MAIN' | 'SPARE')}>

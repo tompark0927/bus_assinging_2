@@ -302,7 +302,7 @@ export default function RegisterPage() {
                     type="email"
                     value={form.adminEmail}
                     onChange={set('adminEmail')}
-                    placeholder="admin@company.com"
+                    placeholder="name@company.com"
                     className={inputCls('adminEmail')}
                   />
                   {errors.adminEmail && <p className="text-red-500 text-xs mt-1.5">{errors.adminEmail}</p>}
@@ -334,7 +334,7 @@ export default function RegisterPage() {
                       type={showPassword ? 'text' : 'password'}
                       value={form.adminPassword}
                       onChange={set('adminPassword')}
-                      placeholder="********"
+                      placeholder="••••••••"
                       className={inputCls('adminPassword')}
                     />
                     <button
@@ -378,7 +378,7 @@ export default function RegisterPage() {
                       type={showPasswordConfirm ? 'text' : 'password'}
                       value={form.adminPasswordConfirm}
                       onChange={set('adminPasswordConfirm')}
-                      placeholder="********"
+                      placeholder="••••••••"
                       className={inputCls('adminPasswordConfirm')}
                     />
                     <button
@@ -521,6 +521,7 @@ export default function RegisterPage() {
             로그인
           </Link>
         </p>
+        <p className="text-center text-xs text-gray-400 mt-3">© 2026 Busync</p>
       </div>
     </div>
   );

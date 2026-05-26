@@ -74,7 +74,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className={inputCls}
-                placeholder="admin@your-company.co.kr"
+                placeholder="name@company.com"
                 required
               />
             </div>
@@ -111,16 +111,7 @@ export default function LoginPage() {
               회사 가입하기 <ArrowRight size={14} />
             </Link>
           </p>
-          <p className="text-xs text-gray-400 mt-3">
-            © 2026 Busync ·{' '}
-            <Link to="/support" className="hover:underline">
-              고객 지원
-            </Link>{' '}
-            ·{' '}
-            <Link to="/pricing" className="hover:underline">
-              요금제
-            </Link>
-          </p>
+          <p className="text-xs text-gray-400 mt-3">© 2026 Busync</p>
         </div>
       </div>
     </div>
