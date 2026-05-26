@@ -11,6 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuthStore } from '../store/authStore';
 import { schedulesApi, notificationsApi, emergencyApi, dayOffApi } from '../services/api';
 import { parseSlotDate, slotDateKey } from '../utils/date';
+import { routeLabel } from '../utils/route';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import NextMonthDayoffModal from '../components/NextMonthDayoffModal';
@@ -379,7 +380,7 @@ export default function HomeScreen() {
                 </View>
                 <View style={{ flex: 1, marginLeft: spacing.md }}>
                   <Text style={styles.upcomingRoute}>
-                    {slot.route.routeNumber}번 · {slot.route.name}
+                    {routeLabel(slot.route.routeNumber, slot.route.name)}
                   </Text>
                   <Text style={styles.upcomingShift}>
                     {t('home.shiftWork', { shift: t(`shifts.${slot.shift}`, { defaultValue: slot.shift }) })}
