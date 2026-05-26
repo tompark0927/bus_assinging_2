@@ -164,7 +164,7 @@ export default function RegisterPage() {
             <img
               src="/busync-lockup.png"
               alt="Busync"
-              className="h-10 w-auto object-contain dark:bg-white dark:rounded-lg dark:px-2 dark:py-1"
+              className="h-[52px] w-auto object-contain dark:bg-white dark:rounded-lg dark:px-2 dark:py-1"
             />
           </Link>
           <p className="text-gray-500 dark:text-gray-400 mt-3 text-sm">14일 무료 체험 &middot; 신용카드 불필요</p>

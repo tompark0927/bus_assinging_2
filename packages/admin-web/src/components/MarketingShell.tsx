@@ -16,7 +16,6 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { label: '기능', to: 'features', scroll: true },
   { label: '요금제', to: '/pricing' },
-  { label: '후기', to: 'testimonials', scroll: true },
   { label: '고객 지원', to: '/support' },
 ];
 
