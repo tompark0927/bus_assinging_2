@@ -119,12 +119,12 @@ export default function Layout() {
     <div className="flex h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
       {/* Sidebar — 나이드신 사용자 가독성을 위해 폰트/터치 영역 한 단계씩 크게 */}
       <aside
-        className={`${sidebarOpen ? 'flex w-72' : 'hidden'} bg-gray-800 dark:bg-gray-900 text-white flex-col shadow-xl`}
+        className={`${sidebarOpen ? 'flex w-72' : 'hidden'} bg-white dark:bg-gray-900 text-gray-900 dark:text-white border-r border-gray-200 dark:border-gray-800 flex-col shadow-sm`}
         role="navigation"
         aria-label="메인 네비게이션"
       >
         {/* Logo */}
-        <div className="h-20 px-6 flex items-center border-b border-gray-700">
+        <div className="h-20 px-6 flex items-center border-b border-gray-200 dark:border-gray-800">
           <div className="flex items-center justify-between gap-3 w-full">
             <div className="min-w-0">
               <img
@@ -135,7 +135,7 @@ export default function Layout() {
             </div>
             <button
               onClick={() => setSidebarOpen(false)}
-              className="shrink-0 p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+              className="shrink-0 p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 dark:hover:text-white dark:hover:bg-gray-800 rounded-lg transition-colors"
               aria-label="사이드바 닫기"
               title="사이드바 닫기"
             >
@@ -148,7 +148,7 @@ export default function Layout() {
         <nav className="flex-1 p-4 overflow-y-auto" aria-label="사이드바 메뉴">
           {visibleGroups.map((group, idx) => (
             <div key={group.label} className={idx > 0 ? 'mt-6' : ''}>
-              <div className="px-3 mb-2 text-[13px] font-semibold text-gray-400">
+              <div className="px-3 mb-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400">
                 {group.label}
               </div>
               <div className="space-y-1">
@@ -161,8 +161,8 @@ export default function Layout() {
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-4 py-3 rounded-lg text-[16px] font-medium transition-colors ${
                         isActive
-                          ? 'bg-blue-600 text-white'
-                          : 'text-gray-200 hover:bg-gray-700 hover:text-white'
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-gray-700 hover:bg-blue-50 hover:text-blue-700 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white'
                       }`
                     }
                   >
@@ -175,8 +175,8 @@ export default function Layout() {
           ))}
 
           {visibleOwnerGroup && (
-            <div className="mt-6 pt-4 border-t border-gray-700">
-              <div className="px-3 mb-2 text-[13px] font-semibold text-gray-400">
+            <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-800">
+              <div className="px-3 mb-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400">
                 {visibleOwnerGroup.label}
               </div>
               <div className="space-y-1">
@@ -188,8 +188,8 @@ export default function Layout() {
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-4 py-3 rounded-lg text-[15px] font-medium transition-colors ${
                         isActive
-                          ? 'bg-blue-600 text-white'
-                          : 'text-gray-300 hover:bg-gray-700 hover:text-white'
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-gray-600 hover:bg-blue-50 hover:text-blue-700 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white'
                       }`
                     }
                   >
@@ -203,20 +203,20 @@ export default function Layout() {
         </nav>
 
         {/* User info + Dark mode */}
-        <div className="p-4 border-t border-gray-700">
+        <div className="p-4 border-t border-gray-200 dark:border-gray-800">
           <div className="flex items-center gap-3 mb-3">
-            <div className="w-11 h-11 bg-blue-500 rounded-full flex items-center justify-center text-lg font-bold" aria-hidden="true">
+            <div className="w-11 h-11 bg-blue-600 text-white rounded-full flex items-center justify-center text-lg font-bold" aria-hidden="true">
               {user?.name?.charAt(0)}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-base font-semibold truncate">{user?.name}</p>
-              <p className="text-sm text-gray-400 truncate">{company?.name || '배차 관리 시스템'}</p>
+              <p className="text-base font-semibold truncate text-gray-900 dark:text-white">{user?.name}</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 truncate">{company?.name || '배차 관리 시스템'}</p>
             </div>
           </div>
 
           <button
             onClick={handleLogout}
-            className="w-full flex items-center justify-center gap-2 px-3 py-3 text-[15px] font-medium text-gray-300 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-3 py-3 text-[15px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 dark:text-gray-300 dark:hover:text-white dark:hover:bg-gray-800 rounded-lg transition-colors"
             aria-label="로그아웃"
           >
             <LogOut size={18} aria-hidden="true" />

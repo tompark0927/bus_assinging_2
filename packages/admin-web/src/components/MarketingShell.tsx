@@ -114,7 +114,7 @@ export function MarketingFooter() {
               <img
                 src="/busync-lockup.png"
                 alt="Busync"
-                className="h-9 w-auto object-contain dark:bg-white dark:rounded-lg dark:px-2 dark:py-1"
+                className="h-11 w-auto object-contain dark:bg-white dark:rounded-lg dark:px-2 dark:py-1"
               />
             </div>
             <p className="text-gray-400 text-sm leading-relaxed">AI 기반 버스 배차 자동화 솔루션</p>
