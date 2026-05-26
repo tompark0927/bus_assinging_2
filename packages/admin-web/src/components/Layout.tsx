@@ -119,7 +119,7 @@ export default function Layout() {
     <div className="flex h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
       {/* Sidebar — 나이드신 사용자 가독성을 위해 폰트/터치 영역 한 단계씩 크게 */}
       <aside
-        className={`${sidebarOpen ? 'flex w-72' : 'hidden'} bg-gray-900 dark:bg-gray-950 text-white flex-col shadow-xl`}
+        className={`${sidebarOpen ? 'flex w-72' : 'hidden'} bg-gray-800 dark:bg-gray-900 text-white flex-col shadow-xl`}
         role="navigation"
         aria-label="메인 네비게이션"
       >
@@ -135,7 +135,7 @@ export default function Layout() {
             </div>
             <button
               onClick={() => setSidebarOpen(false)}
-              className="shrink-0 p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+              className="shrink-0 p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
               aria-label="사이드바 닫기"
               title="사이드바 닫기"
             >
@@ -162,7 +162,7 @@ export default function Layout() {
                       `flex items-center gap-3 px-4 py-3 rounded-lg text-[16px] font-medium transition-colors ${
                         isActive
                           ? 'bg-blue-600 text-white'
-                          : 'text-gray-200 hover:bg-gray-800 hover:text-white'
+                          : 'text-gray-200 hover:bg-gray-700 hover:text-white'
                       }`
                     }
                   >
@@ -175,7 +175,7 @@ export default function Layout() {
           ))}
 
           {visibleOwnerGroup && (
-            <div className="mt-6 pt-4 border-t border-gray-800">
+            <div className="mt-6 pt-4 border-t border-gray-700">
               <div className="px-3 mb-2 text-[13px] font-semibold text-gray-400">
                 {visibleOwnerGroup.label}
               </div>
@@ -189,7 +189,7 @@ export default function Layout() {
                       `flex items-center gap-3 px-4 py-3 rounded-lg text-[15px] font-medium transition-colors ${
                         isActive
                           ? 'bg-blue-600 text-white'
-                          : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                          : 'text-gray-300 hover:bg-gray-700 hover:text-white'
                       }`
                     }
                   >
@@ -216,7 +216,7 @@ export default function Layout() {
 
           <button
             onClick={handleLogout}
-            className="w-full flex items-center justify-center gap-2 px-3 py-3 text-[15px] font-medium text-gray-300 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-3 py-3 text-[15px] font-medium text-gray-300 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
             aria-label="로그아웃"
           >
             <LogOut size={18} aria-hidden="true" />
