@@ -288,7 +288,6 @@ export const contactApi = {
 export const companyApi = {
   register: (data: {
     companyName: string;
-    companyCode: string;
     adminName: string;
     adminEmail: string;
     adminPassword: string;

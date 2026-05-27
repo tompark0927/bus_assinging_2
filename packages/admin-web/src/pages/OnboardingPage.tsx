@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 // CSS animations replace framer-motion (see index.css: animate-fade-in-up, animate-fade-in-scale)
 import {
   Map, Bus, Users, Check, Plus, Trash2, ArrowRight, ArrowLeft, Loader2,
@@ -145,13 +145,13 @@ export default function OnboardingPage() {
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <header className="bg-white border-b border-gray-200 px-6 h-20 flex items-center">
         <div className="max-w-4xl mx-auto w-full flex items-center justify-between">
-          <div className="flex items-center">
+          <Link to="/" className="flex items-center" aria-label="Busync 홈">
             <img
               src="/busync-lockup.png"
               alt="Busync"
               className="h-12 w-auto object-contain"
             />
-          </div>
+          </Link>
           <div className="flex items-center gap-3">
             {step !== 'done' && (
               <button

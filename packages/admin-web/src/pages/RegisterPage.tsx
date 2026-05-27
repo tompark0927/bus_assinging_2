@@ -48,14 +48,11 @@ export default function RegisterPage() {
   const { setAuth } = useAuthStore();
   const [step, setStep] = useState<Step>(1);
   const [loading, setLoading] = useState(false);
-  const [codeChecking, setCodeChecking] = useState(false);
-  const [codeAvailable, setCodeAvailable] = useState<boolean | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
 
   const [form, setForm] = useState({
     companyName: '',
-    companyCode: '',
     adminName: '',
     adminEmail: '',
     adminPassword: '',
@@ -68,32 +65,14 @@ export default function RegisterPage() {
   const set = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
     setErrors((prev) => ({ ...prev, [field]: undefined }));
-    if (field === 'companyCode') setCodeAvailable(null);
   };
 
   const strength = useMemo(() => getPasswordStrength(form.adminPassword), [form.adminPassword]);
-
-  /* ---- Code check ---- */
-  const handleCheckCode = async () => {
-    if (!form.companyCode || form.companyCode.length < 2) return;
-    setCodeChecking(true);
-    try {
-      const res = await companyApi.checkCode(form.companyCode);
-      setCodeAvailable(res.data.available);
-    } catch {
-      toast.error('코드 확인 중 오류가 발생했습니다.');
-    } finally {
-      setCodeChecking(false);
-    }
-  };
 
   /* ---- Step navigation ---- */
   const handleStep1Next = () => {
     const errs: typeof errors = {};
     if (!form.companyName.trim()) errs.companyName = '회사명을 입력해주세요.';
-    if (!form.companyCode.trim()) errs.companyCode = '회사 코드를 입력해주세요.';
-    else if (form.companyCode.length < 2) errs.companyCode = '2자 이상 입력해주세요.';
-    if (codeAvailable === false) errs.companyCode = '이미 사용 중인 회사 코드입니다.';
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
     setStep(2);
@@ -118,15 +97,15 @@ export default function RegisterPage() {
     try {
       const res = await companyApi.register({
         companyName: form.companyName,
-        companyCode: form.companyCode,
         adminName: form.adminName,
         adminEmail: form.adminEmail,
         adminPassword: form.adminPassword,
         adminPhone: form.adminPhone,
       });
-      const { token, user } = res.data.data;
+      const { token, user, company } = res.data.data;
       setAuth(user, token);
-      toast.success('회사 등록이 완료되었습니다!');
+      const code = (company as { code?: string } | undefined)?.code;
+      toast.success(code ? `회사 등록 완료! 회사코드: ${code}` : '회사 등록이 완료되었습니다!');
       navigate('/dashboard/onboarding');
     } catch (err: unknown) {
       const msg =
@@ -219,38 +198,7 @@ export default function RegisterPage() {
                     className={inputCls('companyName')}
                   />
                   {errors.companyName && <p className="text-red-500 text-xs mt-1.5">{errors.companyName}</p>}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                    회사 코드 <span className="text-red-500">*</span>
-                    <span className="text-gray-400 font-normal ml-1">(영문/숫자, 2~10자)</span>
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={form.companyCode}
-                      onChange={set('companyCode')}
-                      placeholder="예: MYBUS"
-                      maxLength={10}
-                      className={`flex-1 ${inputCls('companyCode')} uppercase`}
-                    />
-                    <button
-                      onClick={handleCheckCode}
-                      disabled={!form.companyCode || form.companyCode.length < 2 || codeChecking}
-                      className="px-5 h-[50px] bg-gray-100 dark:bg-white/10 hover:bg-gray-200 dark:hover:bg-white/15 text-gray-700 dark:text-white rounded-xl text-sm font-semibold transition-colors disabled:opacity-40 whitespace-nowrap"
-                    >
-                      {codeChecking ? <Loader2 size={16} className="animate-spin" /> : '중복 확인'}
-                    </button>
-                  </div>
-                  {codeAvailable === true && (
-                    <p className="text-green-500 text-xs mt-1.5 flex items-center gap-1">
-                      <Check size={12} /> 사용 가능한 코드입니다.
-                    </p>
-                  )}
-                  {codeAvailable === false && <p className="text-red-500 text-xs mt-1.5">이미 사용 중인 코드입니다.</p>}
-                  {errors.companyCode && <p className="text-red-500 text-xs mt-1.5">{errors.companyCode}</p>}
-                  <p className="text-gray-400 text-xs mt-1.5">기사 앱 로그인 시 회사를 식별하는 코드입니다.</p>
+                  <p className="text-gray-400 text-xs mt-1.5">회사 코드는 회사명을 바탕으로 자동 생성됩니다. (기사 앱 로그인 시 회사를 식별하는 코드)</p>
                 </div>
               </div>
 
@@ -453,7 +401,7 @@ export default function RegisterPage() {
                     </div>
                     <div>
                       <span className="text-gray-400 text-xs">회사 코드</span>
-                      <p className="font-medium text-gray-900 dark:text-white uppercase">{form.companyCode}</p>
+                      <p className="font-medium text-gray-900 dark:text-white">가입 완료 시 자동 생성</p>
                     </div>
                   </div>
                 </div>
