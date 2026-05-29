@@ -121,6 +121,8 @@
     "skip": "지금은 못해요",
     "askMyDayoff": "(긴급) 내 대타 구하기",
     "myToday": "오늘 내 배차",
+    "pickDate": "대타가 필요한 근무일 선택",
+    "selectedShift": "선택한 근무",
     "sendDayoff": "대타 요청 보내기",
     "willNotify": "요청을 보내면 쉬는 기사님들에게 자동 알림이 발송됩니다",
     "modalTitle": "(긴급) 내 대타 구하기",
