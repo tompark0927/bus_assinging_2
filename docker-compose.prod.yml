@@ -1,0 +1,160 @@
+version: '3.8'
+
+services:
+  # Nginx reverse proxy for zero-downtime switching
+  nginx:
+    image: nginx:alpine
+    container_name: busync_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    depends_on:
+      - backend-blue
+      - backend-green
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Let's Encrypt certbot for SSL auto-renewal
+  certbot:
+    image: certbot/certbot
+    container_name: busync_certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done'"
+
+  backend-blue:
+    build:
+      context: ./packages/backend
+      dockerfile: Dockerfile
+    container_name: busync_backend_blue
+    env_file: .env
+    environment:
+      - INSTANCE_COLOR=blue
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - NODE_ENV=production
+      - PORT=4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  backend-green:
+    build:
+      context: ./packages/backend
+      dockerfile: Dockerfile
+    container_name: busync_backend_green
+    env_file: .env
+    environment:
+      - INSTANCE_COLOR=green
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - NODE_ENV=production
+      - PORT=4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  admin-web:
+    build:
+      context: ./packages/admin-web
+      dockerfile: Dockerfile
+    container_name: busync_admin_prod
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: busync_postgres_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: busync_redis_prod
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # DB 자동 백업 (매일 새벽 3시)
+  db-backup:
+    image: postgres:16-alpine
+    container_name: busync_backup_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        echo 'DB 백업 서비스 시작 (매일 03:00)';
+        while true; do
+          NEXT_RUN=$$(date -d 'tomorrow 03:00' +%s 2>/dev/null || date -v+1d -v3H -v0M -v0S +%s);
+          NOW=$$(date +%s);
+          SLEEP_SEC=$$((NEXT_RUN - NOW));
+          sleep $${SLEEP_SEC};
+          TS=$$(date +%Y%m%d_%H%M%S);
+          FNAME=${POSTGRES_DB}_$${TS}.sql.gz;
+          PGPASSWORD=${POSTGRES_PASSWORD} pg_dump \
+            -h postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB} \
+            --clean --if-exists | gzip > /backups/$${FNAME};
+          echo \"[백업 완료] $${FNAME}\";
+          find /backups -name '*.sql.gz' -mtime +30 -delete;
+        done
+      "
+
+volumes:
+  pgdata:
+  redis_data:

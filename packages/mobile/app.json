@@ -1,0 +1,67 @@
+{
+  "expo": {
+    "name": "Busync",
+    "slug": "busync-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F8FAFC"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.busync.driver",
+      "associatedDomains": [
+        "applinks:busync.co.kr",
+        "applinks:busync.kr"
+      ],
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
+        "NSLocationWhenInUseUsageDescription": "선호 노선 추천에 위치 정보를 사용할 수 있습니다.",
+        "NSUserNotificationsUsageDescription": "긴급 대타 요청과 배차 변경 알림을 받기 위해 알림을 사용합니다."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#02209D"
+      },
+      "package": "com.busync.driver",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            { "scheme": "https", "host": "busync.co.kr" },
+            { "scheme": "https", "host": "busync.kr" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "scheme": "busync",
+    "extra": {
+      "apiUrl": "https://api.busync.kr/api/v1"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#02209D",
+          "sounds": []
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}

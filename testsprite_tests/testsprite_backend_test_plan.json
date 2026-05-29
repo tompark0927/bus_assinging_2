@@ -1,0 +1,52 @@
+[
+  {
+    "id": "TC001",
+    "title": "post api auth login with valid credentials",
+    "description": "Test the POST /api/auth/login endpoint with valid user credentials to verify successful authentication and receipt of a JWT token with a 200 status response."
+  },
+  {
+    "id": "TC002",
+    "title": "get api users with valid token",
+    "description": "Test the GET /api/users endpoint with a valid Authorization Bearer token to verify retrieval of an array of user profiles with a 200 status response."
+  },
+  {
+    "id": "TC003",
+    "title": "get api buses with valid token",
+    "description": "Test the GET /api/buses endpoint with a valid Authorization Bearer token to verify retrieval of an array of bus models and their status with a 200 status response."
+  },
+  {
+    "id": "TC004",
+    "title": "get api routes with valid token",
+    "description": "Test the GET /api/routes endpoint with a valid Authorization Bearer token to verify retrieval of an array of bus routes with a 200 status response."
+  },
+  {
+    "id": "TC005",
+    "title": "get api schedules with valid token and valid query",
+    "description": "Test the GET /api/schedules endpoint with a valid Authorization Bearer token and valid query parameters to verify retrieval of an array of bus schedules with a 200 status response."
+  },
+  {
+    "id": "TC006",
+    "title": "get api dayoff with valid token",
+    "description": "Test the GET /api/dayoff endpoint with a valid Authorization Bearer token to verify retrieval of an array of day-off requests with a 200 status response."
+  },
+  {
+    "id": "TC007",
+    "title": "get api emergency with valid token and permissions",
+    "description": "Test the GET /api/emergency endpoint with a valid Authorization Bearer token and sufficient permissions to verify retrieval of an array of emergency reports with a 200 status response."
+  },
+  {
+    "id": "TC008",
+    "title": "get api notifications with valid token",
+    "description": "Test the GET /api/notifications endpoint with a valid Authorization Bearer token to verify retrieval of an array of user notifications with a 200 status response."
+  },
+  {
+    "id": "TC009",
+    "title": "get api chat with valid token",
+    "description": "Test the GET /api/chat endpoint with a valid Authorization Bearer token to verify retrieval of an array of chat messages with a 200 status response."
+  },
+  {
+    "id": "TC010",
+    "title": "get api rules with valid token and authorized role",
+    "description": "Test the GET /api/rules endpoint with a valid Authorization Bearer token and authorized user role to verify retrieval of an array of scheduling and operational rules with a 200 status response."
+  }
+]

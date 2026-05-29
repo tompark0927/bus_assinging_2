@@ -1,0 +1,991 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER // 대표이사/사장 — 전체 접근
+  DIRECTOR // 관리소장/상무 — 전체 접근 (대표 대행)
+  DISPATCH // 배차담당/배차계 — 배차, 기사, 버스, 노선, 휴무, 긴급
+  HR // 총무/인사 — 기사관리, 근태
+  ACCOUNTING // 경리/회계 — 급여관리
+  SAFETY_MGR // 안전관리자 — 안전관리, 기사(면허)
+  ADMIN // 일반 관리자 (하위호환)
+  DRIVER // 운전기사
+}
+
+enum DriverType {
+  MAIN
+  SPARE
+}
+
+enum ShiftType {
+  MORNING
+  AFTERNOON
+  FULL_DAY
+}
+
+enum SlotStatus {
+  SCHEDULED
+  DROPPED
+  FILLED
+  COMPLETED
+  ABSENT
+}
+
+enum ScheduleStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum EmergencyStatus {
+  OPEN
+  FILLED
+  CANCELLED
+  EXPIRED
+}
+
+enum NotificationType {
+  SCHEDULE_PUBLISHED
+  DAY_OFF_APPROVED
+  DAY_OFF_REJECTED
+  EMERGENCY_SLOT
+  SCHEDULE_CHANGE
+  EMERGENCY_FILLED
+  INSPECTION_FAILED
+  APPROVAL_REQUESTED
+  NEW_POST
+  URGENT_POST
+  NEW_MESSAGE
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+  ON_LEAVE
+}
+
+enum IncidentType {
+  ACCIDENT
+  TRAFFIC_VIOLATION
+  COMPLAINT
+  OTHER
+}
+
+enum InspectionStatus {
+  PASSED
+  FAILED
+  PENDING
+}
+
+model Company {
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String   @unique // 회사별 고유 코드 (영문/숫자 2~10자, 로그인 시 사용)
+  isActive  Boolean  @default(true)
+  /// 회사 배차 정책 (CompanyPolicy JSON: workdayBands / restCycle / shiftSystem / crewModel / constitutional)
+  /// null 이면 DEFAULT_POLICY (CITY_2SHIFT) 사용. solverDispatchService.loadCompanyPolicy 가 읽음.
+  policy    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users              User[]
+  buses              Bus[]
+  routes             Route[]
+  schedules          Schedule[]
+  dayOffRequests     DayOffRequest[]
+  notifications      Notification[]
+  companyRules       CompanyRule[]
+  chatSessions       ChatSession[]
+  maintenanceRecords MaintenanceRecord[]
+  attendanceRecords  AttendanceRecord[]
+  payrollSetting     PayrollSetting?
+  payrollRecords     PayrollRecord[]
+  dailyInspections   DailyInspection[]
+  incidentRecords    IncidentRecord[]
+  trainingRecords    TrainingRecord[]
+  hoboongTable       HoboongTable[]
+  unionDues          UnionDue[]
+  approvals          Approval[]
+  posts              Post[]
+  directMessages     DirectMessage[]
+  auditLogs          AuditLog[]
+  driverTags         DriverTag[]
+  goldenTickets      GoldenTicket[]
+  agentDecisions     AgentDecision[]
+  dailyReports       DailyReport[]
+}
+
+model User {
+  id                     Int         @id @default(autoincrement())
+  companyId              Int         @default(1)
+  name                   String
+  email                  String?     @unique
+  phone                  String?
+  password               String?
+  mustChangePassword     Boolean     @default(false) // 최초 로그인 시 비밀번호 강제 변경
+  role                   Role        @default(DRIVER)
+  employeeId             String
+  licenseNumber          String?
+  licenseExpiresAt       DateTime? // 운전면허 만료일
+  qualificationExpiresAt DateTime? // 버스운전자격증 만료일
+  driverType             DriverType?
+  shiftGroup             String? // "1조", "2조" (1일 2교대 시스템)
+  assignedBusNumber      String? // 담당 차량번호 (엑셀에서 추출)
+  hoboong                Int? // 호봉 (급여 등급)
+  kakaoId                String?     @unique
+  expoPushToken          String?
+  isActive               Boolean     @default(true)
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  company           Company            @relation(fields: [companyId], references: [id])
+  routeAssignments  RouteAssignment[]
+  scheduleSlots     ScheduleSlot[]
+  dayOffRequests    DayOffRequest[]
+  droppedSlots      EmergencyDrop[]    @relation("DroppedBy")
+  filledSlots       EmergencyDrop[]    @relation("FilledBy")
+  notifications     Notification[]
+  chatSessions      ChatSession[]
+  attendanceRecords AttendanceRecord[]
+  payrollRecords    PayrollRecord[]
+  inspections       DailyInspection[]
+  incidents         IncidentRecord[]
+  trainingRecords   TrainingRecord[]
+  refreshTokens     RefreshToken[]
+  approvalRequests  Approval[]         @relation("ApprovalRequester")
+  approvalSteps     ApprovalStep[]     @relation("ApprovalStepApprover")
+  posts             Post[]             @relation("PostAuthor")
+  postReads         PostRead[]         @relation("PostReader")
+  sentMessages      DirectMessage[]    @relation("MessageSender")
+  receivedMessages  DirectMessage[]    @relation("MessageReceiver")
+  auditLogs         AuditLog[]         @relation("AuditLogs")
+  driverPreferences DriverPreference[]
+  driverTags        DriverTag[]        @relation("TaggedDriver")
+  tagTargets        DriverTag[]        @relation("TagTarget")
+  goldenTickets     GoldenTicket[]
+  agentOverrides    AgentDecision[]    @relation("AgentDecisionOverrides")
+  readDailyReports  DailyReport[]      @relation("DailyReportReader")
+
+  @@unique([companyId, employeeId])
+  @@index([companyId])
+  @@index([role])
+  @@index([companyId, role])
+  @@index([companyId, isActive])
+  @@index([driverType])
+  @@index([licenseExpiresAt])
+  @@index([qualificationExpiresAt])
+}
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  token     String   @unique
+  family    String   // token family for rotation replay detection
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+}
+
+model OtpVerification {
+  id        Int      @id @default(autoincrement())
+  phone     String
+  otp       String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  attempts  Int      @default(0) // 잘못된 입력 횟수 — 5회 초과 시 자동 잠금
+  createdAt DateTime @default(now())
+
+  @@index([phone])
+}
+
+model Bus {
+  id             Int       @id @default(autoincrement())
+  companyId      Int       @default(1)
+  busNumber      String    @unique
+  plateNumber    String    @unique
+  model          String?
+  year           Int?
+  capacity       Int       @default(40)
+  isActive       Boolean   @default(true)
+  routeId        Int?
+  orderInGroup   Int? // 그룹 내 순번 (1~7, 순환 조율용)
+  groupType      String? // "UPPER"(상단) / "LOWER"(하단)
+  route          Route?    @relation(fields: [routeId], references: [id])
+  // GPS / BMS fields
+  lastLatitude   Float?
+  lastLongitude  Float?
+  lastLocationAt DateTime?
+  // Predictive Maintenance
+  totalMileage   Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  company            Company             @relation(fields: [companyId], references: [id])
+  scheduleSlots      ScheduleSlot[]
+  maintenanceRecords MaintenanceRecord[]
+  dailyInspections   DailyInspection[]
+
+  @@index([companyId])
+  @@index([routeId])
+  @@index([companyId, isActive])
+}
+
+enum MaintenanceType {
+  OIL_CHANGE
+  TIRE_ROTATION
+  BRAKE_INSPECTION
+  GENERAL_INSPECTION
+  OTHER
+}
+
+enum MaintenanceStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model MaintenanceRecord {
+  id               Int               @id @default(autoincrement())
+  companyId        Int               @default(1)
+  busId            Int
+  type             MaintenanceType
+  status           MaintenanceStatus @default(SCHEDULED)
+  mileageAtService Int?
+  scheduledAt      DateTime
+  completedAt      DateTime?
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  bus     Bus     @relation(fields: [busId], references: [id])
+
+  @@index([companyId])
+  @@index([busId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([companyId, status])
+}
+
+model Route {
+  id            Int      @id @default(autoincrement())
+  companyId     Int      @default(1)
+  routeNumber   String   @unique
+  name          String
+  description   String?
+  startPoint    String?
+  endPoint      String?
+  shiftOffset   Int? // 순환 조율 기준 오프셋 (차량 순번 순환용)
+  fatigueScore  Int      @default(3) // 피로도 가중치 (1=꿀노선 ~ 5=기피노선)
+  fatigueReason String?  // 피로도 사유 (예: "상습 정체구간", "장거리")
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company            Company             @relation(fields: [companyId], references: [id])
+  buses              Bus[]
+  routeAssignments   RouteAssignment[]
+  scheduleSlots      ScheduleSlot[]
+  posts              Post[]
+  driverPreferences  DriverPreference[]
+
+  @@index([companyId])
+  @@index([companyId, isActive])
+}
+
+// ─────────────────────────────────────────
+// 기사 선호 노선 (최대 3개)
+// ─────────────────────────────────────────
+model DriverPreference {
+  id        Int      @id @default(autoincrement())
+  driverId  Int
+  routeId   Int
+  priority  Int      @default(1) // 1=1순위, 2=2순위, 3=3순위
+  createdAt DateTime @default(now())
+
+  driver User  @relation(fields: [driverId], references: [id])
+  route  Route @relation(fields: [routeId], references: [id])
+
+  @@unique([driverId, routeId])
+  @@unique([driverId, priority])
+  @@index([driverId])
+  @@index([routeId])
+}
+
+// ─────────────────────────────────────────
+// 기사 블랙리스트/태그 (관리자 전용 메모)
+// ─────────────────────────────────────────
+model DriverTag {
+  id        Int      @id @default(autoincrement())
+  companyId Int
+  driverId  Int
+  tag       String   // 예: "#A기사와_원수지간", "#무릎관절_수동차량_배제"
+  isHardRule Boolean @default(false) // true면 AI 배차에서 하드 룰로 적용
+  targetDriverId Int? // 충돌 상대 기사 (인간관계 태그용)
+  createdBy Int      // 태그 등록한 관리자
+  createdAt DateTime @default(now())
+
+  company      Company @relation(fields: [companyId], references: [id])
+  driver       User    @relation("TaggedDriver", fields: [driverId], references: [id])
+  targetDriver User?   @relation("TagTarget", fields: [targetDriverId], references: [id])
+
+  @@index([companyId])
+  @@index([driverId])
+  @@index([companyId, driverId])
+}
+
+// ─────────────────────────────────────────
+// 황금 티켓 (대타 보상 - 원하는 날 휴무 프리패스)
+// ─────────────────────────────────────────
+model GoldenTicket {
+  id           Int       @id @default(autoincrement())
+  companyId    Int
+  driverId     Int       // 티켓 보유 기사
+  earnedFrom   Int?      // 대타 수락한 EmergencyDrop.id
+  usedForDate  DateTime? @db.Date // 사용한 날짜
+  isUsed       Boolean   @default(false)
+  expiresAt    DateTime  // 만료일 (기본: 발급 후 60일)
+  createdAt    DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+  driver  User    @relation(fields: [driverId], references: [id])
+
+  @@index([companyId])
+  @@index([driverId])
+  @@index([driverId, isUsed])
+}
+
+model RouteAssignment {
+  id        Int       @id @default(autoincrement())
+  driverId  Int
+  routeId   Int
+  startDate DateTime
+  endDate   DateTime?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+
+  driver User  @relation(fields: [driverId], references: [id])
+  route  Route @relation(fields: [routeId], references: [id])
+
+  @@index([driverId])
+  @@index([routeId])
+  @@index([driverId, isActive])
+}
+
+model Schedule {
+  id        Int            @id @default(autoincrement())
+  companyId Int            @default(1)
+  year      Int
+  month     Int
+  status    ScheduleStatus @default(DRAFT)
+  notes     String?
+  createdBy Int
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  company Company        @relation(fields: [companyId], references: [id])
+  slots   ScheduleSlot[]
+
+  @@unique([companyId, year, month])
+  @@index([companyId])
+  @@index([status])
+  @@index([companyId, status])
+}
+
+model ScheduleSlot {
+  id             Int        @id @default(autoincrement())
+  scheduleId     Int
+  driverId       Int
+  routeId        Int
+  busId          Int?
+  date           DateTime   @db.Date
+  shift          ShiftType  @default(FULL_DAY)
+  status         SlotStatus @default(SCHEDULED)
+  isRestDay      Boolean    @default(false)
+  isManualOverride Boolean  @default(false) // 수동 오버라이드 여부
+  overrideReason String?    // 수동 변경 사유
+  overrideBy     Int?       // 변경한 관리자 ID
+  fairnessNote   String?    // AI 공정성 설명 (예: "지난주 피로도5 노선 4회 → 이번주 꿀노선 배정")
+  notes          String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  schedule      Schedule       @relation(fields: [scheduleId], references: [id])
+  driver        User           @relation(fields: [driverId], references: [id])
+  route         Route          @relation(fields: [routeId], references: [id])
+  bus           Bus?           @relation(fields: [busId], references: [id])
+  emergencyDrop EmergencyDrop?
+
+  @@index([scheduleId])
+  @@index([driverId])
+  @@index([routeId])
+  @@index([busId])
+  @@index([date])
+  @@index([status])
+  @@index([scheduleId, date])
+  @@index([driverId, date])
+  @@index([scheduleId, driverId])
+}
+
+model DayOffRequest {
+  id         Int           @id @default(autoincrement())
+  companyId  Int           @default(1)
+  driverId   Int
+  date       DateTime      @db.Date
+  reason     String?
+  status     RequestStatus @default(PENDING)
+  reviewedBy Int?
+  reviewNote String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  driver  User    @relation(fields: [driverId], references: [id])
+
+  @@index([companyId])
+  @@index([driverId])
+  @@index([status])
+  @@index([date])
+  @@index([companyId, status])
+  @@index([companyId, driverId])
+}
+
+model EmergencyDrop {
+  id              Int             @id @default(autoincrement())
+  slotId          Int             @unique
+  driverId        Int
+  reason          String
+  status          EmergencyStatus @default(OPEN)
+  filledBy        Int?
+  filledAt        DateTime?
+  escalationLevel Int             @default(0) // 0=initial 1=reminder 2=all_drivers 3=admin_alert 4=critical
+  lastEscalatedAt DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  slot       ScheduleSlot @relation(fields: [slotId], references: [id])
+  driver     User         @relation("DroppedBy", fields: [driverId], references: [id])
+  filledUser User?        @relation("FilledBy", fields: [filledBy], references: [id])
+
+  @@index([driverId])
+  @@index([status])
+  @@index([filledBy])
+  @@index([escalationLevel, status])
+}
+
+model Notification {
+  id        Int              @id @default(autoincrement())
+  companyId Int              @default(1)
+  userId    Int
+  title     String
+  body      String
+  type      NotificationType
+  data      Json?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([companyId, userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model CompanyRule {
+  id         Int      @id @default(autoincrement())
+  companyId  Int      @default(1)
+  title      String
+  content    String
+  parsedData Json?
+  category   String   @default("general")
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@index([companyId, category])
+  @@index([companyId, isActive])
+}
+
+model ChatSession {
+  id        Int      @id @default(autoincrement())
+  companyId Int      @default(1)
+  userId    Int
+  title     String   @default("새 대화")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company       @relation(fields: [companyId], references: [id])
+  user     User          @relation(fields: [userId], references: [id])
+  messages ChatMessage[]
+
+  @@index([companyId])
+  @@index([userId])
+}
+
+model ChatMessage {
+  id        Int      @id @default(autoincrement())
+  sessionId Int
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId])
+}
+
+model ContactRequest {
+  id        Int      @id @default(autoincrement())
+  name      String
+  phone     String
+  email     String?
+  topic     String?  // general | demo | pricing | bug
+  buses     Int?
+  employees Int?
+  message   String?
+  status    String   @default("PENDING") // PENDING, CONTACTED, CONVERTED
+  createdAt DateTime @default(now())
+
+  @@index([status])
+  @@index([topic])
+}
+
+// ─────────────────────────────────────────
+// 전자결재 시스템
+// ─────────────────────────────────────────
+
+enum ApprovalType {
+  DAY_OFF // 휴무 신청
+  SHIFT_CHANGE // 교대 요청
+  EXPENSE // 경비 청구
+  MAINTENANCE // 차량 정비 요청
+  INCIDENT // 사고 보고
+  PURCHASE // 물품 구매
+  OTHER // 기타
+}
+
+enum ApprovalStatus {
+  DRAFT // 임시 저장
+  PENDING // 결재 대기
+  IN_REVIEW // 검토 중
+  APPROVED // 승인 완료
+  REJECTED // 반려
+  CANCELLED // 기안 취소
+}
+
+model Approval {
+  id           Int            @id @default(autoincrement())
+  companyId    Int
+  type         ApprovalType
+  title        String
+  content      String // 상세 내용
+  data         Json? // 양식별 추가 데이터 (날짜, 금액 등)
+  status       ApprovalStatus @default(DRAFT)
+  requesterId  Int // 기안자
+  currentStep  Int            @default(0) // 현재 결재 단계
+  totalSteps   Int            @default(1) // 전체 결재 단계 수
+  rejectedBy   Int? // 반려한 사람
+  rejectReason String? // 반려 사유
+  completedAt  DateTime? // 최종 완료 시각
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  company   Company        @relation(fields: [companyId], references: [id])
+  requester User           @relation("ApprovalRequester", fields: [requesterId], references: [id])
+  steps     ApprovalStep[]
+
+  @@index([companyId, status])
+  @@index([requesterId])
+}
+
+model ApprovalStep {
+  id         Int            @id @default(autoincrement())
+  approvalId Int
+  step       Int // 결재 순서 (0, 1, 2...)
+  approverId Int // 결재자
+  status     ApprovalStatus @default(PENDING)
+  comment    String? // 의견
+  actedAt    DateTime? // 처리 시각
+  createdAt  DateTime       @default(now())
+
+  approval Approval @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+  approver User     @relation("ApprovalStepApprover", fields: [approverId], references: [id])
+
+  @@unique([approvalId, step])
+  @@index([approverId, status])
+}
+
+// ─────────────────────────────────────────
+// 게시판 / 공지사항
+// ─────────────────────────────────────────
+
+enum BoardType {
+  NOTICE // 공지사항
+  SAFETY // 안전 게시판
+  FREE // 자유게시판
+  ROUTE // 노선 게시판
+  SUGGESTION // 건의함 (익명 가능)
+}
+
+model Post {
+  id          Int       @id @default(autoincrement())
+  companyId   Int
+  boardType   BoardType
+  title       String
+  content     String
+  authorId    Int
+  isAnonymous Boolean   @default(false) // 건의함 익명
+  isPinned    Boolean   @default(false) // 상단 고정
+  isUrgent    Boolean   @default(false) // 긴급 공지
+  routeId     Int? // 노선 게시판인 경우
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  company Company    @relation(fields: [companyId], references: [id])
+  author  User       @relation("PostAuthor", fields: [authorId], references: [id])
+  route   Route?     @relation(fields: [routeId], references: [id])
+  reads   PostRead[]
+
+  @@index([companyId, boardType])
+  @@index([authorId])
+  @@index([companyId, createdAt])
+  @@index([routeId])
+}
+
+model PostRead {
+  id     Int      @id @default(autoincrement())
+  postId Int
+  userId Int
+  readAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation("PostReader", fields: [userId], references: [id])
+
+  @@unique([postId, userId])
+}
+
+// ─────────────────────────────────────────
+// 2단계: 근태 / 급여 / 점검 / 안전
+// ─────────────────────────────────────────
+
+model AttendanceRecord {
+  id             Int              @id @default(autoincrement())
+  companyId      Int
+  driverId       Int
+  date           DateTime         @db.Date
+  checkIn        DateTime?
+  checkOut       DateTime?
+  checkInLat     Float?
+  checkInLng     Float?
+  checkOutLat    Float?
+  checkOutLng    Float?
+  checkInMethod  String? // "GPS" | "MANUAL"
+  checkOutMethod String? // "GPS" | "MANUAL"
+  status         AttendanceStatus @default(PRESENT)
+  notes          String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  driver  User    @relation(fields: [driverId], references: [id])
+
+  @@unique([driverId, date])
+  @@index([companyId])
+  @@index([driverId])
+  @@index([date])
+  @@index([status])
+  @@index([companyId, date])
+}
+
+model PayrollSetting {
+  id                  Int      @id @default(autoincrement())
+  companyId           Int      @unique
+  baseSalary          Int      @default(3000000) // 월 기본급 (원)
+  overtimeRate        Float    @default(1.5) // 연장근로 배율
+  nightShiftBonus     Int      @default(50000) // 야간근무 수당 (원/회)
+  holidayRate         Float    @default(2.0) // 휴일근로 배율
+  // 4대보험 공제율 (%)
+  nationalPensionRate Float    @default(4.5)
+  healthInsuranceRate Float    @default(3.545)
+  employmentInsRate   Float    @default(0.9)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+}
+
+model PayrollRecord {
+  id            Int       @id @default(autoincrement())
+  companyId     Int
+  driverId      Int
+  year          Int
+  month         Int
+  baseSalary    Int
+  workDays      Int
+  overtimePay   Int       @default(0)
+  nightShiftPay Int       @default(0)
+  holidayPay    Int       @default(0)
+  hoboong       Int? // 계산 당시 호봉
+  grossPay      Int // 총 지급액
+  deductions    Int       @default(0) // 4대보험 공제
+  unionDues     Int       @default(0) // 조합비 합계
+  netPay        Int // 실수령액
+  note          String?
+  isConfirmed   Boolean   @default(false)
+  confirmedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  driver  User    @relation(fields: [driverId], references: [id])
+
+  @@unique([companyId, driverId, year, month])
+  @@index([companyId])
+  @@index([driverId])
+  @@index([companyId, year, month])
+  @@index([isConfirmed])
+}
+
+model DailyInspection {
+  id        Int              @id @default(autoincrement())
+  companyId Int
+  busId     Int
+  driverId  Int
+  date      DateTime         @db.Date
+  items     Json // 점검 항목별 결과
+  status    InspectionStatus @default(PENDING)
+  notes     String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  bus     Bus     @relation(fields: [busId], references: [id])
+  driver  User    @relation(fields: [driverId], references: [id])
+
+  @@unique([busId, date])
+  @@index([companyId])
+  @@index([driverId])
+  @@index([date])
+  @@index([status])
+  @@index([companyId, date])
+}
+
+model IncidentRecord {
+  id          Int          @id @default(autoincrement())
+  companyId   Int
+  driverId    Int
+  date        DateTime     @db.Date
+  type        IncidentType
+  description String
+  penalty     Int? // 과태료/벌금 (원)
+  isResolved  Boolean      @default(false)
+  resolvedAt  DateTime?
+  notes       String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  driver  User    @relation(fields: [driverId], references: [id])
+
+  @@index([companyId])
+  @@index([driverId])
+  @@index([date])
+  @@index([type])
+  @@index([companyId, driverId])
+  @@index([isResolved])
+}
+
+model TrainingRecord {
+  id          Int       @id @default(autoincrement())
+  companyId   Int
+  driverId    Int
+  type        String // 신규교육, 보수교육, 안전교육, 응급처치 등
+  completedAt DateTime
+  expiresAt   DateTime?
+  institution String?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+  driver  User    @relation(fields: [driverId], references: [id])
+
+  @@index([companyId])
+  @@index([driverId])
+  @@index([expiresAt])
+  @@index([companyId, driverId])
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 급여 규칙: 호봉 테이블 + 조합비
+// ─────────────────────────────────────────────────────────────────
+
+model HoboongTable {
+  id         Int      @id @default(autoincrement())
+  companyId  Int
+  level      Int // 호봉 (1호봉, 2호봉, ...)
+  baseSalary Int // 해당 호봉의 기본급 (원)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, level])
+  @@index([companyId])
+}
+
+model UnionDue {
+  id        Int      @id @default(autoincrement())
+  companyId Int
+  name      String // 예: "노동조합비", "상조회비", "공제회비"
+  type      String   @default("FIXED") // "FIXED"(원) | "PERCENTAGE"(급여의 %)
+  amount    Float // 금액(원) 또는 비율(0~100)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@index([companyId, isActive])
+}
+
+// ─────────────────────────────────────────
+// Phase 7: 1:1 메시지
+// ─────────────────────────────────────────
+model DirectMessage {
+  id         Int       @id @default(autoincrement())
+  companyId  Int
+  senderId   Int
+  receiverId Int
+  content    String
+  isRead     Boolean   @default(false)
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  company  Company @relation(fields: [companyId], references: [id])
+  sender   User    @relation("MessageSender", fields: [senderId], references: [id])
+  receiver User    @relation("MessageReceiver", fields: [receiverId], references: [id])
+
+  @@index([companyId])
+  @@index([senderId, receiverId])
+  @@index([receiverId, isRead])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────
+// 감사 추적 (Audit Trail)
+// ─────────────────────────────────────────
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  userId      Int
+  action      String   // CREATE, UPDATE, DELETE
+  entityType  String   // PayrollRecord, Approval, User, Schedule, etc.
+  entityId    Int
+  changes     Json?    // { field: { old: value, new: value } }
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+  user    User    @relation("AuditLogs", fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([companyId, entityType])
+}
+
+// ─────────────────────────────────────────
+// AI 에이전트 결정 추적 (Decision Provenance)
+// 모든 에이전트의 도구 호출·추론·최종 결정·인간 오버라이드를 영구 기록.
+// PHASE 4 자율 모드 진입 조건 검증과 인간 거부 패턴 학습에 사용.
+// ─────────────────────────────────────────
+model AgentDecision {
+  id             Int      @id @default(autoincrement())
+  companyId      Int
+  agentName      String   // 'dispatch' | 'emergency' | 'onboarding' ...
+  sessionId      String   // 같은 의사결정 흐름을 묶는 키 (예: 같은 결원 1건의 모든 시도)
+  triggerType    String   // 'cron' | 'event' | 'manual' | 'simulation'
+  triggerRefId   Int?     // 관련 EmergencyDrop.id, Schedule.id 등 (옵셔널)
+  toolCalls      Json     // [{ tool, args, result, ts, durationMs }]
+  finalAction    String   // 자연어 한 줄 요약 (예: "박기사에게 푸시 전송")
+  reasoning      String   // 자연어 추론 과정 (관리자에게 표시)
+  status         String   @default("COMPLETED") // COMPLETED | FAILED | CANCELLED | OVERRIDDEN
+  errorMessage   String?
+  humanOverride  Boolean  @default(false)
+  overrideReason String?
+  overriddenById Int?     // 오버라이드한 사용자
+  tokensIn       Int      @default(0)
+  tokensOut      Int      @default(0)
+  costKrw        Decimal  @default(0) @db.Decimal(10, 2)
+  durationMs     Int      @default(0)
+  isSimulation   Boolean  @default(false) // 시뮬레이션이면 true (실 데이터 영향 없음)
+  createdAt      DateTime @default(now())
+
+  company       Company @relation(fields: [companyId], references: [id])
+  overriddenBy  User?   @relation("AgentDecisionOverrides", fields: [overriddenById], references: [id])
+
+  @@index([companyId, agentName, createdAt])
+  @@index([sessionId])
+  @@index([status])
+  @@index([isSimulation])
+}
+
+// ─────────────────────────────────────────
+// DailyReport — DailyReportAgent 가 매일 09:00 KST 생성하는 회사별 운영 보고서
+// 어제 활동 + 오늘 우선순위 + 공정성 추이 + 예정 알림 + 에이전트 건강 지표를 한 페이지로 요약
+// ─────────────────────────────────────────
+model DailyReport {
+  id              Int       @id @default(autoincrement())
+  companyId       Int
+  reportDate      DateTime  @db.Date // 보고서 대상 날짜 (보통 어제)
+  generatedAt     DateTime  @default(now())
+  /// 한국어 마크다운 본문 (모델이 작성)
+  content         String
+  /// 구조화 요약 (대시보드·차트용) — { yesterdayStats, todayPriorities, fairnessDrift, ... }
+  summary         Json
+  /// 우선순위 — INFO | ATTENTION | URGENT
+  severity        String    @default("INFO")
+  /// 관리자 읽음 처리
+  isRead          Boolean   @default(false)
+  readById        Int?
+  readAt          DateTime?
+  /// 생성한 AgentDecision 의 id (감사 추적용, Foreign Key 는 생략 — 단순 참조)
+  agentDecisionId Int?
+
+  company Company @relation(fields: [companyId], references: [id])
+  readBy  User?   @relation("DailyReportReader", fields: [readById], references: [id])
+
+  /// 같은 회사·같은 날짜에는 보고서 1개만 (재실행 방지)
+  @@unique([companyId, reportDate])
+  @@index([companyId, generatedAt])
+  @@index([severity])
+  @@index([isRead])
+}

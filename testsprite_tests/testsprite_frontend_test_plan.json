@@ -1,0 +1,1344 @@
+[
+  {
+    "id": "TC001",
+    "title": "Login with valid credentials redirects to an authenticated landing page",
+    "description": "Verifies a user can log in with valid credentials and is redirected to an authenticated page.",
+    "category": "Buses API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Email\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the \"Email\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the \"Password\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Log in\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/\""
+      }
+    ]
+  },
+  {
+    "id": "TC002",
+    "title": "Authenticated user can access the buses list screen from the UI",
+    "description": "Verifies an authenticated user can navigate to the buses list view and see bus entries.",
+    "category": "Buses API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the \"Email\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the \"Password\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Log in\""
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Buses\" in the main navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Buses\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Bus list\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Bus\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC003",
+    "title": "Buses list shows model and status information for each bus",
+    "description": "Verifies the buses list displays operationally relevant fields such as model and status.",
+    "category": "Buses API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the \"Email\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the \"Password\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Log in\""
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Buses\" in the main navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Model\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Status\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Bus row\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC004",
+    "title": "Inspect a bus from the list to view details",
+    "description": "Verifies a user can open a bus detail view from the buses list and see key information.",
+    "category": "Buses API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the \"Email\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the \"Password\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Log in\""
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Buses\" in the main navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click on the first bus in the list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Bus details\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Status\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC005",
+    "title": "List routes after successful login",
+    "description": "Verifies an authenticated user can view the routes list successfully.",
+    "category": "Routes API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/\""
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Routes\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Routes\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Routes list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC006",
+    "title": "Routes list displays at least one route item",
+    "description": "Verifies the routes page renders route entries (not an empty/blank state) for an authenticated user.",
+    "category": "Routes API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Routes\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Route row\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Route name\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Route ID\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC007",
+    "title": "Unauthorized user cannot access routes list",
+    "description": "Verifies the routes page is not accessible when the user is not authenticated.",
+    "category": "Routes API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"fake.user@example.com\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"wrong-password\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Invalid\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Unauthorized\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/login\""
+      }
+    ]
+  },
+  {
+    "id": "TC008",
+    "title": "Routes page remains accessible after refresh-like revisit via navigation",
+    "description": "Verifies an authenticated session continues to allow access to the routes page when navigating away and back.",
+    "category": "Routes API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Routes\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Routes list\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Dashboard\" in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Routes\" in the main navigation"
+      }
+    ]
+  },
+  {
+    "id": "TC009",
+    "title": "Routes page handles slow loading state gracefully",
+    "description": "Verifies a loading indicator is shown before the routes list renders for an authenticated user.",
+    "category": "Routes API",
+    "priority": "Low",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Routes\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Loading\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Wait for element \"Routes list\" to appear"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Routes list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC010",
+    "title": "View schedules list after login",
+    "description": "Verifies an authenticated user can reach a schedules view and see schedules displayed.",
+    "category": "Schedules API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/\""
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Schedules\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Schedules\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Schedules list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC011",
+    "title": "Filter schedules by timeframe",
+    "description": "Verifies schedules can be filtered by a selected date/time range and results are shown.",
+    "category": "Schedules API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Schedules\" in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Start date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"2026-03-01\" into the \"Start date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"End date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"2026-03-07\" into the \"End date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Apply\" or \"Filter\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Schedules list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC012",
+    "title": "Filter schedules by route",
+    "description": "Verifies schedules can be filtered by selecting a route and results are shown.",
+    "category": "Schedules API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Schedules\" in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Route\" dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Route 1\" from the \"Route\" dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Apply\" or \"Filter\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Schedules list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC013",
+    "title": "Handle invalid timeframe input (end date before start date)",
+    "description": "Verifies the UI shows a visible validation error when timeframe input is invalid and does not show updated results.",
+    "category": "Schedules API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Schedules\" in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Start date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"2026-03-10\" into the \"Start date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"End date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"2026-03-01\" into the \"End date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Apply\" or \"Filter\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"End date must be after start date\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC014",
+    "title": "Missing required filter parameters shows a bad request style error",
+    "description": "Verifies the UI surfaces a visible error message when the user tries to fetch schedules with required fields missing.",
+    "category": "Schedules API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Schedules\" in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Clear\" or \"Reset\" filters button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Apply\" or \"Filter\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Bad Request\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC015",
+    "title": "Schedules page empty state for no results",
+    "description": "Verifies the UI shows a clear empty state when filters return no schedules.",
+    "category": "Schedules API",
+    "priority": "Low",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Schedules\" in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Start date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"2099-01-01\" into the \"Start date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"End date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"2099-01-02\" into the \"End date\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Apply\" or \"Filter\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"No schedules found\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC016",
+    "title": "View emergency reports list as an authenticated user",
+    "description": "Verifies that a logged-in user can open the Emergency Reports page and see a list of emergency reports.",
+    "category": "Emergency API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/\""
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Emergency\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Emergency\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Emergency reports list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC017",
+    "title": "Emergency reports list loads and shows at least one report row",
+    "description": "Verifies that the Emergency Reports page renders report rows when data exists.",
+    "category": "Emergency API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Emergency\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Emergency reports list\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Emergency report row\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC018",
+    "title": "Empty state is shown when no emergency reports exist",
+    "description": "Verifies that the Emergency Reports page shows an empty-state message when there are no reports to display.",
+    "category": "Emergency API",
+    "priority": "Low",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Emergency\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Emergency reports list\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"No emergency reports\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC019",
+    "title": "Unauthorized user cannot see emergency reports (permission denied message)",
+    "description": "Verifies that a user without sufficient permissions sees a visible access-denied state on the Emergency Reports page.",
+    "category": "Emergency API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Emergency\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Forbidden\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"You do not have permission\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC020",
+    "title": "Emergency reports page shows stable header and metadata section",
+    "description": "Verifies that the Emergency page displays its header/metadata area consistently after login and navigation.",
+    "category": "Emergency API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username or email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Emergency\" in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Emergency\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Emergency reports filters or summary\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC021",
+    "title": "Login with valid credentials shows authenticated landing state",
+    "description": "Verifies a user can log in successfully with valid credentials and is redirected to an authenticated page.",
+    "category": "Notifications API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Login\""
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Logout\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC022",
+    "title": "Notifications entry is visible after login",
+    "description": "Verifies that after successful login, the UI provides an in-app entry point to notifications.",
+    "category": "Notifications API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Notifications\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Notification bell\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC023",
+    "title": "Open notifications list from header/bell after login",
+    "description": "Verifies that a logged-in user can open the notifications panel/list from the main UI.",
+    "category": "Notifications API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Notification bell\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Notifications\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Notifications list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC024",
+    "title": "Notifications list shows items or an empty state message",
+    "description": "Verifies the notifications UI renders either notification items or a clear empty-state for users with no notifications.",
+    "category": "Notifications API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Notification bell\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Notifications list\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"No notifications\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC025",
+    "title": "Invalid login credentials show an error and do not authenticate",
+    "description": "Verifies that invalid credentials are rejected and an error is shown without entering an authenticated state.",
+    "category": "Notifications API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Login\""
+      },
+      {
+        "type": "action",
+        "description": "Type \"fake.user@example.com\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"wrong-password\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Invalid\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Login\""
+      }
+    ]
+  },
+  {
+    "id": "TC026",
+    "title": "View chat logs after successful login",
+    "description": "Verifies a user can log in and see a list of chat messages on the chat page.",
+    "category": "Chat API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username/email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Chat\" link in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Chat\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Chat messages list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC027",
+    "title": "Chat page shows messages load successfully (non-empty state)",
+    "description": "Verifies the chat page displays at least one chat message when messages exist.",
+    "category": "Chat API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username/email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Chat\" link in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Chat messages list\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"A chat message row\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC028",
+    "title": "Chat page supports scrolling through older chat messages",
+    "description": "Verifies the user can scroll the chat log and still see message content rendered.",
+    "category": "Chat API",
+    "priority": "Low",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the username/email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Chat\" link in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Chat messages list\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Scroll to the bottom of the chat messages list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"A chat message row\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC029",
+    "title": "Unauthorized user is blocked from accessing chat (from UI navigation)",
+    "description": "Verifies that when not authenticated, the user cannot access chat and is redirected to login or shown an unauthorized message.",
+    "category": "Chat API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"fake.user@example.com\" into the username/email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"wrong-password\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Invalid\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/login\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Log in\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC030",
+    "title": "Login with valid credentials and land on an authenticated page",
+    "description": "Verifies a user can log in with valid credentials and is redirected to an authenticated state.",
+    "category": "Rules API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL does not contain \"/login\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Log out\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC031",
+    "title": "View rules list when authenticated",
+    "description": "Verifies an authenticated user can access the Rules page and see a list of rules rendered.",
+    "category": "Rules API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Rules\" in the primary navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Rules\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Rules list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC032",
+    "title": "Rules page shows non-empty state when rules exist",
+    "description": "Verifies the Rules page displays at least one rule row/card when rules are available.",
+    "category": "Rules API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Rules\" in the primary navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Rule\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC033",
+    "title": "Rules page gracefully handles empty rules state",
+    "description": "Verifies the UI shows an empty-state message when no rules are returned.",
+    "category": "Rules API",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Rules\" in the primary navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"No rules\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC034",
+    "title": "Unauthorized role is blocked from viewing rules",
+    "description": "Verifies a user without permission cannot access rules and sees a forbidden/permission error message.",
+    "category": "Rules API",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Log in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Rules\" in the primary navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Forbidden\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"You do not have permission\" is visible"
+      }
+    ]
+  }
+]

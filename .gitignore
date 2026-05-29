@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+*.log
+.DS_Store
+.expo/
+ios/
+android/
+*.orig.*
+web-build/
+.claude/
+.superpowers/
+coverage/
+logs/
+
