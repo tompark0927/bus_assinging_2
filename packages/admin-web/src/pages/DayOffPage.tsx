@@ -17,6 +17,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { dayOffApi } from '../services/api';
+import PageHeader from '../components/PageHeader';
 import {
   format,
   startOfMonth,
@@ -225,22 +226,21 @@ export default function DayOffPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-[28px] font-bold text-gray-900">휴무 관리</h1>
-          <p className="text-[16px] text-gray-500 mt-1">
-            기사님들의 휴무 요청을 검토하고 승인 또는 반려하세요.
-          </p>
-        </div>
-        <button
-          onClick={() => refetch()}
-          disabled={isFetching}
-          className="flex items-center gap-2 px-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-[16px] font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors min-h-[48px]"
-        >
-          <RefreshCw size={18} className={isFetching ? 'animate-spin' : ''} />
-          새로고침
-        </button>
-      </div>
+      <PageHeader
+        icon={CalendarOff}
+        title="휴무 관리"
+        description="기사님들의 휴무 요청을 검토하고 승인 또는 반려하세요."
+        actions={
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="flex items-center gap-2 px-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-[16px] font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors min-h-[48px]"
+          >
+            <RefreshCw size={18} className={isFetching ? 'animate-spin' : ''} />
+            새로고침
+          </button>
+        }
+      />
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

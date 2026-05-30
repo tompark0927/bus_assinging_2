@@ -46,6 +46,14 @@ function safeUser(user: Record<string, unknown>) {
   return safe;
 }
 
+// 휴대폰 번호 마스킹: "010-1234-5678" / "01012345678" → "010-****-5678"
+// 비밀번호 재설정 시 "어느 번호로 인증번호가 갔는지" 힌트를 안전하게 보여주기 위함.
+function maskPhone(phone: string | null | undefined): string {
+  const d = String(phone ?? '').replace(/\D/g, '');
+  if (d.length < 7) return '***';
+  return `${d.slice(0, 3)}-****-${d.slice(-4)}`;
+}
+
 // ─────────────────────────────────────────
 // 1. 이메일 + 비밀번호 로그인
 // ─────────────────────────────────────────
@@ -442,6 +450,201 @@ export const verifyPhoneOtp = async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('OTP 검증 오류', { error });
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+// ─────────────────────────────────────────
+// 4. 비밀번호 재설정 (이메일 발송 기능이 없으므로 휴대폰 OTP 기반)
+//
+//   흐름: (1) 회사코드 + 아이디(이메일/사원번호/전화) 로 본인 계정 확인
+//        → 등록된 휴대폰으로 OTP 발송
+//        (2) OTP + 새 비밀번호 제출 → 검증 후 비밀번호 교체 + 전 세션 무효화 + 즉시 로그인
+// ─────────────────────────────────────────
+
+// 회사코드 + 아이디로 사용자 1명을 해석 (login 의 OR 조건과 동일 규칙 재사용)
+async function resolveUserByIdentifier(companyId: number, identifier: string) {
+  const idStr = String(identifier).trim();
+  const digits = idStr.replace(/\D/g, '');
+  return prisma.user.findFirst({
+    where: {
+      companyId,
+      isActive: true,
+      OR: [
+        { email: idStr },
+        { employeeId: idStr },
+        { phone: idStr },
+        ...(digits ? [{ phone: digits }] : []),
+      ],
+    },
+  });
+}
+
+// 4a. 비밀번호 재설정 — OTP 발송
+export const forgotPasswordSendOtp = async (req: Request, res: Response) => {
+  try {
+    const { companyCode, identifier } = req.body;
+    if (!companyCode || !identifier) {
+      return res.status(400).json({ success: false, message: '회사 코드와 아이디(이메일/사원번호)를 입력해주세요.' });
+    }
+
+    const company = await prisma.company.findUnique({ where: { code: companyCode } });
+    if (!company || !company.isActive) {
+      return res.status(401).json({ success: false, message: '유효하지 않은 회사 코드입니다.' });
+    }
+
+    const user = await resolveUserByIdentifier(company.id, identifier);
+    if (!user) {
+      return res.status(404).json({ success: false, message: '일치하는 계정을 찾을 수 없습니다. 회사 코드와 아이디를 확인해주세요.' });
+    }
+    if (!user.phone) {
+      return res.status(400).json({
+        success: false,
+        message: '등록된 휴대폰 번호가 없어 본인인증을 진행할 수 없습니다. 회사 관리자에게 비밀번호 재설정을 요청해주세요.',
+      });
+    }
+
+    // 직전 1분 내 발송 제한
+    const recent = await prisma.otpVerification.findFirst({
+      where: { phone: user.phone, used: false, createdAt: { gte: new Date(Date.now() - 60_000) } },
+    });
+    if (recent) return res.status(429).json({ success: false, message: '인증번호는 1분에 한 번만 요청할 수 있습니다.' });
+
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + 5 * 60_000);
+    await prisma.otpVerification.create({ data: { phone: user.phone, otp, expiresAt } });
+    await sendSms(user.phone, `[Busync] 비밀번호 재설정 인증번호: ${otp} (5분 유효)`);
+
+    logger.info('비밀번호 재설정 OTP 발송', { userId: user.id, companyId: company.id });
+    return res.json({
+      success: true,
+      message: '등록된 휴대폰으로 인증번호를 발송했습니다.',
+      data: { phoneHint: maskPhone(user.phone) },
+    });
+  } catch (error) {
+    logger.error('비밀번호 재설정 OTP 발송 오류', { error });
+    return res.status(500).json({ success: false, message: '인증번호 발송에 실패했습니다.' });
+  }
+};
+
+// 4b. 비밀번호 재설정 — OTP 검증 + 새 비밀번호 설정
+export const forgotPasswordReset = async (req: Request, res: Response) => {
+  try {
+    const { companyCode, identifier, otp, newPassword } = req.body;
+    if (!companyCode || !identifier || !otp || !newPassword) {
+      return res.status(400).json({ success: false, message: '모든 항목을 입력해주세요.' });
+    }
+
+    const company = await prisma.company.findUnique({ where: { code: companyCode } });
+    if (!company || !company.isActive) {
+      return res.status(401).json({ success: false, message: '유효하지 않은 회사 코드입니다.' });
+    }
+
+    const user = await resolveUserByIdentifier(company.id, identifier);
+    if (!user || !user.phone) {
+      return res.status(404).json({ success: false, message: '일치하는 계정을 찾을 수 없습니다.' });
+    }
+    const userPhone = user.phone;
+
+    // OTP 검증 + 시도 카운트 (verifyPhoneOtp 와 동일한 원자적 패턴)
+    const verifyResult = await prisma.$transaction(async (tx) => {
+      const found = await tx.otpVerification.findFirst({
+        where: { phone: userPhone, used: false, expiresAt: { gte: new Date() } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!found) return { ok: false, locked: false };
+      if (found.attempts >= MAX_OTP_ATTEMPTS) {
+        await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
+        return { ok: false, locked: true };
+      }
+      if (found.otp === otp) {
+        await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
+        return { ok: true, locked: false };
+      }
+      const nextAttempts = found.attempts + 1;
+      await tx.otpVerification.update({
+        where: { id: found.id },
+        data: { attempts: nextAttempts, used: nextAttempts >= MAX_OTP_ATTEMPTS },
+      });
+      return { ok: false, locked: nextAttempts >= MAX_OTP_ATTEMPTS };
+    });
+
+    if (!verifyResult.ok) {
+      if (verifyResult.locked) {
+        logger.warn('비밀번호 재설정 OTP 무차별 대입 의심 — 자동 잠금', { userId: user.id, ip: req.ip });
+        return res.status(401).json({ success: false, message: '인증 시도가 너무 많습니다. 인증번호를 새로 발송해주세요.' });
+      }
+      return res.status(401).json({ success: false, message: '인증번호가 올바르지 않거나 만료되었습니다.' });
+    }
+
+    // 기존 비밀번호와 동일한 값은 거부 (있을 때만)
+    if (user.password && (await bcrypt.compare(newPassword, user.password))) {
+      return res.status(400).json({ success: false, message: '기존 비밀번호와 다른 비밀번호로 설정해주세요.' });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({ where: { id: user.id }, data: { password: hashed, mustChangePassword: false } });
+    // 보안: 기존 모든 세션(리프레시 토큰) 무효화 → 탈취된 세션 차단
+    await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
+
+    logger.info('비밀번호 재설정 완료', { userId: user.id, companyId: company.id });
+
+    // UX: 재설정 직후 바로 로그인되도록 새 토큰 발급
+    const fresh = await prisma.user.findUnique({ where: { id: user.id } });
+    const tokens = await issueTokenPair(fresh!);
+    return res.json({
+      success: true,
+      message: '비밀번호가 변경되었습니다.',
+      data: {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        token: tokens.accessToken,
+        user: safeUser(fresh as unknown as Record<string, unknown>),
+      },
+    });
+  } catch (error) {
+    logger.error('비밀번호 재설정 오류', { error });
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+// ─────────────────────────────────────────
+// 5. 회사 코드 찾기 (등록된 휴대폰으로 문자 발송 — enumeration 방지)
+// ─────────────────────────────────────────
+export const findCompanyCode = async (req: Request, res: Response) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ success: false, message: '전화번호를 입력해주세요.' });
+
+    const raw = String(phone).trim();
+    const digits = raw.replace(/\D/g, '');
+
+    const users = await prisma.user.findMany({
+      where: { isActive: true, OR: [{ phone: raw }, ...(digits ? [{ phone: digits }] : [])] },
+      include: { company: true },
+    });
+
+    // 회사 단위로 중복 제거 (활성 회사만)
+    const companies = Array.from(
+      new Map(users.filter((u) => u.company?.isActive).map((u) => [u.company.id, u.company])).values(),
+    );
+
+    // enumeration 방지: 찾았든 못 찾았든 동일한 일반 응답.
+    // 실제 코드는 본인 휴대폰 문자로만 전달 (SMS_DEV_MODE=true 면 서버 콘솔에 출력).
+    if (companies.length > 0) {
+      const lines = companies.map((c) => `· ${c.name}: ${c.code}`).join('\n');
+      await sendSms(raw, `[Busync] 가입된 회사 코드 안내\n${lines}`);
+      logger.info('회사 코드 찾기 — 발송', { phone: maskPhone(raw), count: companies.length });
+    } else {
+      logger.warn('회사 코드 찾기 — 일치하는 계정 없음', { phone: maskPhone(raw) });
+    }
+
+    return res.json({
+      success: true,
+      message: '입력하신 번호로 가입된 회사 코드가 있다면 문자로 발송했습니다. 잠시 후 확인해주세요.',
+    });
+  } catch (error) {
+    logger.error('회사 코드 찾기 오류', { error });
+    return res.status(500).json({ success: false, message: '요청 처리에 실패했습니다.' });
   }
 };
 

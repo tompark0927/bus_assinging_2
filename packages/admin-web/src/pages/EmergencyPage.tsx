@@ -25,6 +25,7 @@ import { format, formatDistanceToNow, isToday } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { parseSlotDate } from '../utils/date';
+import PageHeader from '../components/PageHeader';
 
 /* ─────────────────────── Types ─────────────────────── */
 
@@ -213,22 +214,21 @@ export default function EmergencyPage() {
   return (
     <div className="space-y-8">
       {/* Page Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">대타 관리</h1>
-          <p className="text-gray-500 dark:text-gray-400 mt-1 text-[16px]">
-            당일 슬롯 드랍 및 대타 배정 현황을 관리합니다.
-          </p>
-        </div>
-        <button
-          onClick={handleRefresh}
-          disabled={openRefetching}
-          className="flex items-center gap-2 px-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-[16px] font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors min-h-[48px]"
-        >
-          <RefreshCw size={18} className={openRefetching ? 'animate-spin' : ''} />
-          새로고침
-        </button>
-      </div>
+      <PageHeader
+        icon={AlertTriangle}
+        title="대타 관리"
+        description="당일 슬롯 드랍 및 대타 배정 현황을 관리합니다."
+        actions={
+          <button
+            onClick={handleRefresh}
+            disabled={openRefetching}
+            className="flex items-center gap-2 px-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-[16px] font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors min-h-[48px]"
+          >
+            <RefreshCw size={18} className={openRefetching ? 'animate-spin' : ''} />
+            새로고침
+          </button>
+        }
+      />
 
       {/* ─── Real-time Summary Bar ─── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

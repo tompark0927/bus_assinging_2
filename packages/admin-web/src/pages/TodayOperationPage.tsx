@@ -12,6 +12,7 @@ import {
   MapPin,
 } from 'lucide-react';
 import { schedulesApi, emergencyApi, routesApi } from '../services/api';
+import PageHeader from '../components/PageHeader';
 
 /* ────────────────────────────────────────────
    Types
@@ -114,10 +115,7 @@ export default function TodayOperationPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-[32px] font-bold text-gray-900 dark:text-gray-100">오늘 운행 현황</h1>
-        <p className="text-[15px] text-gray-500 dark:text-gray-400 mt-1">{friendlyDate}</p>
-      </div>
+      <PageHeader icon={Bus} title="오늘 운행 현황" description={friendlyDate} />
 
       {/* 요약 카드 */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

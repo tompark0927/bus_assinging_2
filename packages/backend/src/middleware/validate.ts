@@ -149,6 +149,35 @@ export const authValidation = {
       .isInt({ min: 1 }).withMessage('사용자 ID는 유효한 정수여야 합니다.')
       .toInt(),
   ]),
+
+  // 비밀번호 재설정 — OTP 발송 요청
+  forgotPasswordSendOtp: validate([
+    requiredString('companyCode', '회사 코드', { min: 2, max: 10 }),
+    body('identifier')
+      .trim()
+      .notEmpty().withMessage('아이디(이메일/사원번호)는 필수입니다.'),
+  ]),
+
+  // 비밀번호 재설정 — OTP 검증 + 새 비밀번호
+  forgotPasswordReset: validate([
+    requiredString('companyCode', '회사 코드', { min: 2, max: 10 }),
+    body('identifier')
+      .trim()
+      .notEmpty().withMessage('아이디(이메일/사원번호)는 필수입니다.'),
+    body('otp')
+      .trim()
+      .notEmpty().withMessage('인증번호는 필수입니다.')
+      .isLength({ min: 4, max: 6 }).withMessage('인증번호는 4~6자리여야 합니다.'),
+    passwordValidator('newPassword'),
+  ]),
+
+  // 회사 코드 찾기
+  findCompanyCode: validate([
+    body('phone')
+      .trim()
+      .notEmpty().withMessage('전화번호는 필수입니다.')
+      .matches(/^01[016789]-?\d{3,4}-?\d{4}$/).withMessage('유효한 전화번호 형식이어야 합니다. (01X-XXXX-XXXX)'),
+  ]),
 };
 
 // ─────────────────────────────────────────────────────────────────

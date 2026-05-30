@@ -29,6 +29,7 @@ import { schedulesApi, routesApi, busesApi, usersApi } from '../services/api';
 import { format, getDaysInMonth } from 'date-fns';
 import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
+import PageHeader from '../components/PageHeader';
 
 // ─────────────────────────────────────────
 // 상수 & 타입
@@ -619,14 +620,37 @@ export default function SchedulePage() {
   // ═══════════════════════════════════════
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-print-root>
       {/* ─── 페이지 헤더 ─── */}
-      <div data-print-section="header" className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div>
-          <h1 className="text-[28px] font-bold text-gray-900 dark:text-gray-100 flex items-center gap-3">
-            <Calendar className="text-blue-600" size={28} />
-            배차표 관리
-          </h1>
+      <div data-print-section="header">
+        <PageHeader
+          icon={Calendar}
+          title="배차표 관리"
+          actions={
+            <div className="flex items-center bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm">
+              <button
+                onClick={() => navigateMonth(-1)}
+                className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-l-xl transition-colors"
+                aria-label="이전 달"
+              >
+                <ChevronLeft size={22} />
+              </button>
+              <button
+                onClick={goToToday}
+                className="px-5 py-3 text-lg font-semibold text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors min-w-[140px] text-center"
+              >
+                {year}년 {month}월
+              </button>
+              <button
+                onClick={() => navigateMonth(1)}
+                className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-r-xl transition-colors"
+                aria-label="다음 달"
+              >
+                <ChevronRight size={22} />
+              </button>
+            </div>
+          }
+        >
           <div className="flex items-center gap-3 mt-2">
             <span className="text-lg text-gray-600 dark:text-gray-400">
               {year}년 {month}월
@@ -649,33 +673,7 @@ export default function SchedulePage() {
               </span>
             )}
           </div>
-        </div>
-
-        {/* 월 네비게이션 */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm">
-            <button
-              onClick={() => navigateMonth(-1)}
-              className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-l-xl transition-colors"
-              aria-label="이전 달"
-            >
-              <ChevronLeft size={22} />
-            </button>
-            <button
-              onClick={goToToday}
-              className="px-5 py-3 text-lg font-semibold text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors min-w-[140px] text-center"
-            >
-              {year}년 {month}월
-            </button>
-            <button
-              onClick={() => navigateMonth(1)}
-              className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-r-xl transition-colors"
-              aria-label="다음 달"
-            >
-              <ChevronRight size={22} />
-            </button>
-          </div>
-        </div>
+        </PageHeader>
       </div>
 
       {/* ─── 액션 버튼 바 ─── */}
@@ -950,6 +948,14 @@ export default function SchedulePage() {
         </div>
       )}
 
+      {/* ─── 인쇄 영역: 이 안(배차표 + 범례)만 인쇄된다 ─── */}
+      <div data-print-area className="space-y-5">
+      {/* 인쇄 전용 제목 — 화면에서는 숨김, 인쇄 시에만 표시 */}
+      {schedule && (
+        <div className="hidden print:block text-center mb-2">
+          <h2 className="text-xl font-bold text-black">{year}년 {month}월 배차표</h2>
+        </div>
+      )}
       {/* ─── 캘린더/그리드 배차표 ─── */}
       {!isLoading && !isError && schedule && (
         <div className="card p-0 overflow-hidden dark:bg-gray-800">
@@ -1158,6 +1164,8 @@ export default function SchedulePage() {
           </div>
         </div>
       )}
+      </div>
+      {/* ─── /인쇄 영역 ─── */}
 
       {/* ═══════════════════════════════════════
           모달들

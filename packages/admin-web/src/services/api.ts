@@ -147,6 +147,13 @@ export const authApi = {
   login: (companyCode: string, email: string, password: string) =>
     api.post('/auth/login', { companyCode, email, password }),
   getMe: () => api.get('/auth/me'),
+  // 비밀번호 재설정 (휴대폰 OTP 기반)
+  forgotPasswordSendOtp: (companyCode: string, identifier: string) =>
+    api.post('/auth/forgot-password/send-otp', { companyCode, identifier }),
+  forgotPasswordReset: (companyCode: string, identifier: string, otp: string, newPassword: string) =>
+    api.post('/auth/forgot-password/reset', { companyCode, identifier, otp, newPassword }),
+  // 회사 코드 찾기 (등록된 휴대폰으로 문자 발송)
+  findCompanyCode: (phone: string) => api.post('/auth/find-company-code', { phone }),
   /**
    * 서버에 refreshToken 폐기 요청. 클라이언트 저장소 정리는 호출자가 별도 수행.
    * Best-effort: 네트워크 오류로 실패해도 클라이언트는 여전히 로그아웃됨.

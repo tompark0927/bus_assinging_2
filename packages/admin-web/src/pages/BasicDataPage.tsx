@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { usersApi, busesApi, routesApi } from '../services/api';
+import PageHeader from '../components/PageHeader';
 
 /* ────────────────────────────────────────────
    Types
@@ -63,17 +64,11 @@ export default function BasicDataPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-[32px] font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <Database className="w-7 h-7 text-blue-500" />
-            기초 데이터
-          </h1>
-          <p className="text-[16px] text-gray-500 dark:text-gray-400 mt-1">
-            기사·버스·노선 등록 및 관리. AI 배차의 입력 데이터입니다.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        icon={Database}
+        title="기초 데이터"
+        description="기사·버스·노선 등록 및 관리. AI 배차의 입력 데이터입니다."
+      />
 
       {/* Tabs */}
       <div className="border-b border-gray-200 dark:border-white/10">

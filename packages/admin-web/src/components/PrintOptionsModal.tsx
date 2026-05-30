@@ -4,18 +4,14 @@ import { Printer, X } from 'lucide-react';
 export interface PrintOptions {
   orientation: 'landscape' | 'portrait';
   paperSize: 'A4' | 'A3' | 'letter';
-  showHeader: boolean;
   showLegend: boolean;
-  showSummary: boolean;
   pageBreakRows: number; // 0 = no forced break
 }
 
 const DEFAULTS: PrintOptions = {
   orientation: 'landscape',
   paperSize: 'A4',
-  showHeader: true,
   showLegend: true,
-  showSummary: true,
   pageBreakRows: 0,
 };
 
@@ -37,9 +33,7 @@ function applyAndPrint(opts: PrintOptions, title: string) {
   styleEl.id = 'busync-print-rules';
   styleEl.textContent = `
     @page { size: ${opts.paperSize} ${opts.orientation}; margin: 10mm; }
-    body.busync-print-hide-header [data-print-section="header"] { display: none !important; }
     body.busync-print-hide-legend [data-print-section="legend"] { display: none !important; }
-    body.busync-print-hide-summary [data-print-section="summary"] { display: none !important; }
     ${
       opts.pageBreakRows > 0
         ? `@media print {
@@ -52,9 +46,7 @@ function applyAndPrint(opts: PrintOptions, title: string) {
   document.head.appendChild(styleEl);
 
   const cls = document.body.classList;
-  cls.toggle('busync-print-hide-header', !opts.showHeader);
   cls.toggle('busync-print-hide-legend', !opts.showLegend);
-  cls.toggle('busync-print-hide-summary', !opts.showSummary);
 
   const prevTitle = document.title;
   document.title = title;
@@ -64,11 +56,7 @@ function applyAndPrint(opts: PrintOptions, title: string) {
     window.print();
     setTimeout(() => {
       document.title = prevTitle;
-      cls.remove(
-        'busync-print-hide-header',
-        'busync-print-hide-legend',
-        'busync-print-hide-summary',
-      );
+      cls.remove('busync-print-hide-legend');
     }, 200);
   }, 50);
 }
@@ -165,24 +153,12 @@ export default function PrintOptionsModal({ open, onClose, title = 'busync-sched
           </Field>
 
           {/* 표시 항목 */}
-          <Field label="포함 항목">
-            <div className="space-y-2">
-              <Toggle
-                checked={opts.showHeader}
-                onChange={(v) => update('showHeader', v)}
-                label="상단 헤더 (회사명, 월)"
-              />
-              <Toggle
-                checked={opts.showLegend}
-                onChange={(v) => update('showLegend', v)}
-                label="범례 (근무/휴무/대타 색상 안내)"
-              />
-              <Toggle
-                checked={opts.showSummary}
-                onChange={(v) => update('showSummary', v)}
-                label="하단 요약 통계"
-              />
-            </div>
+          <Field label="포함 항목" help="배차표(와 선택 시 범례)만 인쇄됩니다. 사이드바·요약·버튼은 인쇄되지 않습니다.">
+            <Toggle
+              checked={opts.showLegend}
+              onChange={(v) => update('showLegend', v)}
+              label="범례 (근무/휴무/대타 색상 안내) 포함"
+            />
           </Field>
         </div>
 

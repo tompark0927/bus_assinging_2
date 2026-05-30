@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { authApi } from '../services/api';
 import toast from 'react-hot-toast';
@@ -14,6 +14,8 @@ export default function LoginPage() {
   const [companyCode, setCompanyCode] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
 
   // 회원가입 페이지와 동일한 입력 필드 스타일
   const inputCls =
@@ -21,6 +23,7 @@ export default function LoginPage() {
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
     setLoading(true);
     try {
       const res = await authApi.login(companyCode, email, password);
@@ -29,10 +32,12 @@ export default function LoginPage() {
       toast.success(`안녕하세요, ${(user as { name: string }).name}님!`);
       navigate('/dashboard');
     } catch (err: unknown) {
-      toast.error(
+      const msg =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-          '로그인에 실패했습니다.',
-      );
+        '로그인에 실패했습니다. 잠시 후 다시 시도해주세요.';
+      // 사라지는 toast 와 별개로, 폼 안에 사라지지 않는 인라인 메시지도 표시
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -56,6 +61,15 @@ export default function LoginPage() {
         {/* Card */}
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-2xl p-8 shadow-xl shadow-black/5 dark:shadow-black/30">
           <form onSubmit={handleEmailLogin} className="space-y-5">
+            {error && (
+              <div
+                role="alert"
+                className="flex items-start gap-2.5 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-xl px-4 py-3"
+              >
+                <AlertCircle size={18} className="text-red-500 dark:text-red-400 mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-red-700 dark:text-red-300 leading-snug">{error}</p>
+              </div>
+            )}
             <div>
               <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">회사 코드</label>
               <input
@@ -80,14 +94,25 @@ export default function LoginPage() {
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">비밀번호</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className={inputCls}
-                placeholder="••••••••"
-                required
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={`${inputCls} pr-12`}
+                  placeholder="••••••••"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute inset-y-0 right-0 flex items-center px-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                  aria-label={showPassword ? '비밀번호 숨기기' : '비밀번호 표시'}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
               <CapsLockHint />
             </div>
             <button
@@ -97,6 +122,17 @@ export default function LoginPage() {
             >
               {loading ? '로그인 중...' : '로그인'}
             </button>
+
+            {/* 비밀번호 / 회사 코드 도움말 링크 */}
+            <div className="flex items-center justify-center gap-3 text-sm pt-1">
+              <Link to="/forgot-password" className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                비밀번호 찾기
+              </Link>
+              <span className="text-gray-300 dark:text-gray-600">|</span>
+              <Link to="/find-company-code" className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                회사 코드 찾기
+              </Link>
+            </div>
           </form>
         </div>
 

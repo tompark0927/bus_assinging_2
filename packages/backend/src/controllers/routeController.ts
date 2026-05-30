@@ -100,11 +100,27 @@ export const deleteRoute = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ success: false, message: '노선을 찾을 수 없습니다.' });
     }
 
-    await prisma.route.update({
-      where: { id: routeId },
-      data: { isActive: false },
+    // 노선을 완전히 삭제(hard delete). 목록에서 "운휴"로 남지 않고 아예 사라진다.
+    // 노선을 참조하는 종속 데이터를 가장 깊은 것부터(FK 제약 회피) 정리한 뒤 노선을 지운다.
+    //   ScheduleSlot ← EmergencyDrop / RouteAssignment / DriverPreference 는 삭제,
+    //   Bus·Post 의 routeId 는 null 로 해제(버스·게시글 자체는 보존).
+    await prisma.$transaction(async (tx) => {
+      const slots = await tx.scheduleSlot.findMany({
+        where: { routeId },
+        select: { id: true },
+      });
+      const slotIds = slots.map((s) => s.id);
+      if (slotIds.length > 0) {
+        await tx.emergencyDrop.deleteMany({ where: { slotId: { in: slotIds } } });
+        await tx.scheduleSlot.deleteMany({ where: { routeId } });
+      }
+      await tx.routeAssignment.deleteMany({ where: { routeId } });
+      await tx.driverPreference.deleteMany({ where: { routeId } });
+      await tx.bus.updateMany({ where: { routeId }, data: { routeId: null } });
+      await tx.post.updateMany({ where: { routeId }, data: { routeId: null } });
+      await tx.route.delete({ where: { id: routeId } });
     });
-    return res.json({ success: true, message: '노선이 비활성화되었습니다.' });
+    return res.json({ success: true, message: '노선이 삭제되었습니다.' });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });

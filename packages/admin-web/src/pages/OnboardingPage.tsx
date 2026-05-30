@@ -51,6 +51,10 @@ export default function OnboardingPage() {
 
   // ── 엑셀 업로드 처리 ──────────────────────
   const handleFile = useCallback(async (file: File) => {
+    // 파일이 실제로 들어오면 업로드 경고 모달을 확실히 닫는다.
+    // (버튼 onClick 에서 setShowUploadWarning(false) 와 input.click() 이 같은 틱에 실행되면
+    //  네이티브 파일 다이얼로그 때문에 상태 업데이트가 누락돼 모달이 남는 문제 회피)
+    setShowUploadWarning(false);
     if (!file.name.match(/\.(xlsx|xls)$/i)) {
       toast.error('엑셀 파일(.xlsx, .xls)만 업로드 가능합니다.');
       return;
@@ -337,7 +341,14 @@ export default function OnboardingPage() {
                   <PreviewCard
                     icon={<Map size={20} className="text-blue-600" />} color="blue"
                     title="노선" count={imported.routes.length} unit="개"
-                    items={imported.routes.map(r => r.routeNumber ? `${r.routeNumber}번 ${r.name}` : r.name)}
+                    items={imported.routes.map(r => {
+                      const num = r.routeNumber ? `${r.routeNumber}번` : '';
+                      const name = (r.name || '').trim();
+                      if (!num) return name;
+                      // 노선명이 비었거나 번호와 사실상 같으면 번호만 표시 ("16번 16번" 중복 방지)
+                      if (!name || name === num || name === r.routeNumber) return num;
+                      return `${num} ${name}`;
+                    })}
                     isEditing={editSection === 'routes'}
                     onEdit={() => setEditSection(editSection === 'routes' ? null : 'routes')}
                   >
@@ -633,7 +644,12 @@ export default function OnboardingPage() {
                 취소
               </button>
               <button
-                onClick={() => { setShowUploadWarning(false); fileInputRef.current?.click(); }}
+                onClick={() => {
+                  // 모달을 먼저 닫고(상태 커밋), 다음 틱에 파일 다이얼로그를 연다.
+                  // 같은 틱에서 input.click() 을 호출하면 상태 업데이트가 누락돼 모달이 남는다.
+                  setShowUploadWarning(false);
+                  setTimeout(() => fileInputRef.current?.click(), 0);
+                }}
                 className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold transition-colors"
               >
                 양식 확인했어요 · 파일 선택

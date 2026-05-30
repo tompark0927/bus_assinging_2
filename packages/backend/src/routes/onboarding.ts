@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, json } from 'express';
 import multer from 'multer';
 import { authenticate } from '../middleware/auth';
 import { analyzeExcel, confirmImport, downloadTemplate } from '../controllers/onboardingController';
@@ -48,6 +48,9 @@ router.get('/template', authenticate, downloadTemplate);
 router.post('/analyze-excel', authenticate, upload.single('file'), analyzeExcel);
 
 // 분석 결과 확인 후 DB 저장
-router.post('/confirm-import', authenticate, ...onboardingValidation.confirmImport, confirmImport);
+// 이 라우터는 app.ts 에서 express.json 없이 마운트됨(analyze-excel 은 multipart/multer 사용).
+// confirm-import 는 JSON 바디를 받으므로 이 라우트에만 JSON 파서를 명시적으로 붙인다.
+// (누락 시 req.body 가 비어 노선/버스/기사 0개로 저장되던 버그 수정)
+router.post('/confirm-import', authenticate, json({ limit: '1mb' }), ...onboardingValidation.confirmImport, confirmImport);
 
 export default router;

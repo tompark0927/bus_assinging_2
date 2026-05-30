@@ -3,6 +3,7 @@ import {
   login, kakaoLogin, sendPhoneOtp, verifyPhoneOtp,
   getMe, updatePushToken, changePassword,
   refreshAccessToken, logout, forceLogout,
+  forgotPasswordSendOtp, forgotPasswordReset, findCompanyCode,
 } from '../controllers/authController';
 import { authenticate, requireAdmin } from '../middleware/auth';
 import { loginLimiter, otpSendLimiter } from '../middleware/rateLimits';
@@ -65,6 +66,11 @@ router.post('/kakao', loginLimiter, kakaoLogin);
 // OTP (1분 1회 제한)
 router.post('/phone/send-otp', otpSendLimiter, ...authValidation.sendPhoneOtp, sendPhoneOtp);
 router.post('/phone/verify', loginLimiter, ...authValidation.verifyPhoneOtp, verifyPhoneOtp);
+
+// 비밀번호 재설정 (휴대폰 OTP 기반) / 회사 코드 찾기
+router.post('/forgot-password/send-otp', otpSendLimiter, ...authValidation.forgotPasswordSendOtp, forgotPasswordSendOtp);
+router.post('/forgot-password/reset', loginLimiter, ...authValidation.forgotPasswordReset, forgotPasswordReset);
+router.post('/find-company-code', otpSendLimiter, ...authValidation.findCompanyCode, findCompanyCode);
 
 /**
  * @swagger

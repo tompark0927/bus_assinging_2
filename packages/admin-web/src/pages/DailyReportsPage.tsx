@@ -21,6 +21,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import PageHeader from '../components/PageHeader';
 
 // ─────────────────────────────────────────
 // Types
@@ -218,30 +219,25 @@ export default function DailyReportsPage() {
   return (
     <div className="max-w-full">
       {/* 헤더 */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <FileText size={28} className="text-purple-600" />
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">일일 운영 보고서</h1>
-            <p className="text-base text-gray-500 dark:text-gray-400 mt-1">
-              매일 09:00 AI 에이전트가 작성하는 회사 운영 보고서
-            </p>
-          </div>
-        </div>
-
-        <button
-          onClick={() => regenerateMutation.mutate()}
-          disabled={regenerateMutation.isPending}
-          className="flex items-center gap-2 px-4 py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 disabled:opacity-50 min-h-[48px]"
-        >
-          {regenerateMutation.isPending ? (
-            <Loader2 className="animate-spin" size={18} />
-          ) : (
-            <RefreshCw size={18} />
-          )}
-          오늘 재생성
-        </button>
-      </div>
+      <PageHeader
+        icon={FileText}
+        title="일일 운영 보고서"
+        description="매일 09:00 AI 에이전트가 작성하는 회사 운영 보고서"
+        actions={
+          <button
+            onClick={() => regenerateMutation.mutate()}
+            disabled={regenerateMutation.isPending}
+            className="flex items-center gap-2 px-4 py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 disabled:opacity-50 min-h-[48px]"
+          >
+            {regenerateMutation.isPending ? (
+              <Loader2 className="animate-spin" size={18} />
+            ) : (
+              <RefreshCw size={18} />
+            )}
+            오늘 재생성
+          </button>
+        }
+      />
 
       {/* 필터 */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4 shadow-sm">

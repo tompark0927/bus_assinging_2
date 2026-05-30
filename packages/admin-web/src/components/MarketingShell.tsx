@@ -123,7 +123,6 @@ export function MarketingFooter() {
           <FooterColumn title="제품">
             <FooterLink onClick={() => scroll('features')}>기능 소개</FooterLink>
             <FooterLink onClick={() => navigate('/pricing')}>요금제</FooterLink>
-            <FooterLink onClick={() => scroll('testimonials')}>고객 후기</FooterLink>
           </FooterColumn>
 
           {/* Support */}

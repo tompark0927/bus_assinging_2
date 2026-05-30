@@ -14,8 +14,6 @@ import {
   Clock,
   Zap,
   Smartphone,
-  Star,
-  Quote,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { contactApi } from '../services/api';
@@ -77,27 +75,6 @@ const STATS = [
   { value: '90%', label: '배차 시간 감소', icon: Clock },
   { value: '5분', label: '결원 대응 시간', icon: Zap },
   { value: '실시간', label: '기사 알림 전달', icon: Bell },
-];
-
-const TESTIMONIALS = [
-  {
-    quote: '매달 3일 걸리던 배차표 작성이 30분이면 끝납니다. 처음엔 반신반의했는데, 이제 없으면 안 되는 시스템이 됐어요.',
-    name: '김상현 대표',
-    company: '한성운수 (인천)',
-    stars: 5,
-  },
-  {
-    quote: '기사님들이 앱으로 스케줄 확인하니까 전화 문의가 확 줄었어요. 결원 알림 덕분에 운행 펑크도 거의 사라졌습니다.',
-    name: '박정미 배차계장',
-    company: '대한교통 (수원)',
-    stars: 5,
-  },
-  {
-    quote: '눈치 안 보고 휴가 신청할 수 있어서 좋습니다. 내 스케줄을 직접 확인할 수 있다는 것만으로도 큰 변화예요.',
-    name: '이동준 기사',
-    company: '삼화버스 (서울)',
-    stars: 5,
-  },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -284,45 +261,6 @@ export default function LandingPage() {
                   <s.icon size={36} className="mx-auto mb-4 text-blue-200" />
                   <div className="text-5xl lg:text-6xl font-extrabold mb-2">{s.value}</div>
                   <div className="text-blue-100 text-lg font-medium">{s.label}</div>
-                </div>
-              </Section>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ============================================================ */}
-      {/*  Testimonials                                                 */}
-      {/* ============================================================ */}
-      <section id="testimonials" className="py-24 bg-gray-50 dark:bg-gray-900">
-        <div className="max-w-7xl mx-auto px-6">
-          <Section>
-            <div className="text-center max-w-2xl mx-auto mb-16">
-              <h2 className="text-3xl lg:text-4xl font-bold mb-4">고객 후기</h2>
-              <p className="text-gray-500 dark:text-gray-400 text-lg">Busync를 도입한 현장의 생생한 이야기</p>
-            </div>
-          </Section>
-
-          <div className="grid md:grid-cols-3 gap-6">
-            {TESTIMONIALS.map((t, i) => (
-              <Section key={t.name} delay={i * 100}>
-                <div className="bg-white dark:bg-gray-800/60 border border-gray-200 dark:border-white/10 rounded-2xl p-7 h-full flex flex-col">
-                  <Quote size={24} className="text-blue-200 dark:text-blue-800 mb-4 flex-shrink-0" />
-                  <p className="text-gray-700 dark:text-gray-300 leading-relaxed mb-6 flex-1">"{t.quote}"</p>
-                  <div className="flex items-center gap-3 pt-4 border-t border-gray-100 dark:border-white/5">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center text-blue-600 dark:text-blue-300 font-bold text-sm">
-                      {t.name[0]}
-                    </div>
-                    <div>
-                      <div className="font-semibold text-sm">{t.name}</div>
-                      <div className="text-gray-400 text-xs">{t.company}</div>
-                    </div>
-                    <div className="ml-auto flex gap-0.5">
-                      {Array.from({ length: t.stars }).map((_, si) => (
-                        <Star key={si} size={14} className="fill-yellow-400 text-yellow-400" />
-                      ))}
-                    </div>
-                  </div>
                 </div>
               </Section>
             ))}

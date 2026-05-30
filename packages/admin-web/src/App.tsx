@@ -10,6 +10,8 @@ import Layout from './components/Layout';
 // ─────────────────────────────────────────
 const LandingPage = lazy(() => import('./pages/LandingPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
+const FindCompanyCodePage = lazy(() => import('./pages/FindCompanyCodePage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 const PricingPage = lazy(() => import('./pages/PricingPage'));
@@ -41,6 +43,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/find-company-code" element={<FindCompanyCodePage />} />
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/pricing" element={<PricingPage />} />
             <Route path="/support" element={<SupportPage />} />

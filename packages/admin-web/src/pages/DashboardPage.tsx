@@ -12,7 +12,9 @@ import {
   Loader2,
   ShieldAlert,
   Clock,
+  LayoutDashboard,
 } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import {
   schedulesApi,
   dayOffApi,
@@ -216,10 +218,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-[32px] font-bold text-gray-900 dark:text-gray-100">대시보드</h1>
-        <p className="text-[15px] text-gray-500 dark:text-gray-400 mt-1">{todayStr}</p>
-      </div>
+      <PageHeader icon={LayoutDashboard} title="대시보드" description={todayStr} />
 
       {/* 1. 즉시 처리 필요 — 빨간 영역 */}
       {(todayOpenEmergencies.length > 0 || expiringDrivers.length > 0) && (

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { companyPolicyApi } from '../services/api';
 import toast from 'react-hot-toast';
+import PageHeader from '../components/PageHeader';
 
 /* ────────────────────────────────────────────
    Types — backend `agents/_solvers/types.ts` 와 형식 일치
@@ -169,41 +170,38 @@ export default function DispatchSettingsPage() {
   return (
     <div className="space-y-8 pb-20">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-[32px] font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <Settings className="w-7 h-7 text-blue-500" />
-            배차 설정
-          </h1>
-          <p className="text-[16px] text-gray-500 dark:text-gray-400 mt-1">
-            회사 운영 정책. AI 배차표 생성 시 이 설정을 따릅니다.
-          </p>
-          {data?.isDefault && (
-            <div className="mt-3 inline-flex items-center gap-2 text-[14px] text-amber-700 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-300 px-3 py-1.5 rounded-full">
-              <Info className="w-4 h-4" />
-              아직 정책이 저장되지 않아 기본값을 표시 중입니다. 저장하면 사용자 정의 정책이 됩니다.
-            </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {dirty && (
+      <PageHeader
+        icon={Settings}
+        title="배차 설정"
+        description="회사 운영 정책. AI 배차표 생성 시 이 설정을 따릅니다."
+        actions={
+          <>
+            {dirty && (
+              <button
+                onClick={handleReset}
+                className="px-4 py-2.5 rounded-xl border border-gray-300 dark:border-white/10 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 inline-flex items-center gap-2 text-[15px]"
+              >
+                <RotateCcw className="w-4 h-4" /> 되돌리기
+              </button>
+            )}
             <button
-              onClick={handleReset}
-              className="px-4 py-2.5 rounded-xl border border-gray-300 dark:border-white/10 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 inline-flex items-center gap-2 text-[15px]"
+              onClick={handleSave}
+              disabled={!dirty || updateMutation.isPending}
+              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-2 text-[15px] font-medium"
             >
-              <RotateCcw className="w-4 h-4" /> 되돌리기
+              {updateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              저장
             </button>
-          )}
-          <button
-            onClick={handleSave}
-            disabled={!dirty || updateMutation.isPending}
-            className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-2 text-[15px] font-medium"
-          >
-            {updateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            저장
-          </button>
-        </div>
-      </div>
+          </>
+        }
+      >
+        {data?.isDefault && (
+          <div className="mt-3 inline-flex items-center gap-2 text-[14px] text-amber-700 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-300 px-3 py-1.5 rounded-full">
+            <Info className="w-4 h-4" />
+            아직 정책이 저장되지 않아 기본값을 표시 중입니다. 저장하면 사용자 정의 정책이 됩니다.
+          </div>
+        )}
+      </PageHeader>
 
       {/* Section: Preset */}
       <Section icon={<Sparkles className="w-5 h-5 text-purple-500" />} title="빠른 프리셋" desc="회사 유형에 맞는 표준 설정을 한 번에 적용합니다.">

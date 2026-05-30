@@ -13,6 +13,7 @@ import {
 import toast from 'react-hot-toast';
 import { usersApi } from '../services/api';
 import { useAuthStore } from '../store/authStore';
+import PageHeader from '../components/PageHeader';
 
 /* ────────────────────────────────────────────
    Types
@@ -101,17 +102,11 @@ export default function AccountsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-[32px] font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <UserCog className="w-7 h-7 text-blue-500" />
-            계정 관리
-          </h1>
-          <p className="text-[15px] text-gray-500 dark:text-gray-400 mt-1">
-            관리자·배차담당 등 직원 계정을 관리합니다. 기사 계정은 <a href="/dashboard/data" className="text-blue-600 dark:text-blue-400 hover:underline">기초 데이터</a>에서 관리하세요.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        icon={UserCog}
+        title="계정 관리"
+        description={<>관리자·배차담당 등 직원 계정을 관리합니다. 기사 계정은 <a href="/dashboard/data" className="text-blue-600 dark:text-blue-400 hover:underline">기초 데이터</a>에서 관리하세요.</>}
+      />
 
       {/* Toolbar */}
       <div className="flex items-center gap-3">

@@ -148,17 +148,26 @@
   animation: pulseSlow 2.4s ease-in-out infinite;
 }
 
-/* ── 배차표 인쇄 최적화 ── */
+/* ── 배차표 인쇄: data-print-area(배차표 + 범례)만 인쇄된다 ──
+   기사 휴게실 게시용. 사이드바·요약·AI패널·버튼·모달 등 나머지는 모두 숨긴다.
+   display:none 기반이라 여러 페이지에 걸친 배차표도 안전하게 인쇄된다. */
 @media print {
-  /* 사이드바, 헤더, 버튼 등 숨기기 */
-  nav, aside,
-  [data-print-hide],
-  .btn-primary, .btn-secondary, .btn-danger,
-  button:not([data-print-show]) {
+  /* 1) 레이아웃 크롬 숨김 (사이드바 등) */
+  aside,
+  [data-print-hide] {
     display: none !important;
   }
 
-  /* 전체 레이아웃: 여백 없이 */
+  /* 2) 페이지 컨테이너에서 인쇄 영역이 아닌 형제(상단 헤더·요약·액션바·경고·모달 등) 숨김 */
+  [data-print-root] > *:not([data-print-area]) {
+    display: none !important;
+  }
+
+  /* 3) 화면용 높이/스크롤 제약 해제 → 전체 내용이 페이지에 흐르도록 */
+  html, body { height: auto !important; overflow: visible !important; }
+  main { overflow: visible !important; height: auto !important; }
+  main > div { padding: 0 !important; }
+
   body {
     background: white !important;
     color: black !important;
@@ -167,44 +176,50 @@
     print-color-adjust: exact !important;
   }
 
-  .card {
+  /* 4) 카드 테두리/그림자 제거 + 가로 스크롤 펼치기 */
+  [data-print-area] .card {
     border: none !important;
     box-shadow: none !important;
     padding: 0 !important;
   }
+  [data-print-area] .overflow-x-auto { overflow: visible !important; }
 
-  /* 배차표 그리드: 페이지에 맞추기 */
-  table {
+  /* 5) 배차표: 용지 폭에 맞추기 (화면용 min-width 해제) */
+  [data-print-area] table {
     font-size: 8pt !important;
     border-collapse: collapse !important;
     width: 100% !important;
+    min-width: 0 !important;
   }
-
-  table th, table td {
+  [data-print-area] table th,
+  [data-print-area] table td {
     border: 1px solid #000 !important;
     padding: 2px 4px !important;
     background: white !important;
     color: black !important;
   }
-
-  table th {
+  [data-print-area] table th {
     background: #e5e7eb !important;
     font-weight: bold !important;
   }
 
-  /* 색상 유지 (슬롯 상태) */
-  .bg-blue-100, .bg-blue-50 { background: #dbeafe !important; }
-  .bg-red-100, .bg-red-50 { background: #fee2e2 !important; }
-  .bg-green-100, .bg-green-50 { background: #d1fae5 !important; }
-  .bg-gray-100, .bg-gray-50 { background: #f3f4f6 !important; }
-  .bg-orange-100, .bg-orange-50 { background: #ffedd5 !important; }
-
-  /* 가로 방향 */
-  @page {
-    size: landscape;
-    margin: 10mm;
+  /* 기사 이름 셀이 <button> 이라 인쇄에서 가려지던 문제 방지 — 일반 텍스트처럼 */
+  [data-print-area] button {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    color: inherit !important;
+    font: inherit !important;
   }
 
-  /* 페이지 넘김 방지 */
+  /* 슬롯 상태 색상 유지 */
+  .bg-blue-100, .bg-blue-50 { background: #dbeafe !important; }
+  .bg-red-100, .bg-red-50 { background: #fee2e2 !important; }
+  .bg-green-100, .bg-green-50, .bg-emerald-100 { background: #d1fae5 !important; }
+  .bg-gray-100, .bg-gray-50, .bg-slate-100 { background: #f3f4f6 !important; }
+  .bg-orange-100, .bg-orange-50 { background: #ffedd5 !important; }
+
+  @page { size: landscape; margin: 10mm; }
+
   tr { page-break-inside: avoid; }
 }

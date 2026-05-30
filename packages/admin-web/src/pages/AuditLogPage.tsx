@@ -16,6 +16,7 @@ import {
   Filter,
   X,
 } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 
 // ─────────────────────────────────────────
 // Types
@@ -252,22 +253,20 @@ function AuditLogContent() {
   return (
     <div className="max-w-full">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <ScrollText size={28} className="text-gray-700 dark:text-gray-200" />
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">감사 로그</h1>
-            <p className="text-base text-gray-500 dark:text-gray-400 mt-1">시스템 변경 이력을 조회합니다</p>
-          </div>
-        </div>
-        <button
-          onClick={() => setShowFilters((v) => !v)}
-          className="flex items-center gap-2 px-4 py-3 text-base font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors min-h-[48px]"
-        >
-          <Filter size={18} />
-          필터 {showFilters ? '숨기기' : '보기'}
-        </button>
-      </div>
+      <PageHeader
+        icon={ScrollText}
+        title="감사 로그"
+        description="시스템 변경 이력을 조회합니다"
+        actions={
+          <button
+            onClick={() => setShowFilters((v) => !v)}
+            className="flex items-center gap-2 px-4 py-3 text-base font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors min-h-[48px]"
+          >
+            <Filter size={18} />
+            필터 {showFilters ? '숨기기' : '보기'}
+          </button>
+        }
+      />
 
       {/* Filters */}
       {showFilters && (

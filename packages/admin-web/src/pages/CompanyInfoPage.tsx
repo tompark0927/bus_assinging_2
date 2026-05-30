@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { companyInfoApi } from '../services/api';
+import PageHeader from '../components/PageHeader';
 
 /* ────────────────────────────────────────────
    Types
@@ -79,15 +80,7 @@ export default function CompanyInfoPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-[32px] font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-          <Building2 className="w-7 h-7 text-blue-500" />
-          회사 정보
-        </h1>
-        <p className="text-[15px] text-gray-500 dark:text-gray-400 mt-1">
-          회사 기본 정보와 등록 현황입니다.
-        </p>
-      </div>
+      <PageHeader icon={Building2} title="회사 정보" description="회사 기본 정보와 등록 현황입니다." />
 
       {/* 기본 정보 카드 */}
       <section className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6">
