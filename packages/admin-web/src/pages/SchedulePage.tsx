@@ -966,9 +966,9 @@ export default function SchedulePage() {
             >
               {/* 테이블 헤더 */}
               <thead>
-                <tr className="bg-gray-800 dark:bg-gray-900 text-white">
+                <tr className="bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-100">
                   {/* 기사 이름 열 (고정) */}
-                  <th className="sticky left-0 z-20 bg-gray-800 dark:bg-gray-900 text-left px-4 py-3 text-base font-semibold min-w-[180px] border-r border-gray-700">
+                  <th className="sticky left-0 z-20 bg-gray-200 dark:bg-gray-700 text-left px-4 py-3 text-base font-semibold min-w-[180px] border-r border-gray-300 dark:border-gray-600">
                     기사명 / 사번
                   </th>
                   {/* 날짜 열 */}
@@ -980,19 +980,19 @@ export default function SchedulePage() {
                     return (
                       <th
                         key={i}
-                        className={`text-center px-0.5 py-3 font-medium min-w-[48px] border-r border-gray-700/50 ${
-                          isSun ? 'text-red-300' : isSat ? 'text-sky-300' : 'text-gray-200'
+                        className={`text-center px-0.5 py-3 font-medium min-w-[48px] border-r border-gray-300/70 dark:border-gray-600/50 ${
+                          isSun ? 'text-red-600 dark:text-red-300' : isSat ? 'text-sky-600 dark:text-sky-300' : 'text-gray-700 dark:text-gray-200'
                         }`}
                       >
                         <div className="text-base font-bold">{i + 1}</div>
-                        <div className={`text-sm font-normal ${isSun ? 'text-red-400' : isSat ? 'text-sky-400' : 'text-gray-400'}`}>
+                        <div className={`text-sm font-normal ${isSun ? 'text-red-500 dark:text-red-400' : isSat ? 'text-sky-500 dark:text-sky-400' : 'text-gray-500 dark:text-gray-400'}`}>
                           {DAYS_KR[dow]}
                         </div>
                       </th>
                     );
                   })}
                   {/* 합계 열 */}
-                  <th className="bg-gray-700 dark:bg-gray-800 text-center px-3 py-3 text-base font-semibold min-w-[80px]">
+                  <th className="bg-gray-200 dark:bg-gray-700 text-center px-3 py-3 text-base font-semibold min-w-[80px]">
                     합계
                   </th>
                 </tr>
