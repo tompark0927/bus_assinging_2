@@ -76,6 +76,7 @@ export async function sendBulkPushNotifications(
 }
 
 import { sendAlimtalkStub } from './alimtalkStub';
+import { EMERGENCY_DROP_URGENT_V1 } from './alimtalkTemplates';
 
 /**
  * 대타 요청 알림 발송.
@@ -152,11 +153,10 @@ export async function notifyAvailableDriversForEmergency(
     const phones = drivers.map((d) => d.phone).filter((p): p is string => !!p);
     await sendAlimtalkStub({
       phones,
-      templateCode: 'EMERGENCY_DROP_URGENT_V1',
+      templateCode: EMERGENCY_DROP_URGENT_V1.code,
       variables: {
         date: dateFormatted,
         routeNumber: route.routeNumber,
-        body: pushBody,
       },
       meta: { emergencyDropId, recipients: drivers.length },
     });
