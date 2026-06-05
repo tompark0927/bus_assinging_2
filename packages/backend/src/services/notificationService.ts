@@ -1,10 +1,128 @@
 import Expo, { ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk';
 import { prisma } from '../utils/prisma';
-import { NotificationType } from '@prisma/client';
+import { NotificationType, Role } from '@prisma/client';
 import logger from '../utils/logger';
-import { emitToUser } from './socketService';
+import { emitToUser, emitToCompany } from './socketService';
 
 const expo = new Expo();
+
+/* ────────────────────────────────────────────
+   관리자(웹) 대상 알림 — 운영 이벤트를 관리자 알림함으로 전달
+   ──────────────────────────────────────────── */
+
+const SHIFT_LABEL_KO: Record<string, string> = {
+  MORNING: '오전',
+  AFTERNOON: '오후',
+  FULL_DAY: '종일',
+};
+
+/**
+ * 회사의 활성 관리자 전원에게 개인 알림(저장 + 벨/푸시)을 보낸다. 보낸 인원수 반환.
+ * 역할은 '관리자 계정'으로 통일 — 기사(DRIVER) 외 모든 활성 계정이 대상.
+ */
+async function notifyAllAdmins(
+  companyId: number,
+  title: string,
+  body: string,
+  type: NotificationType,
+  data: Record<string, unknown>,
+): Promise<number> {
+  const admins = await prisma.user.findMany({
+    where: { companyId, isActive: true, role: { not: Role.DRIVER } },
+    select: { id: true },
+  });
+  await Promise.all(
+    admins.map((a) =>
+      sendPushNotification(a.id, title, body, type, data).catch((e) =>
+        logger.error(`[AdminNotify] 개인 알림 실패 user=${a.id}:`, e),
+      ),
+    ),
+  );
+  return admins.length;
+}
+
+/**
+ * 긴급(D-2) 대타 발생 시 관리자에게 "일반보다 강한" 알림.
+ *  1) 관리자 개인 알림(벨/푸시) 저장  2) 회사 룸에 'emergency:urgent' 라우드 이벤트(admin-web 큰 경보 토스트).
+ *  (모바일 앱은 'emergency:urgent' 를 구독하지 않으므로 기사에게는 영향 없음)
+ */
+export async function notifyAdminsUrgentEmergency(params: {
+  companyId: number;
+  dropId: number;
+  slotDate: Date;
+  routeNumber: string;
+  shift: string;
+}): Promise<void> {
+  const { companyId, dropId, slotDate, routeNumber, shift } = params;
+  const dateLabel = `${slotDate.getUTCMonth() + 1}월 ${slotDate.getUTCDate()}일`;
+  const title = '🚨 긴급 대타 — 관리자 조치 필요';
+  const body = `${dateLabel} ${routeNumber}번 노선 운행까지 2일밖에 안 남았는데 대타가 비어 있습니다. 기사에게 직접 연락하는 등 즉시 조치가 필요합니다.`;
+
+  try {
+    const count = await notifyAllAdmins(companyId, title, body, 'EMERGENCY_SLOT', {
+      kind: 'ADMIN_URGENT',
+      dropId,
+      routeNumber,
+      shift,
+      slotDate: slotDate.toISOString(),
+    });
+
+    emitToCompany(companyId, 'emergency:urgent', { dropId, slotDate: dateLabel, routeNumber, shift, message: body });
+    logger.info(`[AdminNotify] 긴급(D-2) 관리자 알림 — drop=${dropId}, ${count}명`);
+  } catch (err) {
+    logger.error('[AdminNotify] 긴급 관리자 알림 실패:', err);
+  }
+}
+
+/** 일반(비긴급) 대타 발생 시 관리자 알림함에 "🚨 대타 발생" 기록. */
+export async function notifyAdminsNewDrop(params: {
+  companyId: number;
+  dropId: number;
+  slotDate: Date;
+  routeNumber: string;
+  shift: string;
+  driverName: string;
+}): Promise<void> {
+  const { companyId, dropId, slotDate, routeNumber, shift, driverName } = params;
+  const dateLabel = `${slotDate.getUTCMonth() + 1}월 ${slotDate.getUTCDate()}일`;
+  const shiftLabel = SHIFT_LABEL_KO[shift] ?? shift;
+  try {
+    const count = await notifyAllAdmins(
+      companyId,
+      '🚨 대타 발생',
+      `${routeNumber}번 노선 / ${driverName} 기사 / ${dateLabel} ${shiftLabel} 충원 필요`,
+      'EMERGENCY_SLOT',
+      { kind: 'ADMIN_DROP', dropId, routeNumber, shift },
+    );
+    logger.info(`[AdminNotify] 대타 발생 관리자 알림 — drop=${dropId}, ${count}명`);
+  } catch (err) {
+    logger.error('[AdminNotify] 대타 발생 관리자 알림 실패:', err);
+  }
+}
+
+/** 기사가 휴무를 신청하면 관리자 알림함에 "📋 새 휴무 요청" 기록. */
+export async function notifyAdminsNewDayoffRequest(params: {
+  companyId: number;
+  requestId: number;
+  driverName: string;
+  date: Date;
+}): Promise<void> {
+  const { companyId, requestId, driverName, date } = params;
+  // 휴무 날짜는 @db.Date(UTC 자정) — 서버 TZ 무관하게 그 날짜 그대로 표시하려면 getUTC* 사용
+  const dateLabel = `${date.getUTCMonth() + 1}월 ${date.getUTCDate()}일`;
+  try {
+    const count = await notifyAllAdmins(
+      companyId,
+      '📋 새 휴무 요청',
+      `${driverName} 기사님이 ${dateLabel} 휴무를 요청했습니다.`,
+      'APPROVAL_REQUESTED',
+      { kind: 'DAY_OFF', requestId },
+    );
+    logger.info(`[AdminNotify] 새 휴무 요청 관리자 알림 — req=${requestId}, ${count}명`);
+  } catch (err) {
+    logger.error('[AdminNotify] 새 휴무 요청 관리자 알림 실패:', err);
+  }
+}
 
 export async function sendPushNotification(
   userId: number,
