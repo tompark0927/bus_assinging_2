@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/authStore';
 import { companyInfoApi } from '../services/api';
 import {
@@ -90,6 +90,7 @@ function filterGroup(group: NavGroup, userRole: string): NavGroup | null {
 export default function Layout() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const userRole = user?.role || 'DRIVER';
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -107,6 +108,8 @@ export default function Layout() {
     disconnectSocket();
     // Best-effort: 서버 refresh token 폐기 + 로컬 정리. 네트워크 오류여도 로그인 페이지로 이동.
     await logout();
+    // 다른 회사 계정으로 재로그인 시 이전 회사 데이터가 잠깐 보이는 것 방지 — 쿼리 캐시 전체 비움
+    queryClient.clear();
     navigate('/login');
   };
 
