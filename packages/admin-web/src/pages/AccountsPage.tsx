@@ -67,9 +67,12 @@ export default function AccountsPage() {
   const { data: list = [], isLoading } = useQuery<Account[]>({
     queryKey: ['users', 'staff'],
     queryFn: () =>
-      usersApi.list().then((r) => {
+      // staff=1: 서버에서 기사(DRIVER) 제외하고 직원(관리자) 계정만 조회.
+      // (역할 필터 없이 받으면 기사 다수에 페이지네이션이 걸려 직원이 누락됨)
+      usersApi.list({ staff: '1', limit: '100' }).then((r) => {
         const all = r.data.data as Account[];
-        return all.filter((u) => STAFF_ROLES.includes(u.role));
+        // 삭제(soft-delete=비활성) 계정은 목록에서 완전히 제외 — 노선처럼 "아예 사라지게"
+        return all.filter((u) => STAFF_ROLES.includes(u.role) && u.isActive);
       }),
   });
 
@@ -105,7 +108,7 @@ export default function AccountsPage() {
       <PageHeader
         icon={UserCog}
         title="계정 관리"
-        description={<>관리자·배차담당 등 직원 계정을 관리합니다. 기사 계정은 <a href="/dashboard/data" className="text-blue-600 dark:text-blue-400 hover:underline">기초 데이터</a>에서 관리하세요.</>}
+        description={<>관리자 직원 계정을 관리합니다. 기사 계정은 <a href="/dashboard/data" className="text-blue-600 dark:text-blue-400 hover:underline">기초 데이터</a>에서 관리하세요.</>}
       />
 
       {/* Toolbar */}
@@ -218,7 +221,7 @@ function AccountFormModal({ initial, onClose, onSaved }: { initial: Account | nu
       const payload: Record<string, unknown> = {
         name: name.trim(),
         employeeId: employeeId.trim(),
-        email: email.trim() || null,
+        email: email.trim(),
         phone: phone.trim() || null,
         role,
         isActive,
@@ -228,6 +231,15 @@ function AccountFormModal({ initial, onClose, onSaved }: { initial: Account | nu
     onSuccess: () => { toast.success(isEdit ? '수정 완료' : '계정 생성 완료. 초기 비밀번호 = 사번'); onSaved(); },
     onError: (e) => toast.error(extractError(e)),
   });
+
+  // 관리자 계정은 이메일 필수 — 제출 전 검증
+  const handleSave = () => {
+    if (!name.trim()) { toast.error('이름을 입력해주세요.'); return; }
+    if (!employeeId.trim()) { toast.error('사번을 입력해주세요.'); return; }
+    if (!email.trim()) { toast.error('이메일을 입력해주세요.'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { toast.error('유효한 이메일 형식이 아닙니다.'); return; }
+    save.mutate();
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
@@ -250,7 +262,7 @@ function AccountFormModal({ initial, onClose, onSaved }: { initial: Account | nu
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={labelCls}>이메일</label>
+              <label className={labelCls}>이메일<span className="text-red-500 ml-0.5">*</span></label>
               <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" className={inputCls} />
             </div>
             <div>
@@ -274,7 +286,7 @@ function AccountFormModal({ initial, onClose, onSaved }: { initial: Account | nu
               취소
             </button>
             <button
-              onClick={() => save.mutate()}
+              onClick={handleSave}
               disabled={save.isPending}
               className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white inline-flex items-center gap-2 text-[15px] font-medium"
             >

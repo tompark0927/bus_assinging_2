@@ -23,10 +23,12 @@ const userSelect = {
 
 export const getUsers = async (req: AuthRequest, res: Response) => {
   try {
-    const { role, isActive, search, driverType } = req.query;
+    const { role, isActive, search, driverType, staff } = req.query;
 
     const where: Record<string, unknown> = { companyId: req.user!.companyId };
     if (role) where.role = role;
+    // staff=1 → 직원(관리자) 계정만: 기사(DRIVER) 외 모든 역할. (계정 관리 페이지용)
+    else if (staff === '1') where.role = { not: 'DRIVER' };
     if (isActive !== undefined) where.isActive = isActive === 'true';
     if (driverType) where.driverType = driverType;
     if (search) {
@@ -185,9 +187,22 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ success: false, message: '권한이 없습니다.' });
     }
 
-    const { name, phone, licenseNumber, driverType, isActive, role } = req.body;
+    const { name, phone, licenseNumber, driverType, isActive, role, email } = req.body;
 
     const updateData: Record<string, unknown> = { name, phone, licenseNumber };
+
+    // 이메일 변경 — 정규화 없이 입력 그대로 저장(로그인은 입력값 정확 매칭). 전역 unique 라 중복 체크.
+    if (email !== undefined) {
+      const trimmed = typeof email === 'string' ? email.trim() : email;
+      if (trimmed) {
+        // email 은 전역 unique → findUnique 로 전역 중복 체크 (멀티테넌시 가드 예외 대상)
+        const dup = await prisma.user.findUnique({ where: { email: trimmed }, select: { id: true } });
+        if (dup && dup.id !== id) {
+          return res.status(409).json({ success: false, message: '이미 사용 중인 이메일입니다.' });
+        }
+      }
+      updateData.email = trimmed || null;
+    }
 
     // 민감 필드(역할/활성 상태/기사 유형) 는 full-access 역할만 변경 가능
     if (isAdmin) {
@@ -210,6 +225,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     if (driverType !== undefined) auditChanges.driverType = { old: existingUser.driverType, new: driverType };
     if (isActive !== undefined) auditChanges.isActive = { old: existingUser.isActive, new: isActive };
     if (role !== undefined) auditChanges.role = { old: existingUser.role, new: role };
+    if (email !== undefined) auditChanges.email = { old: existingUser.email, new: email };
 
     const user = await prisma.user.update({
       where: { id },

@@ -118,6 +118,29 @@ export function useSocket() {
       });
     });
 
+    // D-2 긴급 — 운행 2일 이내 미충원, 관리자 직접 조치 필요 (일반 드랍보다 강한 경보)
+    s.on('emergency:urgent', (data: { slotDate: string; routeNumber: string; message?: string }) => {
+      queryClient.invalidateQueries({ queryKey: ['emergency'] });
+      queryClient.invalidateQueries({ queryKey: ['emergencyDrops'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      toast(
+        data.message ??
+          `🚨 긴급: ${data.slotDate} ${data.routeNumber}번 — 운행 2일 전인데 대타 미충원. 관리자님의 직접 조치(전화 등)가 필요합니다.`,
+        {
+          icon: '🚨',
+          duration: 15000,
+          style: {
+            background: '#991B1B',
+            color: '#ffffff',
+            fontWeight: 'bold',
+            fontSize: '15px',
+            border: '2px solid #7F1D1D',
+            maxWidth: '440px',
+          },
+        },
+      );
+    });
+
     // 휴무 심사 결과
     s.on('dayoff:reviewed', (data: { status: string; date: string }) => {
       queryClient.invalidateQueries({ queryKey: ['dayoff'] });
@@ -135,6 +158,7 @@ export function useSocket() {
       s.off('dm:read');
       s.off('schedule:published');
       s.off('emergency:new');
+      s.off('emergency:urgent');
       s.off('dayoff:reviewed');
     };
   }, [token, queryClient]);
