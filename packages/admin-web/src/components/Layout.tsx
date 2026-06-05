@@ -43,7 +43,7 @@ const navGroups: NavGroup[] = [
     label: '일일 운영',
     items: [
       { to: '/dashboard', labelKey: '대시보드', icon: LayoutDashboard },
-      { to: '/dashboard/schedule', labelKey: 'AI 배차표', icon: Calendar, roles: ['DISPATCH'] },
+      { to: '/dashboard/schedule', labelKey: '배차표 관리', icon: Calendar, roles: ['DISPATCH'] },
       { to: '/dashboard/emergency', labelKey: '대타 관리', icon: AlertTriangle, roles: ['DISPATCH'] },
       { to: '/dashboard/dayoff', labelKey: '휴무 요청', icon: CalendarOff, roles: ['DISPATCH', 'HR'] },
       { to: '/dashboard/today', labelKey: '오늘 운행 현황', icon: Bus, roles: ['DISPATCH'] },

@@ -430,7 +430,7 @@ export default function DashboardPage() {
 
       {/* 7. 빠른 진입 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <QuickLink to="/dashboard/schedule" icon={<Calendar size={18} />} label="AI 배차표" />
+        <QuickLink to="/dashboard/schedule" icon={<Calendar size={18} />} label="배차표 관리" />
         <QuickLink to="/dashboard/emergency" icon={<AlertTriangle size={18} />} label="대타 관리" />
         <QuickLink to="/dashboard/dayoff" icon={<CalendarOff size={18} />} label="휴무 요청" />
         <QuickLink to="/dashboard/today" icon={<Bus size={18} />} label="오늘 운행" />

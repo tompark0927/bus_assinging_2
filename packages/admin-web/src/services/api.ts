@@ -178,7 +178,7 @@ export const usersApi = {
 
 // Buses
 export const busesApi = {
-  list: () => api.get('/buses'),
+  list: (params?: Record<string, string>) => api.get('/buses', { params }),
   get: (id: number) => api.get(`/buses/${id}`),
   create: (data: Record<string, unknown>) => api.post('/buses', data),
   update: (id: number, data: Record<string, unknown>) => api.put(`/buses/${id}`, data),
@@ -187,7 +187,7 @@ export const busesApi = {
 
 // Routes
 export const routesApi = {
-  list: () => api.get('/routes'),
+  list: (params?: Record<string, string>) => api.get('/routes', { params }),
   get: (id: number) => api.get(`/routes/${id}`),
   create: (data: Record<string, unknown>) => api.post('/routes', data),
   update: (id: number, data: Record<string, unknown>) => api.put(`/routes/${id}`, data),
@@ -221,6 +221,8 @@ export const schedulesApi = {
     api.post('/schedules/generate-v2', data),
   updateSlot: (slotId: number, data: Record<string, unknown>) =>
     api.put(`/schedules/slots/${slotId}`, data),
+  createSlot: (data: Record<string, unknown>) =>
+    api.post('/schedules/slots', data),
   overrideSlot: (slotId: number, data: Record<string, unknown>) =>
     api.put(`/schedules/slots/${slotId}/override`, data),
   publish: (year: number, month: number) =>

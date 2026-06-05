@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -24,8 +24,10 @@ import {
   Edit3,
   Settings,
   Printer,
+  RotateCcw,
+  Plus,
 } from 'lucide-react';
-import { schedulesApi, routesApi, busesApi, usersApi } from '../services/api';
+import { schedulesApi, routesApi, busesApi, usersApi, dayOffApi } from '../services/api';
 import { format, getDaysInMonth } from 'date-fns';
 import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
@@ -235,6 +237,16 @@ export default function SchedulePage() {
     notes: string;
   }>({ isRestDay: false, routeId: 0, busId: null, shift: 'FULL_DAY', notes: '' });
 
+  // 빈 셀 배차 추가 모달 상태
+  const [addCtx, setAddCtx] = useState<{ driverId: number; driverName: string; dateKey: string } | null>(null);
+  const [addForm, setAddForm] = useState<{ routeId: number; busId: number | null; shift: string; isRestDay: boolean; notes: string }>(
+    { routeId: 0, busId: null, shift: 'FULL_DAY', isRestDay: false, notes: '' },
+  );
+
+  // 수동 변경 되돌리기 스택 (클라이언트 세션 한정)
+  const [undoStack, setUndoStack] = useState<Array<{ slotId: number; label: string; prev: Record<string, unknown> }>>([]);
+  const pendingUndoRef = useRef<{ slotId: number; label: string; prev: Record<string, unknown> } | null>(null);
+
   // ─── 데이터 조회 ───
 
   const {
@@ -249,18 +261,25 @@ export default function SchedulePage() {
   });
 
   const { data: routes = [] } = useQuery<Route[]>({
-    queryKey: ['routes'],
-    queryFn: () => routesApi.list().then((r) => r.data.data),
+    queryKey: ['routes', 'all'],
+    queryFn: () => routesApi.list({ limit: '100' }).then((r) => r.data.data),
   });
 
   const { data: buses = [] } = useQuery<Bus[]>({
-    queryKey: ['buses'],
-    queryFn: () => busesApi.list().then((r) => r.data.data),
+    queryKey: ['buses', 'all'],
+    queryFn: () => busesApi.list({ limit: '100' }).then((r) => r.data.data),
   });
 
   const { data: allUsersList = [] } = useQuery<Driver[]>({
     queryKey: ['users-drivers'],
     queryFn: () => usersApi.list({ role: 'DRIVER' }).then((r) => r.data.data),
+  });
+
+  // 배차 품질 체크리스트용: 이번 달 회사 전체 휴가 신청
+  const monthParam = `${year}-${String(month).padStart(2, '0')}`;
+  const { data: monthDayoffs = [] } = useQuery<Array<{ id: number; date: string; status: string; driver: { id: number; name: string; employeeId: string } }>>({
+    queryKey: ['dayoff', 'month-all', monthParam],
+    queryFn: () => dayOffApi.list({ month: monthParam, limit: '100' }).then((r) => r.data.data ?? []),
   });
 
   // ─── 뮤테이션 ───
@@ -370,6 +389,12 @@ export default function SchedulePage() {
       schedulesApi.overrideSlot(slotId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      // 되돌리기 스택에 변경 직전 상태 적재
+      if (pendingUndoRef.current) {
+        const entry = pendingUndoRef.current;
+        setUndoStack((prev) => [...prev, entry]);
+        pendingUndoRef.current = null;
+      }
       toast.success('슬롯이 수동 변경되었습니다.');
       closeOverrideModal();
     },
@@ -443,6 +468,54 @@ export default function SchedulePage() {
 
   const filledRate = stats.work > 0 ? Math.round(((stats.work - stats.dropped - stats.absent) / stats.work) * 100) : 0;
 
+  // ─── AI 배차 품질 체크리스트 ───
+  const quality = useMemo(() => {
+    if (!schedule?.slots) return null;
+    const work = schedule.slots.filter((s) => !s.isRestDay);
+
+    // 1) 차량 미배정 (근무인데 차량 없음) — 노선별 집계
+    const noBus = work.filter((s) => !s.bus);
+    const noBusByRoute = new Map<string, number>();
+    for (const s of noBus) {
+      const rn = s.route?.routeNumber ?? '-';
+      noBusByRoute.set(rn, (noBusByRoute.get(rn) ?? 0) + 1);
+    }
+
+    // 2) 미충원 (드랍/결근)
+    const unfilled = work.filter((s) => s.status === 'DROPPED' || s.status === 'ABSENT');
+
+    // 3) 휴가 반영 — 승인된 휴가일에 기사가 근무로 잡혀있으면 미반영
+    const slotByKey = new Map<string, Slot>();
+    for (const s of schedule.slots) slotByKey.set(`${s.driver.id}|${s.date.slice(0, 10)}`, s);
+    const approved = monthDayoffs.filter((d) => d.status === 'APPROVED');
+    const unreflected = approved
+      .filter((d) => {
+        const s = slotByKey.get(`${d.driver.id}|${d.date.slice(0, 10)}`);
+        return s && !s.isRestDay; // 승인 휴가인데 근무 중
+      })
+      .map((d) => ({ name: d.driver.name, employeeId: d.driver.employeeId, date: d.date.slice(5, 10) }));
+    const pendingCount = monthDayoffs.filter((d) => d.status === 'PENDING').length;
+
+    // 4) 근무일 균형 (기사별 근무일 최소~최대)
+    const workByDriver = new Map<number, number>();
+    for (const s of work) workByDriver.set(s.driver.id, (workByDriver.get(s.driver.id) ?? 0) + 1);
+    const counts = [...workByDriver.values()];
+    const minWork = counts.length ? Math.min(...counts) : 0;
+    const maxWork = counts.length ? Math.max(...counts) : 0;
+
+    return {
+      noBusCount: noBus.length,
+      noBusByRoute: [...noBusByRoute.entries()].sort((a, b) => b[1] - a[1]),
+      unfilledCount: unfilled.length,
+      approvedCount: approved.length,
+      unreflected,
+      pendingCount,
+      minWork,
+      maxWork,
+      spread: maxWork - minWork,
+    };
+  }, [schedule?.slots, monthDayoffs]);
+
   // ─── 핸들러 ───
 
   const navigateMonth = useCallback((delta: number) => {
@@ -501,8 +574,25 @@ export default function SchedulePage() {
     setOverrideReason('');
   }, []);
 
+  // 수동 변경 직전 상태를 되돌리기용으로 캡처 (override 성공 시 스택에 적재됨)
+  const captureUndo = useCallback((slot: Slot) => {
+    pendingUndoRef.current = {
+      slotId: slot.id,
+      label: `${slot.driver.name} ${slot.date.split('T')[0]}`,
+      prev: {
+        driverId: slot.driver.id,
+        routeId: slot.route?.id || undefined,
+        busId: slot.bus?.id ?? null,
+        shift: slot.shift || 'FULL_DAY',
+        isRestDay: slot.isRestDay,
+        notes: slot.notes || undefined,
+      },
+    };
+  }, []);
+
   const handleOverrideSave = useCallback(() => {
     if (!overrideSlot) return;
+    captureUndo(overrideSlot);
     overrideSlotMutation.mutate({
       slotId: overrideSlot.id,
       data: {
@@ -514,7 +604,7 @@ export default function SchedulePage() {
         isManualOverride: true,
       },
     });
-  }, [overrideSlot, overrideForm, overrideSlotMutation]);
+  }, [overrideSlot, overrideForm, overrideSlotMutation, captureUndo]);
 
   const handleForceOverride = useCallback(() => {
     if (!overrideSlot || !overrideReason.trim()) {
@@ -535,6 +625,70 @@ export default function SchedulePage() {
       },
     });
   }, [overrideSlot, overrideForm, overrideReason, overrideSlotMutation]);
+
+  // ─── 빈 셀 배차 추가 ───
+  const openAddSlot = useCallback(
+    (driverId: number, driverName: string, dateKey: string) => {
+      if (schedule?.status !== 'DRAFT') {
+        toast.error('초안 상태에서만 배차를 추가할 수 있습니다.');
+        return;
+      }
+      setAddCtx({ driverId, driverName, dateKey });
+      setAddForm({ routeId: 0, busId: null, shift: 'FULL_DAY', isRestDay: false, notes: '' });
+    },
+    [schedule?.status],
+  );
+
+  const createSlotMutation = useMutation({
+    mutationFn: (data: Record<string, unknown>) => schedulesApi.createSlot(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      toast.success('배차가 추가되었습니다.');
+      setAddCtx(null);
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || '배차 추가 중 오류가 발생했습니다.';
+      toast.error(msg);
+    },
+  });
+
+  const handleAddSlot = useCallback(() => {
+    if (!addCtx || !schedule) return;
+    if (!addForm.isRestDay && !addForm.routeId) {
+      toast.error('노선을 선택해주세요. (휴무는 노선 없이 가능)');
+      return;
+    }
+    createSlotMutation.mutate({
+      scheduleId: schedule.id,
+      driverId: addCtx.driverId,
+      date: addCtx.dateKey,
+      routeId: addForm.routeId || routes[0]?.id,
+      busId: addForm.busId || undefined,
+      shift: addForm.shift,
+      isRestDay: addForm.isRestDay,
+      notes: addForm.notes || undefined,
+    });
+  }, [addCtx, addForm, schedule, createSlotMutation, routes]);
+
+  // ─── 수동 변경 되돌리기 ───
+  const undoMutation = useMutation({
+    mutationFn: ({ slotId, data }: { slotId: number; data: Record<string, unknown> }) =>
+      schedulesApi.updateSlot(slotId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      toast.success('이전 상태로 되돌렸습니다.');
+    },
+    onError: () => toast.error('되돌리기 중 오류가 발생했습니다.'),
+  });
+
+  const handleUndo = useCallback(() => {
+    setUndoStack((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      undoMutation.mutate({ slotId: last.slotId, data: last.prev });
+      return prev.slice(0, -1);
+    });
+  }, [undoMutation]);
 
   // 기존 편집 모달 (비오버라이드 용도 유지)
   const openEditSlot = useCallback(
@@ -669,7 +823,7 @@ export default function SchedulePage() {
             )}
             {schedule?.status === 'DRAFT' && (
               <span className="text-base text-blue-600 dark:text-blue-400 font-medium">
-                (셀을 클릭하여 수정 가능)
+                (셀 클릭: 수정 · 빈 셀 클릭: 배차 추가)
               </span>
             )}
           </div>
@@ -688,6 +842,17 @@ export default function SchedulePage() {
 
         {schedule && (
           <>
+            {schedule.status === 'DRAFT' && undoStack.length > 0 && (
+              <button
+                onClick={handleUndo}
+                disabled={undoMutation.isPending}
+                className="inline-flex items-center gap-2 text-base px-5 py-3 min-h-[48px] bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors font-medium disabled:opacity-50"
+                title="마지막 수동 변경을 되돌립니다"
+              >
+                {undoMutation.isPending ? <Loader2 size={20} className="animate-spin" /> : <RotateCcw size={20} />}
+                되돌리기 ({undoStack.length})
+              </button>
+            )}
             {schedule.status === 'DRAFT' && (
               <button
                 onClick={() => setShowPublishConfirm(true)}
@@ -796,12 +961,10 @@ export default function SchedulePage() {
 
       {/* ─── 통계 요약 ─── */}
       {schedule && (
-        <div data-print-section="summary" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div data-print-section="summary" className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <StatCard label="전체 슬롯" value={stats.total} icon={<BarChart3 size={20} />} color="slate" />
           <StatCard label="근무일" value={stats.work} icon={<Users size={20} />} color="blue" />
           <StatCard label="배차율" value={`${filledRate}%`} icon={<Check size={20} />} color="emerald" />
-          <StatCard label="드랍" value={stats.dropped} icon={<AlertTriangle size={20} />} color="red" />
-          <StatCard label="결근" value={stats.absent} icon={<AlertTriangle size={20} />} color="orange" />
           <StatCard
             label="기사 수"
             value={`${filteredDrivers.length}명`}
@@ -809,6 +972,11 @@ export default function SchedulePage() {
             color="purple"
           />
         </div>
+      )}
+
+      {/* ─── AI 배차 품질 체크리스트 ─── */}
+      {schedule && quality && (
+        <QualityChecklist quality={quality} filledRate={filledRate} />
       )}
 
       {/* ─── v2 솔버 결과 패널 ─── */}
@@ -1057,7 +1225,9 @@ export default function SchedulePage() {
                         const slot = slotMap.get(dateKey);
                         const dow = date.getDay();
                         const { label, sub, colors, isEmpty } = getCellInfo(slot);
-                        const isEditable = schedule.status === 'DRAFT' && !!slot;
+                        const isDraft = schedule.status === 'DRAFT';
+                        const isEditable = isDraft && !!slot;
+                        const canAdd = isDraft && !slot;
                         const isWeekend = dow === 0 || dow === 6;
 
                         return (
@@ -1069,14 +1239,20 @@ export default function SchedulePage() {
                                   ? 'bg-gray-50/50 dark:bg-gray-800/50'
                                   : ''
                                 : ''
-                            } ${isEditable ? 'cursor-pointer hover:ring-2 hover:ring-blue-400 hover:ring-inset' : ''}`}
+                            } ${(isEditable || canAdd) ? 'cursor-pointer hover:ring-2 hover:ring-blue-400 hover:ring-inset' : ''}`}
                             title={
                               slot
-                                ? `${slot.driver.name} | ${slot.route?.routeNumber || '-'}번 ${slot.route?.name || ''} | ${slot.bus?.busNumber || '차량미배정'} | ${slot.status === 'DROPPED' ? '드랍' : slot.isRestDay ? '휴무' : SHIFT_LABELS[slot.shift] || slot.shift}${slot.notes ? ` | ${slot.notes}` : ''}${slot.fairnessNote ? ` | 공정성: ${slot.fairnessNote}` : ''}${slot.isManualOverride ? ' | [수동변경]' : ''}`
-                                : ''
+                                ? `${slot.driver.name} | ${slot.route?.routeNumber || '-'}번 ${slot.route?.name || ''} | ${slot.bus?.busNumber || '차량미배정'} | ${slot.status === 'DROPPED' ? '드랍' : slot.isRestDay ? '휴무' : SHIFT_LABELS[slot.shift] || slot.shift}${slot.notes ? ` | ${slot.notes}` : ''}${friendlyFairnessNote(slot.fairnessNote) ? ` | ${friendlyFairnessNote(slot.fairnessNote)}` : ''}${slot.isManualOverride ? ' | [수동변경]' : ''}`
+                                : canAdd
+                                  ? '클릭하여 배차 추가'
+                                  : ''
                             }
                             onClick={(e) => {
-                              if (!slot || !isEditable) return;
+                              if (!slot) {
+                                if (canAdd) openAddSlot(driver.id, driver.name, dateKey);
+                                return;
+                              }
+                              if (!isEditable) return;
                               // Shift+클릭: 벌크 선택 토글
                               if (e.shiftKey && !slot.isRestDay) {
                                 setSelectedSlotIds(prev => {
@@ -1091,7 +1267,11 @@ export default function SchedulePage() {
                             }}
                           >
                             {isEmpty ? (
-                              <span className="text-gray-200 dark:text-gray-600 text-sm">&middot;</span>
+                              canAdd ? (
+                                <span className="text-gray-300 dark:text-gray-600 inline-flex items-center justify-center min-h-[38px]"><Plus size={14} /></span>
+                              ) : (
+                                <span className="text-gray-200 dark:text-gray-600 text-sm">&middot;</span>
+                              )
                             ) : (
                               <div className="relative">
                                 {/* 벌크 선택 표시 */}
@@ -1171,6 +1351,65 @@ export default function SchedulePage() {
           모달들
           ═══════════════════════════════════════ */}
 
+      {/* 빈 셀 배차 추가 모달 */}
+      {addCtx && (
+        <Modal onClose={() => setAddCtx(null)} title="배차 추가" maxWidth="max-w-lg" icon={<Plus size={22} className="text-blue-600" />}>
+          <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-4 mb-5">
+            <div className="text-lg font-semibold text-gray-800 dark:text-gray-100">{addCtx.driverName}</div>
+            <div className="text-base text-gray-500 dark:text-gray-400 mt-1">{addCtx.dateKey}</div>
+          </div>
+
+          <div className="space-y-5">
+            <label className="flex items-center gap-2 text-base text-gray-700 dark:text-gray-200">
+              <input type="checkbox" checked={addForm.isRestDay} onChange={(e) => setAddForm((p) => ({ ...p, isRestDay: e.target.checked }))} />
+              휴무일로 추가
+            </label>
+
+            {!addForm.isRestDay && (
+              <>
+                <div>
+                  <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">노선 *</label>
+                  <select className="input text-base py-3 min-h-[48px]" value={addForm.routeId} onChange={(e) => setAddForm((p) => ({ ...p, routeId: parseInt(e.target.value) }))}>
+                    <option value={0}>노선 선택</option>
+                    {routes.map((r) => (<option key={r.id} value={r.id}>{r.routeNumber}번 {r.name}</option>))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">차량 (선택)</label>
+                  <select className="input text-base py-3 min-h-[48px]" value={addForm.busId ?? 0} onChange={(e) => setAddForm((p) => ({ ...p, busId: parseInt(e.target.value) || null }))}>
+                    <option value={0}>차량 미배정</option>
+                    {buses.map((b) => (<option key={b.id} value={b.id}>{b.busNumber}</option>))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">교대 구분</label>
+                  <div className="flex gap-3">
+                    {[{ value: 'MORNING', label: '오전 (조)' }, { value: 'AFTERNOON', label: '오후 (석)' }, { value: 'FULL_DAY', label: '전일 (종)' }].map((opt) => (
+                      <ToggleButton key={opt.value} active={addForm.shift === opt.value} onClick={() => setAddForm((p) => ({ ...p, shift: opt.value }))} activeColor="bg-blue-600" label={opt.label} />
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div>
+              <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">메모 (선택)</label>
+              <input className="input text-base py-3 min-h-[48px]" value={addForm.notes} onChange={(e) => setAddForm((p) => ({ ...p, notes: e.target.value }))} placeholder="비고" />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3 mt-6">
+            <button className="btn-secondary" onClick={() => setAddCtx(null)}>취소</button>
+            <button className="btn-primary inline-flex items-center gap-2" disabled={createSlotMutation.isPending} onClick={handleAddSlot}>
+              {createSlotMutation.isPending ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
+              추가
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {/* 수동 오버라이드 모달 */}
       {overrideSlot && (
         <Modal onClose={closeOverrideModal} title="슬롯 수동 변경" maxWidth="max-w-lg" icon={<Edit3 size={22} className="text-blue-600" />}>
@@ -1184,11 +1423,11 @@ export default function SchedulePage() {
               <span>|</span>
               <span>차량: <strong>{overrideSlot.bus?.busNumber || '미배정'}</strong></span>
             </div>
-            {overrideSlot.fairnessNote && (
+            {friendlyFairnessNote(overrideSlot.fairnessNote) && (
               <div className="mt-3 flex items-start gap-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-3 py-2 border border-blue-200 dark:border-blue-800">
                 <Info size={16} className="text-blue-500 mt-0.5 shrink-0" />
                 <span className="text-sm text-blue-700 dark:text-blue-300">
-                  <strong>AI 배정 근거:</strong> {overrideSlot.fairnessNote}
+                  <strong>AI 배정 근거:</strong> {friendlyFairnessNote(overrideSlot.fairnessNote)}
                 </span>
               </div>
             )}
@@ -1838,18 +2077,20 @@ function StatCard({
   icon: React.ReactNode;
   color: string;
 }) {
-  const colorMap: Record<string, string> = {
-    slate: 'bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-600',
-    blue: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700',
-    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700',
-    red: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700',
-    orange: 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700',
-    purple: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-300 dark:border-purple-700',
+  // 배경은 전부 흰색으로 통일. 색상은 아이콘·수치 텍스트에만 사용해 구분.
+  const accentMap: Record<string, string> = {
+    slate: 'text-slate-600 dark:text-slate-300',
+    blue: 'text-blue-700 dark:text-blue-300',
+    emerald: 'text-emerald-700 dark:text-emerald-300',
+    red: 'text-red-700 dark:text-red-300',
+    orange: 'text-orange-700 dark:text-orange-300',
+    purple: 'text-purple-700 dark:text-purple-300',
   };
+  const accent = accentMap[color] || accentMap.slate;
   return (
-    <div className={`rounded-xl border px-4 py-3 ${colorMap[color] || colorMap.slate}`}>
-      <div className="flex items-center gap-2 mb-1 opacity-70">{icon}<span className="text-sm font-medium">{label}</span></div>
-      <div className="text-2xl font-bold">{value}</div>
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3">
+      <div className={`flex items-center gap-2 mb-1 ${accent}`}>{icon}<span className="text-sm font-medium text-gray-500 dark:text-gray-400">{label}</span></div>
+      <div className={`text-2xl font-bold ${accent}`}>{value}</div>
     </div>
   );
 }
@@ -2174,16 +2415,23 @@ function DriverDetailModal({
     return { work: work.length, rest: rest.length, morning, afternoon, fullDay, dropped, filled, overrides, routes };
   }, [driverSlots]);
 
-  const notes = useMemo(
-    () => driverSlots.filter((s) => s.notes || s.fairnessNote).slice(0, 30),
-    [driverSlots],
-  );
-
   const slotByDay = useMemo(() => {
     const m = new Map<string, Slot>();
     for (const s of driverSlots) m.set(s.date.slice(0, 10), s);
     return m;
   }, [driverSlots]);
+
+  // 이 기사의 휴가(휴무) 요청일 — 캘린더에 점으로 표시
+  const monthParam = `${year}-${String(month).padStart(2, '0')}`;
+  const { data: dayOffReqs = [] } = useQuery<Array<{ date: string }>>({
+    queryKey: ['dayoff', 'driver', driverId, monthParam],
+    queryFn: () =>
+      dayOffApi.list({ driverId: String(driverId), month: monthParam }).then((r) => r.data.data ?? []),
+  });
+  const requestedDays = useMemo(
+    () => new Set(dayOffReqs.map((d) => d.date.slice(0, 10))),
+    [dayOffReqs],
+  );
 
   if (!driver) {
     return (
@@ -2241,8 +2489,8 @@ function DriverDetailModal({
           <StatChip label="근무" value={`${stats.work}일`} color="blue" />
           <StatChip label="휴무" value={`${stats.rest}일`} color="gray" />
           {stats.morning > 0 && <StatChip label="오전" value={`${stats.morning}일`} color="amber" />}
-          {stats.afternoon > 0 && <StatChip label="오후" value={`${stats.afternoon}일`} color="orange" />}
-          {stats.fullDay > 0 && <StatChip label="종일" value={`${stats.fullDay}일`} color="blue" />}
+          {stats.afternoon > 0 && <StatChip label="오후" value={`${stats.afternoon}일`} color="sky" />}
+          {stats.fullDay > 0 && <StatChip label="종일" value={`${stats.fullDay}일`} color="indigo" />}
           {stats.dropped > 0 && <StatChip label="드랍" value={`${stats.dropped}건`} color="red" />}
           {stats.filled > 0 && <StatChip label="대타 출근" value={`${stats.filled}건`} color="emerald" />}
           {stats.overrides > 0 && <StatChip label="수동 변경" value={`${stats.overrides}건`} color="purple" />}
@@ -2282,39 +2530,33 @@ function DriverDetailModal({
               const slot = slotByDay.get(dateKey);
               const dow = date.getDay();
               return (
-                <DayCell key={day} day={day} dow={dow} slot={slot} />
+                <DayCell key={day} day={day} dow={dow} slot={slot} requested={requestedDays.has(dateKey)} />
               );
             })}
           </div>
+          {/* 색상/표시 안내 */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-3 text-[11px] text-gray-500 dark:text-gray-400">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border bg-amber-50 border-amber-200" /> 오전</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border bg-sky-50 border-sky-200" /> 오후</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border bg-indigo-50 border-indigo-200" /> 종일</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border bg-gray-100 border-gray-200" /> 휴무</span>
+            <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-rose-500" /> 휴가 요청일</span>
+          </div>
         </div>
 
-        {/* 메모 */}
-        {notes.length > 0 && (
-          <div>
-            <div className="text-[13px] font-medium text-gray-700 dark:text-gray-200 mb-2">메모 ({notes.length}건)</div>
-            <ul className="space-y-1.5 max-h-[200px] overflow-y-auto">
-              {notes.map((s) => (
-                <li key={s.id} className="text-[12px] text-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-white/[0.02]">
-                  <span className="font-mono text-gray-500">{s.date.slice(5, 10)}</span>
-                  <span className="mx-2 text-gray-300">·</span>
-                  {s.fairnessNote && <span>{s.fairnessNote}</span>}
-                  {s.notes && <span className="text-amber-600 dark:text-amber-400 ml-1">{s.notes}</span>}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
     </Modal>
   );
 }
 
-function StatChip({ label, value, color }: { label: string; value: string; color: 'blue' | 'gray' | 'amber' | 'orange' | 'red' | 'emerald' | 'purple' }) {
+function StatChip({ label, value, color }: { label: string; value: string; color: 'blue' | 'gray' | 'amber' | 'orange' | 'sky' | 'indigo' | 'red' | 'emerald' | 'purple' }) {
   const cls = {
     blue: 'border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/5 text-blue-700 dark:text-blue-300',
     gray: 'border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.02] text-gray-700 dark:text-gray-300',
     amber: 'border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/5 text-amber-700 dark:text-amber-300',
     orange: 'border-orange-200 dark:border-orange-500/30 bg-orange-50 dark:bg-orange-500/5 text-orange-700 dark:text-orange-300',
+    sky: 'border-sky-200 dark:border-sky-500/30 bg-sky-50 dark:bg-sky-500/5 text-sky-700 dark:text-sky-300',
+    indigo: 'border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/5 text-indigo-700 dark:text-indigo-300',
     red: 'border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/5 text-red-700 dark:text-red-300',
     emerald: 'border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/5 text-emerald-700 dark:text-emerald-300',
     purple: 'border-purple-200 dark:border-purple-500/30 bg-purple-50 dark:bg-purple-500/5 text-purple-700 dark:text-purple-300',
@@ -2327,34 +2569,159 @@ function StatChip({ label, value, color }: { label: string; value: string; color
   );
 }
 
-function DayCell({ day, dow, slot }: { day: number; dow: number; slot?: Slot }) {
+type QualityData = {
+  noBusCount: number;
+  noBusByRoute: [string, number][];
+  unfilledCount: number;
+  approvedCount: number;
+  unreflected: { name: string; employeeId: string; date: string }[];
+  pendingCount: number;
+  minWork: number;
+  maxWork: number;
+  spread: number;
+};
+
+function QualityChecklist({ quality: q, filledRate }: { quality: QualityData; filledRate: number }) {
+  const checks: boolean[] = [filledRate === 100, q.noBusCount === 0, q.approvedCount === 0 || q.unreflected.length === 0];
+  const passCount = checks.filter(Boolean).length;
+  const warnCount = checks.filter((c) => !c).length;
+  return (
+    <div data-print-hide className="card dark:bg-gray-800 p-0 overflow-hidden">
+      <div className="flex items-center gap-2 px-5 py-3 border-b border-gray-100 dark:border-gray-700">
+        <Shield size={18} className="text-blue-600" />
+        <h3 className="text-base font-bold text-gray-900 dark:text-white">AI 배차 품질 체크리스트</h3>
+        <span className="ml-auto text-sm text-gray-500 dark:text-gray-400">통과 {passCount} · 주의 {warnCount}</span>
+      </div>
+      <div className="divide-y divide-gray-100 dark:divide-gray-700">
+        <ChecklistRow
+          status={filledRate === 100 ? 'pass' : 'warn'}
+          title="배차 완료율"
+          summary={filledRate === 100 ? '모든 근무 슬롯이 배차되었습니다' : `미충원 ${q.unfilledCount}건 (배차율 ${filledRate}%)`}
+        />
+        <ChecklistRow
+          status={q.noBusCount === 0 ? 'pass' : 'warn'}
+          title="차량 배정"
+          summary={q.noBusCount === 0 ? '모든 근무에 차량이 배정되었습니다' : `차량 미배정 ${q.noBusCount}건 — 노선별 확인`}
+        >
+          {q.noBusCount > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {q.noBusByRoute.map(([rn, c]) => (
+                <span key={rn} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 text-[12px]">
+                  {rn}번 <b>{c}건</b>
+                </span>
+              ))}
+            </div>
+          )}
+        </ChecklistRow>
+        <ChecklistRow
+          status={q.approvedCount === 0 ? 'info' : q.unreflected.length === 0 ? 'pass' : 'warn'}
+          title="휴가 반영"
+          summary={
+            q.approvedCount === 0
+              ? `승인된 휴가 없음${q.pendingCount > 0 ? ` · 미결재 ${q.pendingCount}건` : ''}`
+              : q.unreflected.length === 0
+                ? `승인 휴가 ${q.approvedCount}건 모두 반영됨${q.pendingCount > 0 ? ` · 미결재 ${q.pendingCount}건` : ''}`
+                : `승인 휴가 ${q.approvedCount}건 중 ${q.unreflected.length}건 미반영${q.pendingCount > 0 ? ` · 미결재 ${q.pendingCount}건` : ''}`
+          }
+        >
+          {q.unreflected.length > 0 && (
+            <ul className="space-y-1">
+              {q.unreflected.map((u, i) => (
+                <li key={i} className="text-[12px] text-gray-600 dark:text-gray-300">
+                  <b>{u.name}</b> ({u.employeeId}) — {u.date} 휴가 신청했으나 근무 배정됨
+                </li>
+              ))}
+            </ul>
+          )}
+        </ChecklistRow>
+        <ChecklistRow
+          status={q.spread <= 2 ? 'pass' : 'info'}
+          title="근무일 균형"
+          summary={`기사별 근무 ${q.minWork}~${q.maxWork}일 (편차 ${q.spread}일)`}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ChecklistRow({ status, title, summary, children }: { status: 'pass' | 'warn' | 'info'; title: string; summary: string; children?: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const hasDetail = !!children;
+  const icon =
+    status === 'pass' ? <Check size={18} className="text-emerald-600" />
+    : status === 'warn' ? <AlertTriangle size={18} className="text-amber-500" />
+    : <Info size={18} className="text-blue-500" />;
+  return (
+    <div className="px-5 py-3">
+      <div className={`flex items-center gap-3 ${hasDetail ? 'cursor-pointer' : ''}`} onClick={() => hasDetail && setOpen((o) => !o)}>
+        <span className="shrink-0">{icon}</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-[14px] font-semibold text-gray-800 dark:text-gray-100">{title}</div>
+          <div className={`text-[13px] ${status === 'warn' ? 'text-amber-700 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'}`}>{summary}</div>
+        </div>
+        {hasDetail && (open ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />)}
+      </div>
+      {hasDetail && open && <div className="mt-2.5 pl-8">{children}</div>}
+    </div>
+  );
+}
+
+// AI 배정 근거를 사람이 읽기 쉬운 한글로 변환. 내부 코드는 매핑하고, 한글 설명은 그대로,
+// 알 수 없는 내부 코드는 null(미표시) 반환.
+function friendlyFairnessNote(note?: string | null): string | null {
+  if (!note) return null;
+  const trimmed = note.trim();
+  if (!trimmed) return null;
+  // 이미 한글 설명(공휴일/선호 노선/피로도/예비기사/강제 승인 등)은 그대로 노출
+  if (/[가-힣]/.test(trimmed)) return trimmed;
+  // 내부 코드(SAME_ROUTE / CROSS_ROUTE / HOME, ·HOME=평소 차량) 매핑
+  const FAM: Record<string, string> = {
+    SAME_ROUTE: '기존 담당 노선 유지',
+    CROSS_ROUTE: '다른 노선 배정',
+    HOME: '평소 담당 노선',
+  };
+  const parts = trimmed.split('·');
+  const fam = FAM[parts[0]];
+  if (fam) {
+    const homeBus = parts.slice(1).includes('HOME');
+    return homeBus ? `${fam} · 평소 차량` : fam;
+  }
+  return null; // 알 수 없는 내부 코드는 숨김
+}
+
+function DayCell({ day, dow, slot, requested }: { day: number; dow: number; slot?: Slot; requested?: boolean }) {
   const dowColor = dow === 0 ? 'text-red-500' : dow === 6 ? 'text-blue-500' : 'text-gray-500';
+  // 휴가 요청일 점 표시 (요청만 — 승인/반려 무관하게 "신청했음")
+  const dot = requested ? (
+    <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-500" title="휴가 요청일" />
+  ) : null;
   if (!slot) {
     return (
-      <div className="aspect-square rounded-lg border border-gray-100 dark:border-white/5 p-1.5 bg-gray-50/50 dark:bg-white/[0.01] flex flex-col">
+      <div className="relative aspect-square rounded-lg border border-gray-100 dark:border-white/5 p-1.5 bg-gray-50/50 dark:bg-white/[0.01] flex flex-col">
+        {dot}
         <div className={`text-[11px] font-medium ${dowColor}`}>{day}</div>
       </div>
     );
   }
   if (slot.isRestDay) {
     return (
-      <div className="aspect-square rounded-lg border border-gray-200 dark:border-white/10 p-1.5 bg-gray-100 dark:bg-white/5 flex flex-col">
+      <div className="relative aspect-square rounded-lg border border-gray-200 dark:border-white/10 p-1.5 bg-gray-100 dark:bg-white/5 flex flex-col">
+        {dot}
         <div className={`text-[11px] font-medium ${dowColor}`}>{day}</div>
         <div className="flex-1 flex items-center justify-center text-gray-400 text-[12px] font-semibold">휴</div>
       </div>
     );
   }
-  const isOverride = slot.isManualOverride;
-  const statusBg = slot.status === 'DROPPED'
-    ? 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30'
-    : slot.status === 'FILLED'
-    ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30'
-    : isOverride
+  // 색상은 교대(오전/오후/종일) 기준
+  const shiftBg = slot.shift === 'MORNING'
     ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30'
-    : 'bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30';
+    : slot.shift === 'AFTERNOON'
+    ? 'bg-sky-50 dark:bg-sky-500/10 border-sky-200 dark:border-sky-500/30'
+    : 'bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/30';
   const shiftLabel = slot.shift === 'MORNING' ? '오전' : slot.shift === 'AFTERNOON' ? '오후' : slot.shift === 'FULL_DAY' ? '종일' : '';
   return (
-    <div className={`aspect-square rounded-lg border p-1.5 flex flex-col ${statusBg}`}>
+    <div className={`relative aspect-square rounded-lg border p-1.5 flex flex-col ${shiftBg}`}>
+      {dot}
       <div className={`text-[11px] font-medium ${dowColor}`}>{day}</div>
       <div className="flex-1 flex flex-col items-center justify-center min-h-0">
         <div className="text-[11px] font-bold text-gray-900 dark:text-gray-100 leading-tight">
