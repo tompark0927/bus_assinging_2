@@ -193,8 +193,7 @@ export const userValidation = {
     body('email')
       .trim()
       .notEmpty().withMessage('이메일은 필수입니다.')
-      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.')
-      .normalizeEmail(),
+      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.'),
     body('phone')
       .optional()
       .trim()
@@ -215,6 +214,10 @@ export const userValidation = {
   update: validate([
     isIntId('param', 'id', '사용자 ID'),
     optionalString('name', '이름', { max: 50 }),
+    body('email')
+      .optional({ checkFalsy: true })
+      .trim()
+      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.'),
     body('phone')
       .optional()
       .trim()
@@ -857,8 +860,7 @@ export const contactValidation = {
       .optional({ checkFalsy: true })
       .trim()
       .isEmail().withMessage('유효한 이메일 형식이어야 합니다.')
-      .isLength({ max: 200 }).withMessage('이메일은 200자 이내여야 합니다.')
-      .normalizeEmail(),
+      .isLength({ max: 200 }).withMessage('이메일은 200자 이내여야 합니다.'),
     body('topic')
       .optional({ checkFalsy: true })
       .isIn(['general', 'demo', 'pricing', 'bug']).withMessage('유효하지 않은 문의 유형입니다.'),
@@ -883,8 +885,7 @@ export const companyValidation = {
     body('adminEmail')
       .trim()
       .notEmpty().withMessage('관리자 이메일은 필수입니다.')
-      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.')
-      .normalizeEmail(),
+      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.'),
     body('adminPassword')
       .notEmpty().withMessage('비밀번호는 필수입니다.')
       .isLength({ min: 8 }).withMessage('비밀번호는 최소 8자 이상이어야 합니다.'),

@@ -20,7 +20,7 @@ export function useKeyboardShortcuts() {
     const shortcuts: Shortcut[] = [
       // Navigation shortcuts (Alt + key)
       { key: 'd', alt: true, action: () => navigate('/dashboard'), description: '대시보드' },
-      { key: 's', alt: true, action: () => navigate('/dashboard/schedule'), description: 'AI 배차표' },
+      { key: 's', alt: true, action: () => navigate('/dashboard/schedule'), description: '배차표 관리' },
       { key: 'e', alt: true, action: () => navigate('/dashboard/emergency'), description: '대타 관리' },
       { key: 'o', alt: true, action: () => navigate('/dashboard/dayoff'), description: '휴무 요청' },
       { key: 't', alt: true, action: () => navigate('/dashboard/today'), description: '오늘 운행 현황' },
@@ -56,7 +56,7 @@ export function useKeyboardShortcuts() {
 export const SHORTCUT_LIST = [
   { keys: '⌘K', description: '전체 검색' },
   { keys: 'Alt+D', description: '대시보드' },
-  { keys: 'Alt+S', description: 'AI 배차표' },
+  { keys: 'Alt+S', description: '배차표 관리' },
   { keys: 'Alt+E', description: '대타 관리' },
   { keys: 'Alt+O', description: '휴무 요청' },
   { keys: 'Alt+T', description: '오늘 운행 현황' },

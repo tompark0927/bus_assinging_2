@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { prisma } from '../utils/prisma';
 import { AuthRequest } from '../middleware/auth';
-import { sendPushNotification, sendBulkPushNotifications, notifyAvailableDriversForEmergency } from '../services/notificationService';
+import { sendPushNotification, sendBulkPushNotifications, notifyAvailableDriversForEmergency, notifyAdminsUrgentEmergency, notifyAdminsNewDrop } from '../services/notificationService';
 import { dispatchImmediateEmergency } from '../services/emergencyAgentRunner';
 import logger from '../utils/logger';
 import { parseIdParam } from '../utils/helpers';
@@ -54,7 +54,7 @@ export const createEmergencyDrop = async (req: AuthRequest, res: Response) => {
     // Verify the slot belongs to this driver
     const slot = await prisma.scheduleSlot.findUnique({
       where: { id: slotId },
-      include: { route: true, schedule: { select: { companyId: true } } },
+      include: { route: true, driver: { select: { name: true } }, schedule: { select: { companyId: true } } },
     });
 
     if (!slot || slot.schedule.companyId !== req.user!.companyId) {
@@ -131,6 +131,24 @@ export const createEmergencyDrop = async (req: AuthRequest, res: Response) => {
       await prisma.emergencyDrop.update({
         where: { id: drop.id },
         data: { escalationLevel: 1, lastEscalatedAt: new Date() },
+      });
+      // 운행 2일 이내 미충원 — 관리자 웹에 강한 알림(직접 조치 필요)
+      await notifyAdminsUrgentEmergency({
+        companyId: req.user!.companyId,
+        dropId: drop.id,
+        slotDate: slot.date,
+        routeNumber: slot.route.routeNumber,
+        shift: slot.shift,
+      });
+    } else {
+      // 일반(비긴급) 대타 발생 — 관리자 알림함에 기록
+      await notifyAdminsNewDrop({
+        companyId: req.user!.companyId,
+        dropId: drop.id,
+        slotDate: slot.date,
+        routeNumber: slot.route.routeNumber,
+        shift: slot.shift,
+        driverName: slot.driver?.name ?? '기사',
       });
     }
 
@@ -212,7 +230,7 @@ export const acceptEmergencySlot = async (req: AuthRequest, res: Response) => {
     );
 
     const admins = await prisma.user.findMany({
-      where: { role: 'ADMIN', isActive: true, companyId: req.user!.companyId },
+      where: { role: { not: 'DRIVER' }, isActive: true, companyId: req.user!.companyId },
       select: { id: true },
     });
 

@@ -4,6 +4,7 @@ import {
   getScheduleList,
   generateSchedule,
   updateScheduleSlot,
+  createScheduleSlot,
   manualOverrideSlot,
   publishSchedule,
   deleteSchedule,
@@ -186,6 +187,7 @@ router.post(
   },
 );
 
+router.post('/slots', requireRole('DISPATCH'), createScheduleSlot);
 router.put('/slots/:slotId', requireRole('DISPATCH'), ...scheduleValidation.updateSlot, updateScheduleSlot);
 router.put('/slots/:slotId/override', requireRole('DISPATCH'), manualOverrideSlot);
 
