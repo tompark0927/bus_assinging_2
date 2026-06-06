@@ -21,7 +21,7 @@ export default function ForgotPasswordPage() {
 
   const [companyCode, setCompanyCode] = useState('');
   const [identifier, setIdentifier] = useState('');
-  const [phoneHint, setPhoneHint] = useState('');
+  const [emailHint, setEmailHint] = useState('');
 
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -37,7 +37,7 @@ export default function ForgotPasswordPage() {
     setLoading(true);
     try {
       const res = await authApi.forgotPasswordSendOtp(companyCode.trim(), identifier.trim());
-      setPhoneHint(res.data?.data?.phoneHint || '');
+      setEmailHint(res.data?.data?.emailHint || '');
       toast.success('인증번호를 발송했습니다.');
       setStep(2);
     } catch (err) {
@@ -103,7 +103,7 @@ export default function ForgotPasswordPage() {
           {step === 1 ? (
             <form onSubmit={handleSendOtp} className="space-y-5">
               <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                회사 코드와 아이디(이메일 또는 사원번호)를 입력하시면, 가입 시 등록한 휴대폰으로 인증번호를 보내드립니다.
+                회사 코드와 아이디(이메일 또는 사원번호)를 입력하시면, 가입 시 등록한 이메일로 인증번호를 보내드립니다.
               </p>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">회사 코드</label>
@@ -122,8 +122,8 @@ export default function ForgotPasswordPage() {
               <div className="flex items-start gap-2.5 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded-xl px-4 py-3">
                 <ShieldCheck size={18} className="text-blue-500 dark:text-blue-400 mt-0.5 flex-shrink-0" />
                 <p className="text-sm text-blue-700 dark:text-blue-300 leading-snug">
-                  {phoneHint ? <><span className="font-semibold">{phoneHint}</span> 으로 인증번호를 보냈습니다.</> : '등록된 휴대폰으로 인증번호를 보냈습니다.'}
-                  <br />문자가 오지 않으면 잠시 후 다시 시도해주세요.
+                  {emailHint ? <><span className="font-semibold">{emailHint}</span> (으)로 인증번호를 보냈습니다.</> : '등록된 이메일로 인증번호를 보냈습니다.'}
+                  <br />메일이 오지 않으면 스팸함도 확인해 주세요.
                 </p>
               </div>
               <div>

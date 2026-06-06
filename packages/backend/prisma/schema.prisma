@@ -205,7 +205,8 @@ model RefreshToken {
 
 model OtpVerification {
   id        Int      @id @default(autoincrement())
-  phone     String
+  phone     String?  // 전화번호 OTP(기사 앱 로그인)용
+  email     String?  // 이메일 OTP(관리자 비밀번호 재설정)용
   otp       String
   expiresAt DateTime
   used      Boolean  @default(false)
@@ -213,6 +214,7 @@ model OtpVerification {
   createdAt DateTime @default(now())
 
   @@index([phone])
+  @@index([email])
 }
 
 model Bus {
