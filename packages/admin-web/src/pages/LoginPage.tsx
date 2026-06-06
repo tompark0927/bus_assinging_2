@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { authApi } from '../services/api';
@@ -8,6 +9,7 @@ import CapsLockHint from '../components/CapsLockHint';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { setAuth } = useAuthStore();
   const [loading, setLoading] = useState(false);
 
@@ -28,6 +30,8 @@ export default function LoginPage() {
     try {
       const res = await authApi.login(companyCode, email, password);
       const { token, user, refreshToken: rt } = res.data.data;
+      // 이전 세션(다른 회사)의 캐시가 남아 보이지 않도록 로그인 시 캐시 초기화
+      queryClient.clear();
       setAuth(user, token, rt);
       toast.success(`안녕하세요, ${(user as { name: string }).name}님!`);
       navigate('/dashboard');

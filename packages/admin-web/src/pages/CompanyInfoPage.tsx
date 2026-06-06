@@ -152,21 +152,21 @@ export default function CompanyInfoPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <StatLink
-            to="/dashboard/data"
+            to="/dashboard/data?tab=drivers"
             icon={<Users className="w-6 h-6 text-blue-500" />}
             label="활성 기사"
             value={data.stats.drivers}
             unit="명"
           />
           <StatLink
-            to="/dashboard/data"
+            to="/dashboard/data?tab=buses"
             icon={<Bus className="w-6 h-6 text-emerald-500" />}
             label="운행 버스"
             value={data.stats.buses}
             unit="대"
           />
           <StatLink
-            to="/dashboard/data"
+            to="/dashboard/data?tab=routes"
             icon={<Map className="w-6 h-6 text-purple-500" />}
             label="활성 노선"
             value={data.stats.routes}

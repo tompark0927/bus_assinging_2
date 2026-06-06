@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Database,
@@ -60,7 +61,11 @@ interface Route {
    ──────────────────────────────────────────── */
 
 export default function BasicDataPage() {
-  const [tab, setTab] = useState<Tab>('drivers');
+  // 탭을 URL ?tab= 으로 제어 → 회사 정보 등에서 특정 탭으로 바로 진입 가능
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const tab: Tab = tabParam === 'buses' || tabParam === 'routes' ? tabParam : 'drivers';
+  const setTab = (t: Tab) => setSearchParams(t === 'drivers' ? {} : { tab: t }, { replace: true });
 
   return (
     <div className="space-y-6">

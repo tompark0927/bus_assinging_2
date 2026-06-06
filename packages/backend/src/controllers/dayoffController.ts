@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { prisma } from '../utils/prisma';
 import { AuthRequest } from '../middleware/auth';
-import { sendPushNotification } from '../services/notificationService';
+import { sendPushNotification, notifyAdminsNewDayoffRequest } from '../services/notificationService';
 import { dispatchImmediateEmergency } from '../services/emergencyAgentRunner';
 import logger from '../utils/logger';
 import { parseIdParam } from '../utils/helpers';
@@ -108,7 +108,13 @@ export const createDayOffRequest = async (req: AuthRequest, res: Response) => {
       },
     });
 
-    // (제거됨) 관리자 대상 '새 휴무 요청' 푸시 알림 — 발송하지 않음.
+    // 관리자 알림함에 '새 휴무 요청' 기록 (배차/인사 관리자 대상)
+    await notifyAdminsNewDayoffRequest({
+      companyId: request.companyId,
+      requestId: request.id,
+      driverName: request.driver.name,
+      date: request.date,
+    });
 
     return res.status(201).json({ success: true, data: request });
   } catch (error) {

@@ -12,7 +12,7 @@
 
 import { prisma } from '../utils/prisma';
 import logger from '../utils/logger';
-import { notifyAvailableDriversForEmergency } from './notificationService';
+import { notifyAvailableDriversForEmergency, notifyAdminsUrgentEmergency } from './notificationService';
 
 /** D-2 긴급 임계 (2일, ms 단위) */
 const URGENT_THRESHOLD_MS = 2 * 24 * 60 * 60 * 1000;
@@ -103,7 +103,17 @@ async function runD2UrgentSweep(now: Date) {
       escalationLevel: 0,
       slot: { date: { lte: cutoff } },
     },
-    include: { slot: { select: { date: true, routeId: true, schedule: { select: { companyId: true } } } } },
+    include: {
+      slot: {
+        select: {
+          date: true,
+          routeId: true,
+          shift: true,
+          route: { select: { routeNumber: true } },
+          schedule: { select: { companyId: true } },
+        },
+      },
+    },
   });
 
   let promoted = 0;
@@ -124,6 +134,14 @@ async function runD2UrgentSweep(now: Date) {
       await prisma.emergencyDrop.update({
         where: { id: drop.id },
         data: { escalationLevel: 1, lastEscalatedAt: now },
+      });
+      // 운행 2일 이내 진입 — 관리자 웹에 강한 알림(직접 조치 필요)
+      await notifyAdminsUrgentEmergency({
+        companyId: drop.slot.schedule.companyId,
+        dropId: drop.id,
+        slotDate: drop.slot.date,
+        routeNumber: drop.slot.route.routeNumber,
+        shift: drop.slot.shift,
       });
       promoted++;
     } catch (err) {

@@ -227,6 +227,73 @@ export const updateScheduleSlot = async (req: AuthRequest, res: Response) => {
 };
 
 /**
+ * 빈 셀에 배차(슬롯) 수동 추가 — 초안(DRAFT) 배차표 한정.
+ * POST /api/schedules/slots
+ */
+export const createScheduleSlot = async (req: AuthRequest, res: Response) => {
+  try {
+    const { scheduleId, driverId, date, routeId, busId, shift, isRestDay, notes } = req.body;
+    if (!scheduleId || !driverId || !date || !routeId) {
+      return res.status(400).json({ success: false, message: '배차표, 기사, 날짜, 노선은 필수입니다.' });
+    }
+
+    const schedule = await prisma.schedule.findFirst({
+      where: { id: Number(scheduleId), companyId: req.user!.companyId },
+      select: { id: true, status: true },
+    });
+    if (!schedule) {
+      return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
+    }
+    if (schedule.status === 'PUBLISHED') {
+      return res.status(400).json({ success: false, message: '발행된 배차표에는 배차를 추가할 수 없습니다. 먼저 초안으로 되돌려주세요.' });
+    }
+
+    const slotDate = new Date(date);
+    // 셀당 1개 — 같은 기사·날짜에 이미 슬롯이 있으면 거부 (ScheduleSlot 은 테넌트 모델 아님 → findFirst 안전)
+    const dup = await prisma.scheduleSlot.findFirst({
+      where: { scheduleId: schedule.id, driverId: Number(driverId), date: slotDate },
+      select: { id: true },
+    });
+    if (dup) {
+      return res.status(409).json({ success: false, message: '해당 기사의 그 날짜에는 이미 배차가 있습니다.' });
+    }
+
+    const slot = await prisma.scheduleSlot.create({
+      data: {
+        scheduleId: schedule.id,
+        driverId: Number(driverId),
+        routeId: Number(routeId),
+        busId: busId ? Number(busId) : null,
+        date: slotDate,
+        shift: shift || 'FULL_DAY',
+        isRestDay: !!isRestDay,
+        status: 'SCHEDULED',
+        isManualOverride: true,
+        overrideBy: req.user!.id,
+        notes: notes || null,
+      },
+    });
+
+    await createAuditLog({
+      req: req as any,
+      action: 'CREATE',
+      entityType: 'ScheduleSlot',
+      entityId: slot.id,
+      changes: {
+        driverId: { old: null, new: driverId },
+        routeId: { old: null, new: routeId },
+        date: { old: null, new: date },
+      },
+    });
+
+    return res.status(201).json({ success: true, data: slot });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+/**
  * 수동 오버라이드 — 법적 휴식시간 검증 포함
  * PUT /api/schedules/slots/:slotId/override
  */

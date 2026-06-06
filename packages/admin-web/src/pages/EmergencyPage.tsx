@@ -252,17 +252,21 @@ export default function EmergencyPage() {
             </p>
           </div>
         </div>
-        <div className="card flex items-center gap-3 py-4">
-          <div className="w-12 h-12 rounded-xl bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center shrink-0">
-            <ShieldAlert size={24} className="text-orange-600" />
-          </div>
-          <div>
-            <p className="text-[14px] text-gray-500 dark:text-gray-400">레벨 3+ 긴급</p>
-            <p className="text-2xl font-bold text-orange-600">
-              {openDrops.filter(d => d.escalationLevel >= 3).length}건
-            </p>
-          </div>
-        </div>
+        {(() => {
+          const d2Count = openDrops.filter(d => d.escalationLevel >= 1).length;
+          const hot = d2Count > 0;
+          return (
+            <div className={`card flex items-center gap-3 py-4 ${hot ? 'bg-red-600 border-red-700 dark:bg-red-700 dark:border-red-800 shadow-lg shadow-red-500/30' : ''}`}>
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${hot ? 'bg-red-500/80' : 'bg-red-100 dark:bg-red-900/30'}`}>
+                <Flame size={24} className={hot ? 'text-white' : 'text-red-600'} />
+              </div>
+              <div>
+                <p className={`text-[14px] ${hot ? 'text-red-50 font-semibold' : 'text-gray-500 dark:text-gray-400'}`}>D-2 긴급</p>
+                <p className={`text-2xl font-bold ${hot ? 'text-white' : 'text-red-600'}`}>{d2Count}건</p>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* ─── Section 1: Active Emergency Drops ─── */}
