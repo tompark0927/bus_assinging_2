@@ -68,7 +68,7 @@ export default function TermsPage() {
           </section>
 
           <p className="text-sm text-gray-500 pt-6 border-t border-gray-200 dark:border-white/10">
-            본 약관에 관한 문의: <a href="mailto:support@busync.co.kr" className="text-blue-600 hover:underline">support@busync.co.kr</a>
+            본 약관에 관한 문의: <a href="mailto:support.busync@gmail.com" className="text-blue-600 hover:underline">support.busync@gmail.com</a>
           </p>
         </div>
       </main>

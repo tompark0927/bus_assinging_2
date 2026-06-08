@@ -154,6 +154,9 @@ export const authApi = {
     api.post('/auth/forgot-password/reset', { companyCode, identifier, otp, newPassword }),
   // 회사 코드 찾기 (등록된 휴대폰으로 문자 발송)
   findCompanyCode: (phone: string) => api.post('/auth/find-company-code', { phone }),
+  // 회원가입 이메일 인증
+  sendEmailOtp: (email: string) => api.post('/auth/email/send-otp', { email }),
+  verifyEmailOtp: (email: string, otp: string) => api.post('/auth/email/verify-otp', { email, otp }),
   /**
    * 서버에 refreshToken 폐기 요청. 클라이언트 저장소 정리는 호출자가 별도 수행.
    * Best-effort: 네트워크 오류로 실패해도 클라이언트는 여전히 로그아웃됨.
@@ -301,6 +304,7 @@ export const companyApi = {
     adminEmail: string;
     adminPassword: string;
     adminPhone: string;
+    emailVerifyToken: string;
   }) => api.post('/companies/register', data),
   checkCode: (code: string) => api.get(`/companies/check-code/${code}`),
 };
@@ -403,6 +407,8 @@ export const onboardingApi = {
     form.append('file', file);
     return api.post('/onboarding/analyze-excel', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      // 강한 모델로 큰 배차표를 분석하면 30초를 넘을 수 있어 타임아웃을 넉넉히(3분).
+      timeout: 180000,
     });
   },
   confirmImport: (data: {

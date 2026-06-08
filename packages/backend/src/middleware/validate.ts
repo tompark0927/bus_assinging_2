@@ -178,6 +178,26 @@ export const authValidation = {
       .notEmpty().withMessage('전화번호는 필수입니다.')
       .matches(/^01[016789]-?\d{3,4}-?\d{4}$/).withMessage('유효한 전화번호 형식이어야 합니다. (01X-XXXX-XXXX)'),
   ]),
+
+  // 이메일 인증 — OTP 발송
+  sendEmailOtp: validate([
+    body('email')
+      .trim()
+      .notEmpty().withMessage('이메일은 필수입니다.')
+      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.'),
+  ]),
+
+  // 이메일 인증 — OTP 검증
+  verifyEmailOtp: validate([
+    body('email')
+      .trim()
+      .notEmpty().withMessage('이메일은 필수입니다.')
+      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.'),
+    body('otp')
+      .trim()
+      .notEmpty().withMessage('인증번호는 필수입니다.')
+      .isLength({ min: 4, max: 6 }).withMessage('인증번호는 4~6자리여야 합니다.'),
+  ]),
 };
 
 // ─────────────────────────────────────────────────────────────────

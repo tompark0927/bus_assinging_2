@@ -65,7 +65,7 @@ export default function PrivacyPage() {
             <h2 className="text-xl font-bold mb-2">7. 개인정보 보호책임자</h2>
             <p>
               개인정보 보호책임자: Busync 운영팀<br />
-              이메일: <a href="mailto:support@busync.co.kr" className="text-blue-600 hover:underline">support@busync.co.kr</a>
+              이메일: <a href="mailto:support.busync@gmail.com" className="text-blue-600 hover:underline">support.busync@gmail.com</a>
             </p>
           </section>
 

@@ -220,8 +220,8 @@ model OtpVerification {
 model Bus {
   id             Int       @id @default(autoincrement())
   companyId      Int       @default(1)
-  busNumber      String    @unique
-  plateNumber    String    @unique
+  busNumber      String    // 회사별로 유일 (전역 X)
+  plateNumber    String    // 회사별로 유일 (전역 X)
   model          String?
   year           Int?
   capacity       Int       @default(40)
@@ -244,6 +244,8 @@ model Bus {
   maintenanceRecords MaintenanceRecord[]
   dailyInspections   DailyInspection[]
 
+  @@unique([companyId, busNumber])
+  @@unique([companyId, plateNumber])
   @@index([companyId])
   @@index([routeId])
   @@index([companyId, isActive])
@@ -290,7 +292,7 @@ model MaintenanceRecord {
 model Route {
   id            Int      @id @default(autoincrement())
   companyId     Int      @default(1)
-  routeNumber   String   @unique
+  routeNumber   String   // 회사별로 유일 (전역 X) — 다른 회사도 같은 노선번호를 가질 수 있음
   name          String
   description   String?
   startPoint    String?
@@ -309,6 +311,7 @@ model Route {
   posts              Post[]
   driverPreferences  DriverPreference[]
 
+  @@unique([companyId, routeNumber])
   @@index([companyId])
   @@index([companyId, isActive])
 }

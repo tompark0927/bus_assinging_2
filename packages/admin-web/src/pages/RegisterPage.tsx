@@ -16,7 +16,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { companyApi } from '../services/api';
+import { companyApi, authApi } from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import CapsLockHint from '../components/CapsLockHint';
 
@@ -62,9 +62,56 @@ export default function RegisterPage() {
 
   const [errors, setErrors] = useState<Partial<Record<keyof typeof form, string>>>({});
 
+  // 이메일 인증 상태
+  const [otpSent, setOtpSent] = useState(false);     // 인증번호 발송됨
+  const [emailOtp, setEmailOtp] = useState('');      // 입력한 인증번호
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [emailVerifyToken, setEmailVerifyToken] = useState('');
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
+
   const set = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm((prev) => ({ ...prev, [field]: e.target.value }));
+    const value = e.target.value;
+    setForm((prev) => ({ ...prev, [field]: value }));
     setErrors((prev) => ({ ...prev, [field]: undefined }));
+    // 이메일을 바꾸면 기존 인증은 무효화 (토큰이 옛 이메일용이므로)
+    if (field === 'adminEmail') {
+      setEmailVerified(false);
+      setEmailVerifyToken('');
+      setOtpSent(false);
+      setEmailOtp('');
+    }
+  };
+
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.adminEmail.trim());
+
+  const handleSendEmailOtp = async () => {
+    if (!emailValid) { setErrors((p) => ({ ...p, adminEmail: '올바른 이메일을 입력해주세요.' })); return; }
+    setSendingOtp(true);
+    try {
+      await authApi.sendEmailOtp(form.adminEmail.trim());
+      setOtpSent(true);
+      toast.success('인증번호를 이메일로 보냈습니다. 메일함을 확인해주세요.');
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || '인증번호 발송에 실패했습니다.');
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  const handleVerifyEmailOtp = async () => {
+    if (!emailOtp.trim()) return;
+    setVerifyingOtp(true);
+    try {
+      const res = await authApi.verifyEmailOtp(form.adminEmail.trim(), emailOtp.trim());
+      setEmailVerifyToken(res.data.data.emailVerifyToken);
+      setEmailVerified(true);
+      toast.success('이메일 인증 완료!');
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || '인증번호가 올바르지 않습니다.');
+    } finally {
+      setVerifyingOtp(false);
+    }
   };
 
   const strength = useMemo(() => getPasswordStrength(form.adminPassword), [form.adminPassword]);
@@ -83,6 +130,7 @@ export default function RegisterPage() {
     if (!form.adminName.trim()) errs.adminName = '이름을 입력해주세요.';
     if (!form.adminEmail.trim()) errs.adminEmail = '이메일을 입력해주세요.';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.adminEmail)) errs.adminEmail = '올바른 이메일 형식이 아닙니다.';
+    else if (!emailVerified) errs.adminEmail = '이메일 인증을 완료해주세요.';
     if (!form.adminPhone.trim()) errs.adminPhone = '전화번호를 입력해주세요.';
     if (form.adminPassword.length < 8) errs.adminPassword = '비밀번호는 8자 이상이어야 합니다.';
     if (form.adminPassword !== form.adminPasswordConfirm) errs.adminPasswordConfirm = '비밀번호가 일치하지 않습니다.';
@@ -101,6 +149,7 @@ export default function RegisterPage() {
         adminEmail: form.adminEmail,
         adminPassword: form.adminPassword,
         adminPhone: form.adminPhone,
+        emailVerifyToken,
       });
       const { token, user, company } = res.data.data;
       setAuth(user, token);
@@ -246,14 +295,57 @@ export default function RegisterPage() {
                     <Mail size={14} className="inline mr-1 -mt-0.5" />
                     이메일 <span className="text-red-500">*</span>
                   </label>
-                  <input
-                    type="email"
-                    value={form.adminEmail}
-                    onChange={set('adminEmail')}
-                    placeholder="name@company.com"
-                    className={inputCls('adminEmail')}
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="email"
+                      value={form.adminEmail}
+                      onChange={set('adminEmail')}
+                      placeholder="name@company.com"
+                      disabled={emailVerified}
+                      className={`${inputCls('adminEmail')} flex-1 ${emailVerified ? 'opacity-70' : ''}`}
+                    />
+                    {emailVerified ? (
+                      <span className="shrink-0 inline-flex items-center gap-1.5 px-4 rounded-xl bg-green-50 dark:bg-green-500/10 border border-green-300 dark:border-green-500/30 text-green-700 dark:text-green-300 text-sm font-semibold">
+                        <CheckCircle2 size={16} /> 인증됨
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleSendEmailOtp}
+                        disabled={!emailValid || sendingOtp}
+                        className="shrink-0 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold transition-colors whitespace-nowrap"
+                      >
+                        {sendingOtp ? '발송 중...' : otpSent ? '재전송' : '인증'}
+                      </button>
+                    )}
+                  </div>
                   {errors.adminEmail && <p className="text-red-500 text-xs mt-1.5">{errors.adminEmail}</p>}
+
+                  {/* 인증번호 입력 (발송 후, 미인증 상태에서만) */}
+                  {otpSent && !emailVerified && (
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={emailOtp}
+                        onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, ''))}
+                        placeholder="인증번호 6자리"
+                        className="flex-1 bg-white dark:bg-white/5 border border-gray-300 dark:border-white/10 focus:border-blue-500 rounded-xl px-4 py-3 text-gray-900 dark:text-white tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleVerifyEmailOtp}
+                        disabled={emailOtp.length < 4 || verifyingOtp}
+                        className="shrink-0 px-5 rounded-xl bg-gray-800 dark:bg-white/10 hover:bg-gray-900 dark:hover:bg-white/20 disabled:opacity-50 text-white text-sm font-semibold transition-colors"
+                      >
+                        {verifyingOtp ? '확인 중...' : '확인'}
+                      </button>
+                    </div>
+                  )}
+                  {otpSent && !emailVerified && (
+                    <p className="text-xs text-gray-400 mt-1.5">메일로 받은 6자리 인증번호를 입력하세요. (5분 유효, 안 오면 스팸함 확인)</p>
+                  )}
                 </div>
 
                 <div>
