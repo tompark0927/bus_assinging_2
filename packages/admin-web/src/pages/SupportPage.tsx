@@ -64,9 +64,9 @@ export default function SupportPage() {
             icon={<Mail size={22} />}
             tone="emerald"
             title="이메일"
-            primary="support@busync.co.kr"
+            primary="support.busync@gmail.com"
             sub="기능 요청·버그 리포트 환영"
-            href="mailto:support@busync.co.kr"
+            href="mailto:support.busync@gmail.com"
             cta="메일 보내기"
           />
           <ChannelCard
@@ -110,12 +110,14 @@ export default function SupportPage() {
       {/* Resource shortcuts */}
       <section className="pb-16">
         <div className="max-w-5xl mx-auto px-6 grid sm:grid-cols-2 gap-4">
+          {/* 요금제 페이지(FAQ 포함) 임시 숨김 — 복구 시 아래 카드 주석 해제
           <ResourceLink
             icon={<HelpCircle size={20} />}
             title="자주 묻는 질문"
             desc="결제·요금제·운영 문의"
             to="/pricing#faq"
           />
+          */}
           <ResourceLink
             icon={<Bug size={20} />}
             title="버그 리포트"

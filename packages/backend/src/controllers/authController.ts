@@ -662,6 +662,86 @@ export const findCompanyCode = async (req: Request, res: Response) => {
 };
 
 // ─────────────────────────────────────────
+// 6. 이메일 인증 (회원가입용) — OTP 발송 / 검증
+//    검증 성공 시 30분짜리 emailVerifyToken(JWT) 발급 → registerCompany 가 이걸 확인한다.
+// ─────────────────────────────────────────
+
+// 6a. 이메일 인증번호 발송
+export const sendEmailOtp = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: '이메일을 입력해주세요.' });
+    const emailStr = String(email).trim().toLowerCase();
+
+    // 직전 1분 내 발송 제한
+    const recent = await prisma.otpVerification.findFirst({
+      where: { email: emailStr, used: false, createdAt: { gte: new Date(Date.now() - 60_000) } },
+    });
+    if (recent) return res.status(429).json({ success: false, message: '인증번호는 1분에 한 번만 요청할 수 있습니다.' });
+
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + 5 * 60_000);
+    await prisma.otpVerification.create({ data: { email: emailStr, otp, expiresAt } });
+    await sendEmail(emailStr, '[Busync] 이메일 인증번호', otpEmailHtml(otp), `Busync 이메일 인증번호: ${otp} (5분 유효)`);
+
+    logger.info('이메일 인증 OTP 발송', { email: maskEmail(emailStr) });
+    return res.json({ success: true, message: '인증번호를 이메일로 발송했습니다.' });
+  } catch (error) {
+    logger.error('이메일 인증 OTP 발송 오류', { error });
+    return res.status(500).json({ success: false, message: '인증번호 발송에 실패했습니다.' });
+  }
+};
+
+// 6b. 이메일 인증번호 검증 → 인증 토큰 발급
+export const verifyEmailOtp = async (req: Request, res: Response) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ success: false, message: '이메일과 인증번호를 입력해주세요.' });
+    const emailStr = String(email).trim().toLowerCase();
+
+    const verifyResult = await prisma.$transaction(async (tx) => {
+      const found = await tx.otpVerification.findFirst({
+        where: { email: emailStr, used: false, expiresAt: { gte: new Date() } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!found) return { ok: false, locked: false };
+      if (found.attempts >= MAX_OTP_ATTEMPTS) {
+        await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
+        return { ok: false, locked: true };
+      }
+      if (found.otp === otp) {
+        await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
+        return { ok: true, locked: false };
+      }
+      const nextAttempts = found.attempts + 1;
+      await tx.otpVerification.update({
+        where: { id: found.id },
+        data: { attempts: nextAttempts, used: nextAttempts >= MAX_OTP_ATTEMPTS },
+      });
+      return { ok: false, locked: nextAttempts >= MAX_OTP_ATTEMPTS };
+    });
+
+    if (!verifyResult.ok) {
+      if (verifyResult.locked) {
+        return res.status(401).json({ success: false, message: '인증 시도가 너무 많습니다. 인증번호를 새로 발송해주세요.' });
+      }
+      return res.status(401).json({ success: false, message: '인증번호가 올바르지 않거나 만료되었습니다.' });
+    }
+
+    // 30분 유효 이메일 인증 토큰 (registerCompany 가 검증)
+    const emailVerifyToken = jwt.sign(
+      { email: emailStr, purpose: 'email_verify' },
+      process.env.JWT_SECRET!,
+      { expiresIn: '30m' } as jwt.SignOptions,
+    );
+    return res.json({ success: true, message: '이메일 인증이 완료되었습니다.', data: { emailVerifyToken } });
+  } catch (error) {
+    logger.error('이메일 인증 검증 오류', { error });
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+// ─────────────────────────────────────────
 // 비밀번호 변경 (본인)
 // ─────────────────────────────────────────
 export const changePassword = async (req: AuthRequest, res: Response) => {

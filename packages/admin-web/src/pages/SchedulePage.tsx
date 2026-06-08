@@ -32,6 +32,7 @@ import { format, getDaysInMonth } from 'date-fns';
 import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
 import PageHeader from '../components/PageHeader';
+import { useAuthStore } from '../store/authStore';
 
 // ─────────────────────────────────────────
 // 상수 & 타입
@@ -172,19 +173,23 @@ export default function SchedulePage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPrintOptions, setShowPrintOptions] = useState(false);
   const navigate = useNavigate();
+  const companyId = useAuthStore((s) => s.user?.companyId);
 
-  // 첫 배차 nudge — 정책 한 번도 저장 안 했고 아직 배차표가 없으면 설정 보러 가도록 안내
+  // 첫 배차 안내(nudge)는 "계정(회사)당 딱 한 번"만 뜬다.
+  //   - 키를 회사별로 분리 (브라우저 전역 X) → 계정 전환 시 각 계정마다 한 번씩
+  //   - nudge 가 뜨는 순간 '봤음'으로 기록 → 설정에 갔다 와도 다시 안 뜸(무한 반복 방지)
+  const nudgeSeenKey = `busync.policyNudgeSeen.${companyId ?? 'unknown'}`;
   const openGenerate = useCallback(() => {
-    let configured = false;
-    try { configured = localStorage.getItem('busync.policyConfigured') === '1'; } catch { /* ignore */ }
-    if (!configured) {
-      setShowPolicyNudge(true);
-    } else {
+    let seen = false;
+    try { seen = localStorage.getItem(nudgeSeenKey) === '1'; } catch { /* ignore */ }
+    if (seen) {
       setShowGenerateModal(true);
+    } else {
+      try { localStorage.setItem(nudgeSeenKey, '1'); } catch { /* ignore */ }
+      setShowPolicyNudge(true);
     }
-  }, []);
+  }, [nudgeSeenKey]);
   const proceedToGenerate = useCallback(() => {
-    try { localStorage.setItem('busync.policyConfigured', '1'); } catch { /* ignore */ }
     setShowPolicyNudge(false);
     setShowGenerateModal(true);
   }, []);
