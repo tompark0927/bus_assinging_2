@@ -165,7 +165,7 @@ export default function LandingPage() {
                 <span className="w-3 h-3 rounded-full bg-red-400" />
                 <span className="w-3 h-3 rounded-full bg-yellow-400" />
                 <span className="w-3 h-3 rounded-full bg-green-400" />
-                <span className="ml-3 text-xs text-gray-400 font-mono">admin.busync.co.kr</span>
+                <span className="ml-3 text-xs text-gray-400 font-mono">admin.busync.kr</span>
               </div>
               <div className="p-6 md:p-10 grid grid-cols-3 md:grid-cols-7 gap-2 md:gap-3">
                 {/* Fake schedule grid */}

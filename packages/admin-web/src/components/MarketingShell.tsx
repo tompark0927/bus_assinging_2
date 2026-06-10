@@ -15,7 +15,8 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: '기능', to: 'features', scroll: true },
-  { label: '요금제', to: '/pricing' },
+  // 요금제 페이지 임시 숨김 (기능 준비 중) — 복구 시 아래 줄 주석 해제
+  // { label: '요금제', to: '/pricing' },
   { label: '고객 지원', to: '/support' },
 ];
 
@@ -122,7 +123,8 @@ export function MarketingFooter() {
           {/* Product */}
           <FooterColumn title="제품">
             <FooterLink onClick={() => scroll('features')}>기능 소개</FooterLink>
-            <FooterLink onClick={() => navigate('/pricing')}>요금제</FooterLink>
+            {/* 요금제 페이지 임시 숨김 (기능 준비 중) — 복구 시 아래 줄 주석 해제 */}
+            {/* <FooterLink onClick={() => navigate('/pricing')}>요금제</FooterLink> */}
           </FooterColumn>
 
           {/* Support */}
@@ -135,7 +137,7 @@ export function MarketingFooter() {
           {/* Company */}
           <FooterColumn title="회사">
             <FooterText>인천광역시 남동구</FooterText>
-            <FooterText>support@busync.co.kr</FooterText>
+            <FooterText>support.busync@gmail.com</FooterText>
             <FooterText>032-000-0000</FooterText>
           </FooterColumn>
         </div>

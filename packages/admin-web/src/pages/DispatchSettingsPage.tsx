@@ -13,6 +13,7 @@ import {
 import { companyPolicyApi } from '../services/api';
 import toast from 'react-hot-toast';
 import PageHeader from '../components/PageHeader';
+import { useAuthStore } from '../store/authStore';
 
 /* ────────────────────────────────────────────
    Types — backend `agents/_solvers/types.ts` 와 형식 일치
@@ -105,6 +106,7 @@ const PRESET_VILLAGE_1SHIFT: CompanyPolicy = {
 
 export default function DispatchSettingsPage() {
   const queryClient = useQueryClient();
+  const companyId = useAuthStore((s) => s.user?.companyId);
   const { data, isLoading } = useQuery<{ policy: CompanyPolicy; isDefault: boolean }>({
     queryKey: ['company-policy'],
     queryFn: () => companyPolicyApi.get().then((r) => r.data.data),
@@ -123,7 +125,8 @@ export default function DispatchSettingsPage() {
     mutationFn: (p: CompanyPolicy) => companyPolicyApi.update(p as unknown as Record<string, unknown>),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['company-policy'] });
-      try { localStorage.setItem('busync.policyConfigured', '1'); } catch { /* ignore */ }
+      // 정책을 직접 저장했으면 첫 배차 안내(nudge)도 이미 본 것으로 간주 — 계정별 키
+      try { localStorage.setItem(`busync.policyNudgeSeen.${companyId ?? 'unknown'}`, '1'); } catch { /* ignore */ }
       toast.success('정책이 저장되었습니다.');
       setDirty(false);
     },

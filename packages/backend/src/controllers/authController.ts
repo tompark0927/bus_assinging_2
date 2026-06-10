@@ -6,6 +6,7 @@ import axios from 'axios';
 import { prisma } from '../utils/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { sendSms, generateOtp } from '../services/smsService';
+import { sendEmail, otpEmailHtml } from '../services/emailService';
 import logger from '../utils/logger';
 
 // ─────────────────────────────────────────
@@ -52,6 +53,17 @@ function maskPhone(phone: string | null | undefined): string {
   const d = String(phone ?? '').replace(/\D/g, '');
   if (d.length < 7) return '***';
   return `${d.slice(0, 3)}-****-${d.slice(-4)}`;
+}
+
+// 이메일 마스킹: "tompark0927@gmail.com" → "to****@gmail.com"
+function maskEmail(email: string | null | undefined): string {
+  const e = String(email ?? '');
+  const at = e.indexOf('@');
+  if (at < 1) return '***';
+  const local = e.slice(0, at);
+  const domain = e.slice(at);
+  const head = local.slice(0, Math.min(2, local.length));
+  return `${head}****${domain}`;
 }
 
 // ─────────────────────────────────────────
@@ -479,7 +491,7 @@ async function resolveUserByIdentifier(companyId: number, identifier: string) {
   });
 }
 
-// 4a. 비밀번호 재설정 — OTP 발송
+// 4a. 비밀번호 재설정 — OTP 발송 (이메일)
 export const forgotPasswordSendOtp = async (req: Request, res: Response) => {
   try {
     const { companyCode, identifier } = req.body;
@@ -496,29 +508,30 @@ export const forgotPasswordSendOtp = async (req: Request, res: Response) => {
     if (!user) {
       return res.status(404).json({ success: false, message: '일치하는 계정을 찾을 수 없습니다. 회사 코드와 아이디를 확인해주세요.' });
     }
-    if (!user.phone) {
+    if (!user.email) {
       return res.status(400).json({
         success: false,
-        message: '등록된 휴대폰 번호가 없어 본인인증을 진행할 수 없습니다. 회사 관리자에게 비밀번호 재설정을 요청해주세요.',
+        message: '등록된 이메일이 없어 본인인증을 진행할 수 없습니다. 회사 관리자에게 비밀번호 재설정을 요청해주세요.',
       });
     }
+    const userEmail = user.email;
 
     // 직전 1분 내 발송 제한
     const recent = await prisma.otpVerification.findFirst({
-      where: { phone: user.phone, used: false, createdAt: { gte: new Date(Date.now() - 60_000) } },
+      where: { email: userEmail, used: false, createdAt: { gte: new Date(Date.now() - 60_000) } },
     });
     if (recent) return res.status(429).json({ success: false, message: '인증번호는 1분에 한 번만 요청할 수 있습니다.' });
 
     const otp = generateOtp();
     const expiresAt = new Date(Date.now() + 5 * 60_000);
-    await prisma.otpVerification.create({ data: { phone: user.phone, otp, expiresAt } });
-    await sendSms(user.phone, `[Busync] 비밀번호 재설정 인증번호: ${otp} (5분 유효)`);
+    await prisma.otpVerification.create({ data: { email: userEmail, otp, expiresAt } });
+    await sendEmail(userEmail, '[Busync] 비밀번호 재설정 인증번호', otpEmailHtml(otp), `Busync 비밀번호 재설정 인증번호: ${otp} (5분 유효)`);
 
-    logger.info('비밀번호 재설정 OTP 발송', { userId: user.id, companyId: company.id });
+    logger.info('비밀번호 재설정 OTP 발송(이메일)', { userId: user.id, companyId: company.id });
     return res.json({
       success: true,
-      message: '등록된 휴대폰으로 인증번호를 발송했습니다.',
-      data: { phoneHint: maskPhone(user.phone) },
+      message: '등록된 이메일로 인증번호를 발송했습니다.',
+      data: { emailHint: maskEmail(userEmail) },
     });
   } catch (error) {
     logger.error('비밀번호 재설정 OTP 발송 오류', { error });
@@ -540,15 +553,15 @@ export const forgotPasswordReset = async (req: Request, res: Response) => {
     }
 
     const user = await resolveUserByIdentifier(company.id, identifier);
-    if (!user || !user.phone) {
+    if (!user || !user.email) {
       return res.status(404).json({ success: false, message: '일치하는 계정을 찾을 수 없습니다.' });
     }
-    const userPhone = user.phone;
+    const userEmail = user.email;
 
     // OTP 검증 + 시도 카운트 (verifyPhoneOtp 와 동일한 원자적 패턴)
     const verifyResult = await prisma.$transaction(async (tx) => {
       const found = await tx.otpVerification.findFirst({
-        where: { phone: userPhone, used: false, expiresAt: { gte: new Date() } },
+        where: { email: userEmail, used: false, expiresAt: { gte: new Date() } },
         orderBy: { createdAt: 'desc' },
       });
       if (!found) return { ok: false, locked: false };
@@ -645,6 +658,86 @@ export const findCompanyCode = async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('회사 코드 찾기 오류', { error });
     return res.status(500).json({ success: false, message: '요청 처리에 실패했습니다.' });
+  }
+};
+
+// ─────────────────────────────────────────
+// 6. 이메일 인증 (회원가입용) — OTP 발송 / 검증
+//    검증 성공 시 30분짜리 emailVerifyToken(JWT) 발급 → registerCompany 가 이걸 확인한다.
+// ─────────────────────────────────────────
+
+// 6a. 이메일 인증번호 발송
+export const sendEmailOtp = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: '이메일을 입력해주세요.' });
+    const emailStr = String(email).trim().toLowerCase();
+
+    // 직전 1분 내 발송 제한
+    const recent = await prisma.otpVerification.findFirst({
+      where: { email: emailStr, used: false, createdAt: { gte: new Date(Date.now() - 60_000) } },
+    });
+    if (recent) return res.status(429).json({ success: false, message: '인증번호는 1분에 한 번만 요청할 수 있습니다.' });
+
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + 5 * 60_000);
+    await prisma.otpVerification.create({ data: { email: emailStr, otp, expiresAt } });
+    await sendEmail(emailStr, '[Busync] 이메일 인증번호', otpEmailHtml(otp), `Busync 이메일 인증번호: ${otp} (5분 유효)`);
+
+    logger.info('이메일 인증 OTP 발송', { email: maskEmail(emailStr) });
+    return res.json({ success: true, message: '인증번호를 이메일로 발송했습니다.' });
+  } catch (error) {
+    logger.error('이메일 인증 OTP 발송 오류', { error });
+    return res.status(500).json({ success: false, message: '인증번호 발송에 실패했습니다.' });
+  }
+};
+
+// 6b. 이메일 인증번호 검증 → 인증 토큰 발급
+export const verifyEmailOtp = async (req: Request, res: Response) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ success: false, message: '이메일과 인증번호를 입력해주세요.' });
+    const emailStr = String(email).trim().toLowerCase();
+
+    const verifyResult = await prisma.$transaction(async (tx) => {
+      const found = await tx.otpVerification.findFirst({
+        where: { email: emailStr, used: false, expiresAt: { gte: new Date() } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!found) return { ok: false, locked: false };
+      if (found.attempts >= MAX_OTP_ATTEMPTS) {
+        await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
+        return { ok: false, locked: true };
+      }
+      if (found.otp === otp) {
+        await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
+        return { ok: true, locked: false };
+      }
+      const nextAttempts = found.attempts + 1;
+      await tx.otpVerification.update({
+        where: { id: found.id },
+        data: { attempts: nextAttempts, used: nextAttempts >= MAX_OTP_ATTEMPTS },
+      });
+      return { ok: false, locked: nextAttempts >= MAX_OTP_ATTEMPTS };
+    });
+
+    if (!verifyResult.ok) {
+      if (verifyResult.locked) {
+        return res.status(401).json({ success: false, message: '인증 시도가 너무 많습니다. 인증번호를 새로 발송해주세요.' });
+      }
+      return res.status(401).json({ success: false, message: '인증번호가 올바르지 않거나 만료되었습니다.' });
+    }
+
+    // 30분 유효 이메일 인증 토큰 (registerCompany 가 검증)
+    const emailVerifyToken = jwt.sign(
+      { email: emailStr, purpose: 'email_verify' },
+      process.env.JWT_SECRET!,
+      { expiresIn: '30m' } as jwt.SignOptions,
+    );
+    return res.json({ success: true, message: '이메일 인증이 완료되었습니다.', data: { emailVerifyToken } });
+  } catch (error) {
+    logger.error('이메일 인증 검증 오류', { error });
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
   }
 };
 
