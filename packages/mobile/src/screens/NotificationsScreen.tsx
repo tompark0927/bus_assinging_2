@@ -60,10 +60,11 @@ export default function NotificationsScreen() {
 
   const { data, refetch, isRefetching, isLoading } = useQuery({
     queryKey: ['notifications'],
-    queryFn: () => notificationsApi.list().then(r => r.data.data),
+    // API 응답 봉투: { success, data: [...알림], pagination, unreadCount }
+    queryFn: () => notificationsApi.list().then(r => r.data),
   });
 
-  const notifications: NotificationItem[] = data?.notifications || [];
+  const notifications: NotificationItem[] = data?.data || [];
   const unreadCount: number = data?.unreadCount || 0;
   const grouped = groupByDate(notifications, '오늘', '어제');
 

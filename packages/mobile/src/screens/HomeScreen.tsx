@@ -60,7 +60,8 @@ export default function HomeScreen() {
 
   const { data: notifData } = useQuery({
     queryKey: ['notifications'],
-    queryFn: () => notificationsApi.list().then(r => r.data.data),
+    // NotificationsScreen 과 같은 queryKey → 반드시 같은 응답 봉투 형태로 반환해야 캐시 충돌이 없다.
+    queryFn: () => notificationsApi.list().then(r => r.data),
     refetchInterval: 30000,
   });
 
