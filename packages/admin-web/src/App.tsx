@@ -14,7 +14,8 @@ const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
 const FindCompanyCodePage = lazy(() => import('./pages/FindCompanyCodePage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
-const PricingPage = lazy(() => import('./pages/PricingPage'));
+// 요금제 페이지는 기능 준비 중이라 임시 숨김 (추후 복구) — 라우트/링크도 함께 비활성화됨
+// const PricingPage = lazy(() => import('./pages/PricingPage'));
 const SupportPage = lazy(() => import('./pages/SupportPage'));
 const TermsPage = lazy(() => import('./pages/TermsPage'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
@@ -46,7 +47,8 @@ export default function App() {
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/find-company-code" element={<FindCompanyCodePage />} />
             <Route path="/register" element={<RegisterPage />} />
-            <Route path="/pricing" element={<PricingPage />} />
+            {/* 요금제 페이지 임시 숨김 — 직접 접근 시 홈으로 리다이렉트. 복구 시 위 import 주석 해제 후 element={<PricingPage />} 로 되돌리기 */}
+            <Route path="/pricing" element={<Navigate to="/" replace />} />
             <Route path="/support" element={<SupportPage />} />
             <Route path="/terms" element={<TermsPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />

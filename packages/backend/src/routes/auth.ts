@@ -4,6 +4,7 @@ import {
   getMe, updatePushToken, changePassword,
   refreshAccessToken, logout, forceLogout,
   forgotPasswordSendOtp, forgotPasswordReset, findCompanyCode,
+  sendEmailOtp, verifyEmailOtp,
 } from '../controllers/authController';
 import { authenticate, requireAdmin } from '../middleware/auth';
 import { loginLimiter, otpSendLimiter } from '../middleware/rateLimits';
@@ -71,6 +72,10 @@ router.post('/phone/verify', loginLimiter, ...authValidation.verifyPhoneOtp, ver
 router.post('/forgot-password/send-otp', otpSendLimiter, ...authValidation.forgotPasswordSendOtp, forgotPasswordSendOtp);
 router.post('/forgot-password/reset', loginLimiter, ...authValidation.forgotPasswordReset, forgotPasswordReset);
 router.post('/find-company-code', otpSendLimiter, ...authValidation.findCompanyCode, findCompanyCode);
+
+// 회원가입 이메일 인증 (OTP 발송 1분 1회 / 검증)
+router.post('/email/send-otp', otpSendLimiter, ...authValidation.sendEmailOtp, sendEmailOtp);
+router.post('/email/verify-otp', loginLimiter, ...authValidation.verifyEmailOtp, verifyEmailOtp);
 
 /**
  * @swagger

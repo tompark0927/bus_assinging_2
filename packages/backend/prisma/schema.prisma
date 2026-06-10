@@ -205,7 +205,8 @@ model RefreshToken {
 
 model OtpVerification {
   id        Int      @id @default(autoincrement())
-  phone     String
+  phone     String?  // 전화번호 OTP(기사 앱 로그인)용
+  email     String?  // 이메일 OTP(관리자 비밀번호 재설정)용
   otp       String
   expiresAt DateTime
   used      Boolean  @default(false)
@@ -213,13 +214,14 @@ model OtpVerification {
   createdAt DateTime @default(now())
 
   @@index([phone])
+  @@index([email])
 }
 
 model Bus {
   id             Int       @id @default(autoincrement())
   companyId      Int       @default(1)
-  busNumber      String    @unique
-  plateNumber    String    @unique
+  busNumber      String    // 회사별로 유일 (전역 X)
+  plateNumber    String    // 회사별로 유일 (전역 X)
   model          String?
   year           Int?
   capacity       Int       @default(40)
@@ -242,6 +244,8 @@ model Bus {
   maintenanceRecords MaintenanceRecord[]
   dailyInspections   DailyInspection[]
 
+  @@unique([companyId, busNumber])
+  @@unique([companyId, plateNumber])
   @@index([companyId])
   @@index([routeId])
   @@index([companyId, isActive])
@@ -288,7 +292,7 @@ model MaintenanceRecord {
 model Route {
   id            Int      @id @default(autoincrement())
   companyId     Int      @default(1)
-  routeNumber   String   @unique
+  routeNumber   String   // 회사별로 유일 (전역 X) — 다른 회사도 같은 노선번호를 가질 수 있음
   name          String
   description   String?
   startPoint    String?
@@ -307,6 +311,7 @@ model Route {
   posts              Post[]
   driverPreferences  DriverPreference[]
 
+  @@unique([companyId, routeNumber])
   @@index([companyId])
   @@index([companyId, isActive])
 }
