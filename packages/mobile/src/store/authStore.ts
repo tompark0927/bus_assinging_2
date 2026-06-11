@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../services/serverUrl';
+import { queryClient } from '../lib/queryClient';
 
 // Inlined to avoid circular import (authStore → notifications → api → authStore)
 const PUSH_KEYS = ['push:pendingToken', 'push:registeredToken'];
@@ -53,6 +54,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoaded: false,
 
   setAuth: async (user, token, refreshToken?) => {
+    // 계정 전환 시 이전 사용자의 캐시(잔여 휴가, 배차표, 알림 등)가 보이지 않도록 전부 비운다.
+    queryClient.clear();
     await AsyncStorage.setItem('token', token);
     await AsyncStorage.setItem('user', JSON.stringify(user));
     if (refreshToken) {
@@ -99,6 +102,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       'user',
       ...PUSH_KEYS,
     ]);
+    queryClient.clear(); // react-query 캐시도 비워 다음 계정에 데이터가 새지 않게
     set({ user: null, token: null });
   },
 }));
