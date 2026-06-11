@@ -230,6 +230,10 @@ export const userValidation = {
       .optional()
       .isIn(['MAIN', 'SPARE'])
       .withMessage('기사 유형은 MAIN 또는 SPARE여야 합니다.'),
+    body('vacationDays')
+      .optional()
+      .isInt({ min: 0, max: 366 }).withMessage('휴가 일수는 0~366 사이의 정수여야 합니다.')
+      .toInt(),
     passwordValidator('password', false),
   ]),
 
@@ -255,6 +259,10 @@ export const userValidation = {
     body('isActive')
       .optional()
       .isBoolean().withMessage('활성 상태는 boolean이어야 합니다.'),
+    body('vacationDays')
+      .optional()
+      .isInt({ min: 0, max: 366 }).withMessage('휴가 일수는 0~366 사이의 정수여야 합니다.')
+      .toInt(),
   ]),
 
   delete: validate([

@@ -32,6 +32,8 @@ interface Driver {
   driverType: 'MAIN' | 'SPARE' | null;
   assignedBusNumber: string | null;
   isActive: boolean;
+  vacationDays: number; // 보유 휴가 (연간)
+  vacationUsed?: number; // 올해 사용(비반려 휴무요청 수) — 서버 계산
   licenseExpiresAt?: string | null;
   qualificationExpiresAt?: string | null;
 }
@@ -156,7 +158,7 @@ function DriversTab() {
                 <Th>전화번호</Th>
                 <Th>구분</Th>
                 <Th>담당 버스</Th>
-                <Th>상태</Th>
+                <Th>남은 휴가</Th>
                 <Th align="right">액션</Th>
               </tr>
             </thead>
@@ -173,7 +175,12 @@ function DriversTab() {
                   </Td>
                   <Td>{d.assignedBusNumber || '-'}</Td>
                   <Td>
-                    <Badge color={d.isActive ? 'green' : 'gray'}>{d.isActive ? '활성' : '비활성'}</Badge>
+                    <span
+                      title={`보유 ${d.vacationDays}일 · 올해 사용 ${d.vacationUsed ?? 0}일`}
+                      className={`font-semibold ${(d.vacationDays - (d.vacationUsed ?? 0)) <= 0 ? 'text-red-500' : 'text-gray-900 dark:text-gray-100'}`}
+                    >
+                      {d.vacationDays - (d.vacationUsed ?? 0)}일
+                    </span>
                   </Td>
                   <Td align="right">
                     <div className="inline-flex gap-1">
@@ -214,6 +221,12 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
   const [driverType, setDriverType] = useState<'MAIN' | 'SPARE'>((initial?.driverType as 'MAIN' | 'SPARE') || 'MAIN');
   const [assignedBusNumber, setAssignedBusNumber] = useState(initial?.assignedBusNumber || '');
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
+  // 폼은 '잔여 휴가' 기준으로 입력받는다. 저장 시 보유 = 잔여 + 올해 사용분으로 환산
+  // → 입력한 숫자가 그대로 목록의 '남은 휴가'로 표시된다.
+  const vacationUsed = initial?.vacationUsed ?? 0;
+  const [vacationRemaining, setVacationRemaining] = useState(
+    String((initial?.vacationDays ?? 15) - vacationUsed),
+  );
 
   const save = useMutation({
     mutationFn: () => {
@@ -225,6 +238,7 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
         driverType,
         assignedBusNumber: assignedBusNumber.trim() || null,
         isActive,
+        vacationDays: Math.max(0, parseInt(vacationRemaining, 10) || 0) + vacationUsed,
       };
       return isEdit ? usersApi.update(initial!.id, payload) : usersApi.create(payload);
     },
@@ -253,6 +267,16 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
       </div>
       <FormField label="담당 버스 번호" hint="메인 기사만. 같은 버스에 정·부 2명을 같은 번호로 연결.">
         <Input value={assignedBusNumber} onChange={setAssignedBusNumber} placeholder="2292" />
+      </FormField>
+      <FormField label="잔여 휴가 일수" hint="휴무 신청 시 자동으로 차감됩니다.">
+        <input
+          type="number"
+          min={0}
+          max={366}
+          className={inputCls}
+          value={vacationRemaining}
+          onChange={(e) => setVacationRemaining(e.target.value)}
+        />
       </FormField>
       <label className="flex items-center gap-2 text-[15px] text-gray-700 dark:text-gray-300">
         <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />

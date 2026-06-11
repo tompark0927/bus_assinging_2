@@ -244,6 +244,7 @@ export const schedulesApi = {
 
 export const dayOffApi = {
   list: () => api.get('/dayoff'),
+  balance: () => api.get('/dayoff/balance'), // { total, used, remaining }
   create: (date: string, reason?: string) =>
     api.post('/dayoff', { date, reason }),
   cancel: (id: number) => api.delete(`/dayoff/${id}`),
