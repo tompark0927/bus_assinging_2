@@ -473,20 +473,13 @@ export const verifyPhoneOtp = async (req: Request, res: Response) => {
 //        (2) OTP + 새 비밀번호 제출 → 검증 후 비밀번호 교체 + 전 세션 무효화 + 즉시 로그인
 // ─────────────────────────────────────────
 
-// 회사코드 + 아이디로 사용자 1명을 해석 (login 의 OR 조건과 동일 규칙 재사용)
-async function resolveUserByIdentifier(companyId: number, identifier: string) {
-  const idStr = String(identifier).trim();
-  const digits = idStr.replace(/\D/g, '');
+// 비밀번호 재설정은 이메일 전용 — 회사코드 + 이메일로 사용자 1명을 해석.
+async function resolveUserByEmail(companyId: number, email: string) {
   return prisma.user.findFirst({
     where: {
       companyId,
       isActive: true,
-      OR: [
-        { email: idStr },
-        { employeeId: idStr },
-        { phone: idStr },
-        ...(digits ? [{ phone: digits }] : []),
-      ],
+      email: String(email).trim(),
     },
   });
 }
@@ -496,7 +489,7 @@ export const forgotPasswordSendOtp = async (req: Request, res: Response) => {
   try {
     const { companyCode, identifier } = req.body;
     if (!companyCode || !identifier) {
-      return res.status(400).json({ success: false, message: '회사 코드와 아이디(이메일/사원번호)를 입력해주세요.' });
+      return res.status(400).json({ success: false, message: '회사 코드와 이메일을 입력해주세요.' });
     }
 
     const company = await prisma.company.findUnique({ where: { code: companyCode } });
@@ -504,7 +497,7 @@ export const forgotPasswordSendOtp = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: '유효하지 않은 회사 코드입니다.' });
     }
 
-    const user = await resolveUserByIdentifier(company.id, identifier);
+    const user = await resolveUserByEmail(company.id, identifier);
     if (!user) {
       return res.status(404).json({ success: false, message: '일치하는 계정을 찾을 수 없습니다. 회사 코드와 아이디를 확인해주세요.' });
     }
@@ -552,7 +545,7 @@ export const forgotPasswordReset = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: '유효하지 않은 회사 코드입니다.' });
     }
 
-    const user = await resolveUserByIdentifier(company.id, identifier);
+    const user = await resolveUserByEmail(company.id, identifier);
     if (!user || !user.email) {
       return res.status(404).json({ success: false, message: '일치하는 계정을 찾을 수 없습니다.' });
     }
