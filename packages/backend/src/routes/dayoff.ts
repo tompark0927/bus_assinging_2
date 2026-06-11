@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   getDayOffRequests,
+  getVacationBalance,
   createDayOffRequest,
   reviewDayOffRequest,
   cancelDayOffRequest,
@@ -56,6 +57,8 @@ router.use(authenticate);
  *                   status: { type: string, enum: [PENDING, APPROVED, REJECTED] }
  */
 router.get('/', getDayOffRequests);
+// 기사 본인 휴가 잔액 (보유/사용/잔여)
+router.get('/balance', getVacationBalance);
 
 /**
  * @swagger

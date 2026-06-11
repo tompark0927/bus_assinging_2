@@ -17,6 +17,7 @@ const userSelect = {
   licenseNumber: true,
   driverType: true,
   isActive: true,
+  vacationDays: true,
   createdAt: true,
   updatedAt: true,
 };
@@ -51,7 +52,26 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
       prisma.user.count({ where }),
     ]);
 
-    return res.json({ success: true, ...paginatedResponse(users, total, pagination) });
+    // 기사별 올해 사용 휴가 수(비반려 휴무요청) — 잔여 휴가 = vacationDays - vacationUsed
+    const driverIds = users.filter((u) => u.role === 'DRIVER').map((u) => u.id);
+    let usedMap = new Map<number, number>();
+    if (driverIds.length > 0) {
+      const year = new Date().getFullYear();
+      const grouped = await prisma.dayOffRequest.groupBy({
+        by: ['driverId'],
+        where: {
+          companyId: req.user!.companyId,
+          driverId: { in: driverIds },
+          status: { not: 'REJECTED' },
+          date: { gte: new Date(Date.UTC(year, 0, 1)), lt: new Date(Date.UTC(year + 1, 0, 1)) },
+        },
+        _count: { _all: true },
+      });
+      usedMap = new Map(grouped.map((g) => [g.driverId, g._count._all]));
+    }
+    const data = users.map((u) => ({ ...u, vacationUsed: usedMap.get(u.id) ?? 0 }));
+
+    return res.json({ success: true, ...paginatedResponse(data, total, pagination) });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
@@ -92,7 +112,7 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
 
 export const createUser = async (req: AuthRequest, res: Response) => {
   try {
-    const { name, email, phone, role, licenseNumber, driverType, password } = req.body;
+    const { name, email, phone, role, licenseNumber, driverType, password, vacationDays } = req.body;
     let { employeeId } = req.body;
 
     const effectiveRole = role || 'DRIVER';
@@ -145,6 +165,7 @@ export const createUser = async (req: AuthRequest, res: Response) => {
         employeeId,
         licenseNumber,
         driverType,
+        ...(vacationDays !== undefined ? { vacationDays } : {}),
         password: hashedPassword,
         mustChangePassword: isDriverAutoPw,
       },
@@ -187,7 +208,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ success: false, message: '권한이 없습니다.' });
     }
 
-    const { name, phone, licenseNumber, driverType, isActive, role, email } = req.body;
+    const { name, phone, licenseNumber, driverType, isActive, role, email, vacationDays } = req.body;
 
     const updateData: Record<string, unknown> = { name, phone, licenseNumber };
 
@@ -208,6 +229,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     if (isAdmin) {
       if (driverType !== undefined) updateData.driverType = driverType;
       if (isActive !== undefined) updateData.isActive = isActive;
+      if (vacationDays !== undefined) updateData.vacationDays = vacationDays;
       if (role !== undefined) {
         // 권한 상승 방지: 자신의 role 은 변경 불가 (OWNER 가 자기 자신을 ADMIN 으로 강등 등은 별도 트랜잭션 필요)
         if (req.user!.id === id) {
@@ -224,6 +246,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     if (licenseNumber !== undefined) auditChanges.licenseNumber = { old: existingUser.licenseNumber, new: licenseNumber };
     if (driverType !== undefined) auditChanges.driverType = { old: existingUser.driverType, new: driverType };
     if (isActive !== undefined) auditChanges.isActive = { old: existingUser.isActive, new: isActive };
+    if (vacationDays !== undefined) auditChanges.vacationDays = { old: existingUser.vacationDays, new: vacationDays };
     if (role !== undefined) auditChanges.role = { old: existingUser.role, new: role };
     if (email !== undefined) auditChanges.email = { old: existingUser.email, new: email };
 
