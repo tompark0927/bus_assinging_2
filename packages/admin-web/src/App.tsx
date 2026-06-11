@@ -30,6 +30,7 @@ const DispatchSettingsPage = lazy(() => import('./pages/DispatchSettingsPage'));
 const TodayOperationPage = lazy(() => import('./pages/TodayOperationPage'));
 const AccountsPage = lazy(() => import('./pages/AccountsPage'));
 const CompanyInfoPage = lazy(() => import('./pages/CompanyInfoPage'));
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore(s => s.isAuthenticated());
@@ -76,6 +77,9 @@ export default function App() {
               {/* OWNER/DIRECTOR 전용 — 사이드바 하단 작은 링크로만 노출 */}
               <Route path="audit" element={<Suspense fallback={<PageLoadingFallback />}><AuditLogPage /></Suspense>} />
             </Route>
+
+            {/* 404 — 일치하는 라우트가 없을 때 */}
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </Suspense>
       </BrowserRouter>
