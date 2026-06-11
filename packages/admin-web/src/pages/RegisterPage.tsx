@@ -1,12 +1,9 @@
 import { useState, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
-  ArrowRight,
-  ArrowLeft,
   Building2,
   User,
   Check,
-  Loader2,
   Eye,
   EyeOff,
   CheckCircle2,
@@ -243,7 +240,7 @@ export default function RegisterPage() {
                     type="text"
                     value={form.companyName}
                     onChange={set('companyName')}
-                    placeholder="예: OO버스"
+                    placeholder="회사명"
                     className={inputCls('companyName')}
                   />
                   {errors.companyName && <p className="text-red-500 text-xs mt-1.5">{errors.companyName}</p>}
@@ -256,7 +253,6 @@ export default function RegisterPage() {
                 className="w-full mt-8 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-semibold text-base transition-colors flex items-center justify-center gap-2"
               >
                 다음 단계
-                <ArrowRight size={18} />
               </button>
             </div>
           )}
@@ -446,7 +442,6 @@ export default function RegisterPage() {
                   onClick={() => setStep(1)}
                   className="px-6 py-4 bg-gray-100 dark:bg-white/10 hover:bg-gray-200 dark:hover:bg-white/15 text-gray-700 dark:text-white rounded-xl font-semibold transition-colors flex items-center gap-2 text-base"
                 >
-                  <ArrowLeft size={18} />
                   이전
                 </button>
                 <button
@@ -454,7 +449,6 @@ export default function RegisterPage() {
                   className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-semibold transition-colors flex items-center justify-center gap-2 text-base"
                 >
                   다음 단계
-                  <ArrowRight size={18} />
                 </button>
               </div>
             </div>
@@ -532,7 +526,6 @@ export default function RegisterPage() {
                   onClick={() => setStep(2)}
                   className="px-6 py-4 bg-gray-100 dark:bg-white/10 hover:bg-gray-200 dark:hover:bg-white/15 text-gray-700 dark:text-white rounded-xl font-semibold transition-colors flex items-center gap-2 text-base"
                 >
-                  <ArrowLeft size={18} />
                   이전
                 </button>
                 <button
@@ -542,11 +535,11 @@ export default function RegisterPage() {
                 >
                   {loading ? (
                     <>
-                      <Loader2 size={18} className="animate-spin" /> 등록 중...
+                      등록 중...
                     </>
                   ) : (
                     <>
-                      무료로 시작하기 <ArrowRight size={18} />
+                      무료로 시작하기
                     </>
                   )}
                 </button>

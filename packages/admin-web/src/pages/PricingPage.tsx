@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Check, ArrowRight, Sparkles } from 'lucide-react';
+import { Check, Sparkles } from 'lucide-react';
 import { MarketingNav, MarketingFooter } from '../components/MarketingShell';
 
 /* ------------------------------------------------------------------ */
@@ -163,7 +163,7 @@ export default function PricingPage() {
               to="/register"
               className="bg-blue-600 hover:bg-blue-700 text-white px-7 py-3 rounded-xl font-semibold text-base inline-flex items-center justify-center gap-2"
             >
-              무료로 시작하기 <ArrowRight size={16} />
+              무료로 시작하기
             </Link>
             <Link
               to="/support"
@@ -277,7 +277,7 @@ function PlanCard({
             : 'bg-gray-100 dark:bg-white/10 hover:bg-gray-200 dark:hover:bg-white/15 text-gray-900 dark:text-white'
         }`}
       >
-        {plan.cta} <ArrowRight size={15} />
+        {plan.cta}
       </button>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Eye, EyeOff, AlertCircle, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { authApi } from '../services/api';
 import toast from 'react-hot-toast';
@@ -103,15 +103,15 @@ export default function ForgotPasswordPage() {
           {step === 1 ? (
             <form onSubmit={handleSendOtp} className="space-y-5">
               <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                회사 코드와 아이디(이메일 또는 사원번호)를 입력하시면, 가입 시 등록한 이메일로 인증번호를 보내드립니다.
+                회사 코드와 이메일을 입력하시면, 가입 시 등록한 이메일로 인증번호를 보내드립니다.
               </p>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">회사 코드</label>
                 <input type="text" value={companyCode} onChange={(e) => setCompanyCode(e.target.value)} className={inputCls} placeholder="회사 코드" required />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">아이디 (이메일 / 사원번호)</label>
-                <input type="text" value={identifier} onChange={(e) => setIdentifier(e.target.value)} className={inputCls} placeholder="name@company.com 또는 사원번호" required />
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">이메일</label>
+                <input type="email" value={identifier} onChange={(e) => setIdentifier(e.target.value)} className={inputCls} placeholder="name@company.com" required />
               </div>
               <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-4 rounded-xl font-semibold text-base transition-colors">
                 {loading ? '발송 중...' : '인증번호 받기'}
@@ -119,13 +119,6 @@ export default function ForgotPasswordPage() {
             </form>
           ) : (
             <form onSubmit={handleReset} className="space-y-5">
-              <div className="flex items-start gap-2.5 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded-xl px-4 py-3">
-                <ShieldCheck size={18} className="text-blue-500 dark:text-blue-400 mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-blue-700 dark:text-blue-300 leading-snug">
-                  {emailHint ? <><span className="font-semibold">{emailHint}</span> (으)로 인증번호를 보냈습니다.</> : '등록된 이메일로 인증번호를 보냈습니다.'}
-                  <br />메일이 오지 않으면 스팸함도 확인해 주세요.
-                </p>
-              </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">인증번호 (6자리)</label>
                 <input type="text" inputMode="numeric" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} className={`${inputCls} tracking-[0.4em] text-center font-semibold`} placeholder="••••••" required />
@@ -138,7 +131,7 @@ export default function ForgotPasswordPage() {
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     className={`${inputCls} pr-12`}
-                    placeholder="새 비밀번호"
+                    placeholder="••••••••"
                     required
                   />
                   <button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute inset-y-0 right-0 flex items-center px-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors" aria-label={showPassword ? '비밀번호 숨기기' : '비밀번호 표시'} tabIndex={-1}>
@@ -148,10 +141,10 @@ export default function ForgotPasswordPage() {
                 <p className="text-xs text-gray-400 mt-1.5">영문·숫자·특수문자를 포함해 8자 이상</p>
               </div>
               <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-4 rounded-xl font-semibold text-base transition-colors inline-flex items-center justify-center gap-2">
-                {loading ? '변경 중...' : <><CheckCircle2 size={18} /> 비밀번호 변경하기</>}
+                {loading ? '변경 중...' : '비밀번호 변경하기'}
               </button>
               <button type="button" onClick={() => { setStep(1); setOtp(''); setNewPassword(''); setError(''); }} className="w-full text-center text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
-                회사 코드 / 아이디 다시 입력
+                회사 코드 / 이메일 다시 입력
               </button>
             </form>
           )}
