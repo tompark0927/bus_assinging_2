@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { NavigationContainer, NavigationContainerRef, LinkingOptions } from '@react-navigation/native';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './src/lib/queryClient';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -39,14 +40,7 @@ const linking: LinkingOptions<any> = {
   },
 };
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      staleTime: 1000 * 60 * 5,
-    },
-  },
-});
+// QueryClient 는 src/lib/queryClient.ts 로 분리 — authStore 가 로그인/로그아웃 시 캐시를 비운다.
 
 export default function App() {
   const { loadAuth, token } = useAuthStore();
