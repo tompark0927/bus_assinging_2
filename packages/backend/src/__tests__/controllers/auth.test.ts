@@ -103,8 +103,9 @@ describe('login controller', () => {
     await login(req, res);
 
     expect(res.status).toHaveBeenCalledWith(401);
+    // 보안: 사용자 존재 여부를 노출하지 않도록 모든 로그인 실패는 동일한 일반 메시지를 반환한다(계정 열거 방지).
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ message: '이메일/사원번호 또는 비밀번호가 올바르지 않습니다.' }),
+      expect.objectContaining({ message: '아이디(이메일/전화번호) 또는 비밀번호가 올바르지 않습니다.' }),
     );
   });
 
@@ -135,8 +136,9 @@ describe('login controller', () => {
     await login(req, res);
 
     expect(res.status).toHaveBeenCalledWith(401);
+    // 보안: 소셜 전용 계정임을 알려주면 계정 존재/유형이 노출되므로 동일한 일반 메시지를 반환한다.
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ message: '이 계정은 카카오 또는 전화번호로 로그인하세요.' }),
+      expect.objectContaining({ message: '아이디(이메일/전화번호) 또는 비밀번호가 올바르지 않습니다.' }),
     );
   });
 

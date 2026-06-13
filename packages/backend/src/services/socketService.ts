@@ -20,7 +20,7 @@ export function initSocket(httpServer: HttpServer) {
     if (!token) return next(new Error('인증 토큰이 필요합니다.'));
 
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { id: number; companyId: number; role: string };
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!, { algorithms: ['HS256'] }) as { id: number; companyId: number; role: string };
       socket.data.user = decoded;
       next();
     } catch {
