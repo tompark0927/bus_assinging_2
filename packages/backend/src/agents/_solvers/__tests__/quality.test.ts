@@ -72,3 +72,21 @@ describe('scheduleQuality — 야간/주말 라벨 정규화', () => {
     expect(q.weekendStdev).toBeCloseTo(0.5, 5);
   });
 });
+
+describe('scheduleQuality — SPARE 활용률', () => {
+  it('SPARE(홈버스 없음) 활용률 = SPARE평균 / HOME평균', () => {
+    const home = driver(1, { homeBusId: 101 });
+    const spare = driver(2, { homeBusId: undefined, canCrossRoute: true });
+    const input = baseInput([home, spare]);
+    const out = output([
+      slot(1, '2026-05-01'), slot(1, '2026-05-02'), slot(1, '2026-05-03'), slot(1, '2026-05-04'),
+      { date: '2026-05-01', busId: 200, routeId: 1, shift: 'AM', driverId: 2, familiarity: 'SAME_ROUTE', isHomeBus: false },
+      { date: '2026-05-02', busId: 200, routeId: 1, shift: 'AM', driverId: 2, familiarity: 'SAME_ROUTE', isHomeBus: false },
+    ]);
+    expect(scheduleQuality(input, out).spareUtilizationRate).toBeCloseTo(0.5, 5);
+  });
+  it('SPARE가 없으면 null', () => {
+    const input = baseInput([driver(1, { homeBusId: 101 })]);
+    expect(scheduleQuality(input, output([slot(1, '2026-05-01')])).spareUtilizationRate).toBeNull();
+  });
+});
