@@ -53,3 +53,22 @@ describe('scheduleQuality — 근무일 균형', () => {
     expect(q.unfilledRate).toBeCloseTo(0.5, 5);
   });
 });
+
+describe('scheduleQuality — 야간/주말 라벨 정규화', () => {
+  it('PM(2교대 야간) 분포를 nightStdev로 잡는다 (AM/PM 라벨 버그 회귀 방지)', () => {
+    const input = baseInput([driver(1), driver(2)]);
+    const out = output([
+      slot(1, '2026-05-05', 'PM'), slot(1, '2026-05-06', 'PM'),
+      slot(2, '2026-05-05', 'AM'), slot(2, '2026-05-06', 'AM'),
+    ]);
+    const q = scheduleQuality(input, out);
+    expect(q.nightStdev).toBeGreaterThan(0);
+    expect(q.nightStdev).toBeCloseTo(1, 5);
+  });
+  it('주말 근무 분포를 weekendStdev로 잡는다', () => {
+    const input = baseInput([driver(1), driver(2)]);
+    const out = output([slot(1, '2026-05-02', 'AM'), slot(2, '2026-05-01', 'AM')]);
+    const q = scheduleQuality(input, out);
+    expect(q.weekendStdev).toBeCloseTo(0.5, 5);
+  });
+});
