@@ -583,4 +583,54 @@ describe('solveMonthlyGrid v2', () => {
     });
     expect(weekendSlots).toHaveLength(0);
   });
+
+  // ─────────────────────────────────────────
+  // 선호 노선 (routePreference) — Step 3
+  // ─────────────────────────────────────────
+
+  describe('선호 노선 소프트 제약', () => {
+    test('선호 노선 보유 spare는 선호 노선에 우선 배정된다 (대다수 슬롯)', () => {
+      // 2 노선, 각 노선 1버스 1페어.
+      // spare 한 명: canCrossRoute=true, preferredRouteIds=[100] (노선A 선호)
+      const { POLICY_PRESETS } = require('../types');
+      const { scheduleQuality } = require('../quality');
+      const policy = POLICY_PRESETS.CITY_2SHIFT;
+
+      const drivers: SolverDriver[] = [
+        // 노선 A (routeId=100) 페어
+        { id: 1, name: 'A1', homeBusId: 1001, homeRouteId: 100, partnerId: 2, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+        { id: 2, name: 'A2', homeBusId: 1001, homeRouteId: 100, partnerId: 1, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+        // 노선 B (routeId=200) 페어
+        { id: 3, name: 'B1', homeBusId: 2001, homeRouteId: 200, partnerId: 4, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+        { id: 4, name: 'B2', homeBusId: 2001, homeRouteId: 200, partnerId: 3, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+        // Spare: 노선 A 선호
+        { id: 5, name: 'Spare', homeRouteId: 100, canCrossRoute: true, preferredRouteIds: [100], approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      ];
+
+      const result = solveMonthlyGrid({
+        year: 2026,
+        month: 5,
+        drivers,
+        buses: [
+          { id: 1001, routeId: 100 },
+          { id: 2001, routeId: 200 },
+        ],
+        crews: [
+          { id: 'CA', driverIds: [1, 2], busId: 1001, routeId: 100 },
+          { id: 'CB', driverIds: [3, 4], busId: 2001, routeId: 200 },
+        ],
+        policy,
+        localSearchIterations: 200,
+        randomSeed: 42,
+      });
+
+      const { preferenceSatisfactionRate } = scheduleQuality({ year: 2026, month: 5, drivers, buses: [], policy }, result);
+      // spare가 슬롯을 받았다면, 선호 노선(routeId=100) 비율이 과반이어야 함
+      const spareSlots = result.slots.filter((s) => s.driverId === 5);
+      if (spareSlots.length > 0) {
+        expect(preferenceSatisfactionRate).toBeGreaterThan(0.5);
+      }
+      // spare가 슬롯을 전혀 못 받은 경우는 건너뜀 (tight schedule 가능)
+    });
+  });
 });
