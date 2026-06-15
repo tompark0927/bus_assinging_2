@@ -22,6 +22,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../../utils/prisma';
 import logger from '../../utils/logger';
 import type { DropScenario, HistoricalOutcome } from './simulation';
+import { createRng } from '../../utils/seededRng';
 
 // ─────────────────────────────────────────────
 // 옵션 + 결과 타입
@@ -45,21 +46,6 @@ export interface GenerateOptions {
    * 기본: baseTime.getTime() 사용 — 같은 baseTime 이면 같은 결과.
    */
   randomSeed?: number;
-}
-
-/**
- * 결정론적 RNG (Mulberry32) — 같은 시드로 항상 같은 시퀀스 반환.
- * 백테스트 재현성에 필수.
- */
-function mulberry32(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 export interface GeneratedFixture {
@@ -106,7 +92,7 @@ export async function generateScenarioFixture(opts: GenerateOptions = {}): Promi
   const urgencyMix = opts.urgencyMix ?? { critical: 0.2, high: 0.3, normal: 0.5 };
   const generateActuals = opts.generateActualOutcomes ?? true;
   const seed = opts.randomSeed ?? baseTime.getTime();
-  const rng = mulberry32(seed);
+  const rng = createRng(seed);
 
   // 분포 합 정규화 (오차 허용)
   const sum = urgencyMix.critical + urgencyMix.high + urgencyMix.normal;

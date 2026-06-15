@@ -33,6 +33,7 @@ import { prisma } from '../../utils/prisma';
 import logger from '../../utils/logger';
 import { calculateFairness, type SlotForFairness } from '../_tools/fairness';
 import { compileAndValidate } from '../_tools/rule-compiler';
+import { createRng } from '../../utils/seededRng';
 
 // ─────────────────────────────────────────────
 // 옵션·결과 타입
@@ -81,21 +82,6 @@ export interface DispatchScenarioFixture {
 }
 
 // ─────────────────────────────────────────────
-// 시드 RNG
-// ─────────────────────────────────────────────
-
-function mulberry32(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// ─────────────────────────────────────────────
 // 핵심 빌더
 // ─────────────────────────────────────────────
 
@@ -107,7 +93,7 @@ export async function generateDispatchScenario(
   const baseTime = opts.baseTime ?? new Date();
   const pendingDayoffCount = opts.pendingDayoffCount ?? 5;
   const seed = opts.randomSeed ?? baseTime.getTime();
-  const rng = mulberry32(seed);
+  const rng = createRng(seed);
   const biasIntensity = Math.max(0, Math.min(1, opts.biasIntensity ?? 0.6));
 
   // 대상 연·월 (기본: baseTime 의 다음 달)
