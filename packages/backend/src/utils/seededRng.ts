@@ -9,7 +9,7 @@ export type Rng = () => number;
 export function createRng(seed: number): Rng {
   let a = seed >>> 0;
   return function () {
-    a |= 0;
+    a |= 0; // int32 강제 (mulberry32 변형의 JIT 힌트)
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
