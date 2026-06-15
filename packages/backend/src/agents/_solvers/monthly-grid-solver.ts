@@ -584,7 +584,10 @@ function candidateCost(
     ctx.driverSlots.get(driver.id)?.filter((s) => isWeekend(s.date)).length ?? 0;
   const weekendCost = isWeekend(slot.date) ? weekendCount * 5 : 0;
 
-  return workloadCost + consistencyCost + alternationCost + fatigueCost + weekendCost;
+  // 6) 선호 노선 미충족 페널티
+  const preferenceCost = driver.preferredRouteIds && driver.preferredRouteIds.length > 0 && !driver.preferredRouteIds.includes(slot.routeId) ? 12 : 0;
+
+  return workloadCost + consistencyCost + alternationCost + fatigueCost + weekendCost + preferenceCost;
 }
 
 function sameWeekSlots(
@@ -864,12 +867,20 @@ function objective(
     }),
   );
 
+  let preferencePenalty = 0;
+  const prefByDriver = new Map(drivers.filter(d => d.preferredRouteIds && d.preferredRouteIds.length > 0).map(d => [d.id, new Set(d.preferredRouteIds)]));
+  for (const s of slots) {
+    const pref = prefByDriver.get(s.driverId);
+    if (pref && !pref.has(s.routeId)) preferencePenalty++;
+  }
+
   return (
     workdayPenalty * weights.workdayDeviation +
     consistencyPenalty * weights.weeklyShiftConsistency +
     crossRoute * weights.familiarityCost +
     weekendVar * weights.weekendFairness +
-    fatigueVar * weights.fatigueVariance
+    fatigueVar * weights.fatigueVariance +
+    preferencePenalty * weights.routePreference
   );
 }
 
