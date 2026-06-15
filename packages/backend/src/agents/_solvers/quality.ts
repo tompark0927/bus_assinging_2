@@ -1,4 +1,4 @@
-import type { SolverInput, SolverOutput, ConstitutionalRuleKey } from './types';
+import type { SolverInput, SolverOutput, ConstitutionalRuleKey, ShiftSystemPolicy } from './types';
 
 export interface QualityReport {
   workDayStdev: number;
@@ -28,6 +28,17 @@ function stdev(xs: number[]): number {
 function clamp(x: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, x));
 }
+function nightLabels(shiftSystem: ShiftSystemPolicy): Set<string> {
+  switch (shiftSystem.kind) {
+    case 'TWO_SHIFT': return new Set(['PM']);
+    case 'THREE_SHIFT': return new Set(['NIGHT']);
+    default: return new Set<string>();
+  }
+}
+function isWeekendDate(isoDate: string): boolean {
+  const dow = new Date(`${isoDate}T00:00:00Z`).getUTCDay();
+  return dow === 0 || dow === 6;
+}
 
 export function scheduleQuality(input: SolverInput, output: SolverOutput): QualityReport {
   const drivers = input.drivers;
@@ -40,10 +51,20 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
   const totalSlots = output.slots.length + output.unfilled.length;
   const unfilledRate = totalSlots === 0 ? 0 : output.unfilled.length / totalSlots;
 
+  const policy = input.policy;
+  const nightSet = policy ? nightLabels(policy.shiftSystem) : new Set<string>();
+  const nightById = new Map<number, number>();
+  const weekendById = new Map<number, number>();
+  for (const d of drivers) { nightById.set(d.id, 0); weekendById.set(d.id, 0); }
+  for (const s of output.slots) {
+    if (nightSet.has(s.shift)) nightById.set(s.driverId, (nightById.get(s.driverId) ?? 0) + 1);
+    if (isWeekendDate(s.date)) weekendById.set(s.driverId, (weekendById.get(s.driverId) ?? 0) + 1);
+  }
+
   const report: QualityReport = {
     workDayStdev: stdev(workDays),
-    nightStdev: 0,
-    weekendStdev: 0,
+    nightStdev: stdev(drivers.map((d) => nightById.get(d.id) ?? 0)),
+    weekendStdev: stdev(drivers.map((d) => weekendById.get(d.id) ?? 0)),
     activeDriverRate,
     spareUtilizationRate: null,
     idleDriverCount,
