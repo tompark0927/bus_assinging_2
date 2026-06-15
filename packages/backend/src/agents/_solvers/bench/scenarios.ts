@@ -8,6 +8,7 @@ export interface ScenarioSpec {
   seed: number;
   policy: PolicyKey;
   routes: number;
+  /** 노선당 최대 차량 수. opsRate로 한 달 내내 운휴인 차량은 생성에서 제외됨. */
   busesPerRoute: number;
   sparesPerRoute: number;
   weekdayOps: number;
@@ -57,8 +58,11 @@ export function buildScenario(spec: ScenarioSpec): SolverInput {
   for (let r = 1; r <= spec.routes; r++) {
     const routeId = r * 100;
     for (let b = 0; b < spec.busesPerRoute; b++) {
+      const operatingDates = buildOperatingDates(spec.year, spec.month, spec.weekdayOps, spec.weekendOps, b, spec.busesPerRoute);
+      // 한 달 내내 운행하지 않는 버스(감차로 운휴)는 홈 크루를 두지 않는다 — 영구 유휴 기사로 지표가 왜곡되는 것을 방지.
+      if (operatingDates.length === 0) continue;
       const bId = busId++;
-      buses.push({ id: bId, routeId, operatingDates: buildOperatingDates(spec.year, spec.month, spec.weekdayOps, spec.weekendOps, b, spec.busesPerRoute) });
+      buses.push({ id: bId, routeId, operatingDates });
       const crewDriverIds: number[] = [];
       const crewSize = oneShift ? 1 : 2;
       for (let m = 0; m < crewSize; m++) {
@@ -72,7 +76,7 @@ export function buildScenario(spec: ScenarioSpec): SolverInput {
           partnerId: crewSize === 2 ? (m === 0 ? id + 1 : id - 1) : undefined,
           canCrossRoute: false,
           approvedDayOffs: rngChance(rng, spec.dayOffDensity) ? randomDayOffs(rng, spec.year, spec.month, rngInt(rng, 1, 2)) : [],
-          recentFatigueScore: rngFloat(rng, 20, 60),
+          recentFatigueScore: rngFloat(rng, 20, 60), // 크루: 20~60
           isNewHire: false,
         });
       }
@@ -85,7 +89,7 @@ export function buildScenario(spec: ScenarioSpec): SolverInput {
         homeRouteId: routeId,
         canCrossRoute: false,
         approvedDayOffs: rngChance(rng, spec.dayOffDensity) ? randomDayOffs(rng, spec.year, spec.month, rngInt(rng, 1, 2)) : [],
-        recentFatigueScore: rngFloat(rng, 15, 45),
+        recentFatigueScore: rngFloat(rng, 15, 45), // 스페어: 예비 인력이라 평균적으로 더 신선 15~45
         isNewHire: s === 0 && r === 1,
       });
     }

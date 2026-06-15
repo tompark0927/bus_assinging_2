@@ -3,7 +3,7 @@ import { buildScenario, SCENARIO_SUITE, type ScenarioSpec } from '../bench/scena
 const spec: ScenarioSpec = {
   label: 'test-city-medium', seed: 123, policy: 'CITY_2SHIFT',
   routes: 2, busesPerRoute: 5, sparesPerRoute: 2,
-  weekdayOps: 0.95, weekendOps: 0.75, dayOffDensity: 0.3, year: 2026, month: 5,
+  weekdayOps: 1, weekendOps: 1, dayOffDensity: 0.3, year: 2026, month: 5,
 };
 
 describe('buildScenario', () => {
@@ -26,11 +26,29 @@ describe('buildScenario', () => {
     expect(input.month).toBe(5);
     expect(input.policy?.shiftSystem.kind).toBe('TWO_SHIFT');
   });
+  it('한 달 내내 운휴인 차량은 생성하지 않는다 (ghost bus 제거)', () => {
+    // busesPerRoute=5, weekday 0.6 -> floor(5*0.6)=3 운행, weekend 0.4 -> floor(5*0.4)=2 운행.
+    // position 3,4 는 평일·주말 모두 운휴 -> 제외. route당 3대만 생성.
+    const ghostSpec: ScenarioSpec = { ...spec, weekdayOps: 0.6, weekendOps: 0.4, routes: 1, busesPerRoute: 5, sparesPerRoute: 0 };
+    const input = buildScenario(ghostSpec);
+    expect(input.buses.length).toBe(3);
+    expect(input.buses.every((bus) => (bus.operatingDates?.length ?? 0) > 0)).toBe(true);
+    // 모든 home 기사의 homeBusId 가 실제 생성된 버스를 가리킨다
+    const busIds = new Set(input.buses.map((bus) => bus.id));
+    expect(input.drivers.filter((d) => d.homeBusId !== undefined).every((d) => busIds.has(d.homeBusId!))).toBe(true);
+  });
+  it('SOLO 모델 (VILLAGE_1SHIFT): 차당 1명, partnerId 없음', () => {
+    const vil: ScenarioSpec = { ...spec, policy: 'VILLAGE_1SHIFT', routes: 1, busesPerRoute: 3, sparesPerRoute: 1 };
+    const input = buildScenario(vil);
+    expect(input.drivers.length).toBe(4); // 3*1 + 1 spare
+    expect(input.crews?.every((c) => c.driverIds.length === 1)).toBe(true);
+    expect(input.drivers.filter((d) => d.partnerId !== undefined).length).toBe(0);
+  });
 });
 
 describe('SCENARIO_SUITE', () => {
   it('다양한 정책과 규모를 포함한다', () => {
-    expect(SCENARIO_SUITE.length).toBeGreaterThanOrEqual(18);
+    expect(SCENARIO_SUITE.length).toBe(21);
     const policies = new Set(SCENARIO_SUITE.map((s) => s.policy));
     expect(policies.has('CITY_2SHIFT')).toBe(true);
     expect(policies.has('VILLAGE_1SHIFT')).toBe(true);
