@@ -155,7 +155,8 @@ export const authValidation = {
     requiredString('companyCode', '회사 코드', { min: 2, max: 10 }),
     body('identifier')
       .trim()
-      .notEmpty().withMessage('아이디(이메일/사원번호)는 필수입니다.'),
+      .notEmpty().withMessage('이메일은 필수입니다.')
+      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.'),
   ]),
 
   // 비밀번호 재설정 — OTP 검증 + 새 비밀번호
@@ -163,7 +164,8 @@ export const authValidation = {
     requiredString('companyCode', '회사 코드', { min: 2, max: 10 }),
     body('identifier')
       .trim()
-      .notEmpty().withMessage('아이디(이메일/사원번호)는 필수입니다.'),
+      .notEmpty().withMessage('이메일은 필수입니다.')
+      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.'),
     body('otp')
       .trim()
       .notEmpty().withMessage('인증번호는 필수입니다.')
@@ -228,6 +230,10 @@ export const userValidation = {
       .optional()
       .isIn(['MAIN', 'SPARE'])
       .withMessage('기사 유형은 MAIN 또는 SPARE여야 합니다.'),
+    body('vacationDays')
+      .optional()
+      .isInt({ min: 0, max: 366 }).withMessage('휴가 일수는 0~366 사이의 정수여야 합니다.')
+      .toInt(),
     passwordValidator('password', false),
   ]),
 
@@ -253,6 +259,10 @@ export const userValidation = {
     body('isActive')
       .optional()
       .isBoolean().withMessage('활성 상태는 boolean이어야 합니다.'),
+    body('vacationDays')
+      .optional()
+      .isInt({ min: 0, max: 366 }).withMessage('휴가 일수는 0~366 사이의 정수여야 합니다.')
+      .toInt(),
   ]),
 
   delete: validate([

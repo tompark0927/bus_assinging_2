@@ -154,6 +154,12 @@ export default function DayOffScreen() {
     queryFn: () => dayOffApi.list().then(r => r.data.data),
   });
 
+  // 휴가 잔액 — 신청(PENDING 포함) 즉시 차감, 반려/취소 시 복원 (서버 계산)
+  const { data: balance } = useQuery<{ total: number; used: number; remaining: number }>({
+    queryKey: ['dayoff-balance'],
+    queryFn: () => dayOffApi.balance().then(r => r.data.data),
+  });
+
   // 최근 요청이 위로 오도록 정렬 (createdAt 내림차순)
   const requests = [...rawRequests].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
@@ -172,6 +178,7 @@ export default function DayOffScreen() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['my-dayoff'] });
+      queryClient.invalidateQueries({ queryKey: ['dayoff-balance'] });
       const count = selectedDates.length;
       setShowModal(false);
       setSelectedDates([]);
@@ -184,6 +191,7 @@ export default function DayOffScreen() {
         (err instanceof Error ? err.message : t('common.error'));
       toast.error(msg);
       queryClient.invalidateQueries({ queryKey: ['my-dayoff'] });
+      queryClient.invalidateQueries({ queryKey: ['dayoff-balance'] });
     },
   });
 
@@ -191,6 +199,7 @@ export default function DayOffScreen() {
     mutationFn: (id: number) => dayOffApi.cancel(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['my-dayoff'] });
+      queryClient.invalidateQueries({ queryKey: ['dayoff-balance'] });
       toast.success(t('common.done'));
     },
     onError: (err: unknown) => {
@@ -338,23 +347,30 @@ export default function DayOffScreen() {
 
           <ScrollView style={styles.modalBody} contentContainerStyle={{ padding: spacing.xl, paddingBottom: spacing['3xl'] }}>
             <View style={styles.labelRow}>
-              <Text style={styles.inputLabel}>{t('dayoff.selectDates')}</Text>
-              {selectedDates.length > 0 && (
-                <TouchableOpacity
-                  onPress={() => setSelectedDates([])}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel={t('dayoff.clearAll')}
-                >
-                  <Text style={styles.clearLink}>{t('dayoff.clearAll')}</Text>
-                </TouchableOpacity>
+              <Text style={[styles.inputLabel, { flex: 1 }]} numberOfLines={1}>{t('dayoff.selectDates')}</Text>
+              {balance != null && (
+                <View style={[styles.balancePill, balance.remaining <= 0 && styles.balancePillEmpty]}>
+                  <Text style={[styles.balancePillText, balance.remaining <= 0 && styles.balancePillTextEmpty]}>
+                    {t('dayoff.remaining', { count: balance.remaining })}
+                  </Text>
+                </View>
               )}
             </View>
             <CalendarPicker selectedDates={selectedDates} onToggle={toggleDate} initialMonth={initialMonth} />
 
             {selectedDates.length > 0 ? (
               <View style={styles.chipsBox}>
-                <Text style={styles.chipsCount}>{t('dayoff.selectedCount', { count: selectedDates.length })}</Text>
+                <View style={styles.chipsHeader}>
+                  <Text style={styles.chipsCount}>{t('dayoff.selectedCount', { count: selectedDates.length })}</Text>
+                  <TouchableOpacity
+                    onPress={() => setSelectedDates([])}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('dayoff.clearAll')}
+                  >
+                    <Text style={styles.clearLink}>{t('dayoff.clearAll')}</Text>
+                  </TouchableOpacity>
+                </View>
                 <View style={styles.chips}>
                   {[...selectedDates].sort().map(d => (
                     <View key={d} style={styles.chip}>
@@ -548,6 +564,16 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   modalTitle: { fontSize: typography.xl, fontWeight: weight.bold, color: colors.text, letterSpacing: -0.3 },
+  balancePill: {
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+    borderRadius: radius.full,
+    marginLeft: spacing.sm,
+  },
+  balancePillEmpty: { backgroundColor: colors.dangerSoft },
+  balancePillText: { fontSize: typography.md, fontWeight: weight.bold, color: colors.primaryOnText },
+  balancePillTextEmpty: { color: colors.dangerText },
   modalCloseBtn: {
     width: 32,
     height: 32,
@@ -578,6 +604,11 @@ const styles = StyleSheet.create({
     borderColor: '#bfdbfe',
     marginTop: spacing.md,
     gap: spacing.sm,
+  },
+  chipsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   chipsCount: {
     fontSize: typography.base,

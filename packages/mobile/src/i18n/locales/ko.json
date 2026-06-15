@@ -90,6 +90,7 @@
     "requestNew": "휴무 요청하기",
     "history": "내 휴무 요청 내역",
     "noHistory": "휴무 요청 내역이 없습니다",
+    "remaining": "남은 휴가: {{count}}일",
     "selectDates": "휴무 날짜 선택 (여러 날 가능)",
     "clearAll": "모두 해제",
     "selectedCount": "{{count}}일 선택됨",

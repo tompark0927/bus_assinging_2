@@ -134,7 +134,8 @@ describe('authenticate middleware', () => {
     const res = createMockRes();
     const next = createMockNext();
 
-    mockPrisma.user.findUnique.mockResolvedValue({ id: 1, isActive: true });
+    // companyId/role 은 토큰 페이로드와 일치해야 권한 변경 가드(auth.ts)를 통과한다.
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 1, companyId: 1, role: 'ADMIN', name: 'Test', email: 'a@b.com', isActive: true });
 
     await authenticate(req, res, next);
 

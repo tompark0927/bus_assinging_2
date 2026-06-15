@@ -1,5 +1,5 @@
 import axios, { AxiosRequestConfig } from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import secureStore from '../utils/storage';
 import NetInfo from '@react-native-community/netinfo';
 import { Alert } from 'react-native';
 
@@ -66,7 +66,7 @@ function buildCacheEndpoint(config: AxiosRequestConfig): string {
 // ─────────────────────────────────────────
 api.interceptors.request.use(async (config) => {
   try {
-    const token = await AsyncStorage.getItem('token');
+    const token = await secureStore.getItem('token');
     if (token) config.headers.Authorization = `Bearer ${token}`;
   } catch {}
   return config;
@@ -134,7 +134,7 @@ api.interceptors.response.use(
 
     // 401이고 아직 재시도 안 한 요청이면 → 토큰 갱신 시도
     if (err.response?.status === 401 && !originalRequest?._retry) {
-      const refreshToken = await AsyncStorage.getItem('refreshToken');
+      const refreshToken = await secureStore.getItem('refreshToken');
 
       if (!refreshToken) {
         await fullLogout();
@@ -161,9 +161,9 @@ api.interceptors.response.use(
         const newToken = data.data.accessToken || data.data.token;
         const newRefreshToken = data.data.refreshToken;
 
-        await AsyncStorage.setItem('token', newToken);
+        await secureStore.setItem('token', newToken);
         if (newRefreshToken) {
-          await AsyncStorage.setItem('refreshToken', newRefreshToken);
+          await secureStore.setItem('refreshToken', newRefreshToken);
         }
 
         processQueue(null, newToken);
@@ -208,9 +208,9 @@ function processQueue(error: unknown, token: string | null) {
  */
 async function fullLogout() {
   try {
-    await AsyncStorage.removeItem('token');
-    await AsyncStorage.removeItem('refreshToken');
-    await AsyncStorage.removeItem('user');
+    await secureStore.removeItem('token');
+    await secureStore.removeItem('refreshToken');
+    await secureStore.removeItem('user');
   } catch { /* ignore */ }
   try {
     useAuthStore.setState({ user: null, token: null });
@@ -244,6 +244,7 @@ export const schedulesApi = {
 
 export const dayOffApi = {
   list: () => api.get('/dayoff'),
+  balance: () => api.get('/dayoff/balance'), // { total, used, remaining }
   create: (date: string, reason?: string) =>
     api.post('/dayoff', { date, reason }),
   cancel: (id: number) => api.delete(`/dayoff/${id}`),

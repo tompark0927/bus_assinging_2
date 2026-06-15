@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import secureStore from '../utils/storage';
 import { API_BASE_URL } from '../services/serverUrl';
+import { queryClient } from '../lib/queryClient';
+
+// 인증 토큰/세션은 expo-secure-store(Keychain/Keystore)에 저장한다.
+// 일반 AsyncStorage 는 평문이라 탈옥/루팅·백업 추출에 노출되므로 토큰류에 사용 금지.
+// (푸시 토큰 등 비민감 키는 그대로 AsyncStorage 사용)
 
 // Inlined to avoid circular import (authStore → notifications → api → authStore)
 const PUSH_KEYS = ['push:pendingToken', 'push:registeredToken'];
@@ -53,10 +59,12 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoaded: false,
 
   setAuth: async (user, token, refreshToken?) => {
-    await AsyncStorage.setItem('token', token);
-    await AsyncStorage.setItem('user', JSON.stringify(user));
+    // 계정 전환 시 이전 사용자의 캐시(잔여 휴가, 배차표, 알림 등)가 보이지 않도록 전부 비운다.
+    queryClient.clear();
+    await secureStore.setItem('token', token);
+    await secureStore.setItem('user', JSON.stringify(user));
     if (refreshToken) {
-      await AsyncStorage.setItem('refreshToken', refreshToken);
+      await secureStore.setItem('refreshToken', refreshToken);
     }
     set({ user, token });
   },
@@ -65,14 +73,33 @@ export const useAuthStore = create<AuthState>((set) => ({
     const cur = useAuthStore.getState().user;
     if (!cur) return;
     const next = { ...cur, ...patch };
-    await AsyncStorage.setItem('user', JSON.stringify(next));
+    await secureStore.setItem('user', JSON.stringify(next));
     set({ user: next });
   },
 
   loadAuth: async () => {
     try {
-      const token = await AsyncStorage.getItem('token');
-      const userStr = await AsyncStorage.getItem('user');
+      let token = await secureStore.getItem('token');
+      let userStr = await secureStore.getItem('user');
+
+      // 레거시 마이그레이션: 과거 평문(AsyncStorage)에 저장됐던 토큰을 SecureStore 로
+      // 1회 이전하고, 평문 잔여 데이터는 제거한다. (없으면 모두 무해한 no-op)
+      if (!token) {
+        const [legacyToken, legacyUser, legacyRefresh] = await Promise.all([
+          AsyncStorage.getItem('token'),
+          AsyncStorage.getItem('user'),
+          AsyncStorage.getItem('refreshToken'),
+        ]);
+        if (legacyToken) {
+          await secureStore.setItem('token', legacyToken);
+          if (legacyUser) await secureStore.setItem('user', legacyUser);
+          if (legacyRefresh) await secureStore.setItem('refreshToken', legacyRefresh);
+          token = legacyToken;
+          userStr = legacyUser;
+        }
+        await AsyncStorage.multiRemove(['token', 'refreshToken', 'user']);
+      }
+
       if (token && userStr) {
         set({ user: JSON.parse(userStr), token, isLoaded: true });
       } else {
@@ -86,19 +113,20 @@ export const useAuthStore = create<AuthState>((set) => ({
   logout: async () => {
     // 서버 폐기 먼저 (refreshToken 이 살아있는 동안) — best-effort
     try {
-      const token = await AsyncStorage.getItem('token');
-      const refreshToken = await AsyncStorage.getItem('refreshToken');
+      const token = await secureStore.getItem('token');
+      const refreshToken = await secureStore.getItem('refreshToken');
       await notifyServerLogout(token, refreshToken);
     } catch {
       /* ignore */
     }
-    // 로컬 정리는 항상 수행
-    await AsyncStorage.multiRemove([
-      'token',
-      'refreshToken',
-      'user',
-      ...PUSH_KEYS,
+    // 로컬 정리는 항상 수행 — 토큰류는 SecureStore, 푸시 토큰 등 비민감 키는 AsyncStorage
+    await Promise.all([
+      secureStore.removeItem('token'),
+      secureStore.removeItem('refreshToken'),
+      secureStore.removeItem('user'),
+      AsyncStorage.multiRemove(PUSH_KEYS),
     ]);
+    queryClient.clear(); // react-query 캐시도 비워 다음 계정에 데이터가 새지 않게
     set({ user: null, token: null });
   },
 }));

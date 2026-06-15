@@ -29,7 +29,7 @@ export const registerCompany = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: '이메일 인증이 필요합니다.' });
     }
     try {
-      const decoded = jwt.verify(emailVerifyToken, process.env.JWT_SECRET!) as { email?: string; purpose?: string };
+      const decoded = jwt.verify(emailVerifyToken, process.env.JWT_SECRET!, { algorithms: ['HS256'] }) as { email?: string; purpose?: string };
       if (decoded.purpose !== 'email_verify' || decoded.email !== String(adminEmail).trim().toLowerCase()) {
         return res.status(400).json({ success: false, message: '이메일 인증 정보가 일치하지 않습니다. 이메일 인증을 다시 해주세요.' });
       }

@@ -13,6 +13,8 @@ export default defineConfig({
     },
   },
   build: {
+    // 프로덕션 번들에 소스맵을 포함하지 않는다(원본 소스 노출 방지). 기본값이지만 명시.
+    sourcemap: false,
     // 메인 번들이 너무 커지지 않도록 무거운 라이브러리를 별도 chunk 로 분리.
     // 첫 진입 LCP 개선 + 라이브러리 코드는 거의 안 바뀌므로 캐시 효율 ↑
     rollupOptions: {

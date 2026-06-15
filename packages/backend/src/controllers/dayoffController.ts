@@ -65,6 +65,38 @@ export const getDayOffRequests = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// 기사 본인의 휴가 잔액 — 잔여 = 보유(vacationDays) - 올해 비반려 휴무요청 수.
+// PENDING 도 사용으로 집계 → 신청 즉시 줄어들고, 반려/취소되면 자동 복원된다.
+export const getVacationBalance = async (req: AuthRequest, res: Response) => {
+  try {
+    const me = await prisma.user.findFirst({
+      where: { id: req.user!.id, companyId: req.user!.companyId },
+      select: { vacationDays: true },
+    });
+    if (!me) {
+      return res.status(404).json({ success: false, message: '사용자를 찾을 수 없습니다.' });
+    }
+
+    const year = new Date().getFullYear();
+    const used = await prisma.dayOffRequest.count({
+      where: {
+        companyId: req.user!.companyId,
+        driverId: req.user!.id,
+        status: { not: 'REJECTED' },
+        date: { gte: new Date(Date.UTC(year, 0, 1)), lt: new Date(Date.UTC(year + 1, 0, 1)) },
+      },
+    });
+
+    return res.json({
+      success: true,
+      data: { total: me.vacationDays, used, remaining: me.vacationDays - used },
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
 export const createDayOffRequest = async (req: AuthRequest, res: Response) => {
   try {
     const { date, reason } = req.body;
