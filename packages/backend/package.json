@@ -16,6 +16,7 @@
     "test:integration": "jest --config jest.integration.config.ts --forceExit",
     "backtest:emergency": "ts-node scripts/backtest-emergency.ts",
     "backtest:dispatch": "ts-node scripts/backtest-dispatch.ts",
+    "backtest:solver": "ts-node scripts/backtest/solver-harness.ts",
     "backtest:smoke": "ts-node scripts/backtest-emergency.ts --smoke && ts-node scripts/backtest-dispatch.ts --smoke"
   },
   "dependencies": {
