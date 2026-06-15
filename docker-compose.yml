@@ -9,8 +9,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-busync}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-busync_dev_password}
       POSTGRES_DB: ${POSTGRES_DB:-busync_db}
+    # 데이터 저장소는 절대 외부에 노출하지 않는다 — 호스트 루프백에만 바인딩.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -22,11 +23,12 @@ services:
   redis:
     image: redis:7-alpine
     container_name: busync_redis
+    # 루프백에만 바인딩 + 비밀번호 필수 (인증 없는 Redis 는 원격 코드 실행 표적이 됨)
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-busync_dev_redis}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -48,7 +50,7 @@ services:
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:-busync_dev_redis}@redis:6379
       NODE_ENV: production
       PORT: 4000
     depends_on:

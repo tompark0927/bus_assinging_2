@@ -7,11 +7,9 @@ import {
   Clock,
   MapPin,
   Send,
-  Loader2,
   CheckCircle2,
   HelpCircle,
   Bug,
-  Sparkles,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { contactApi } from '../services/api';
@@ -132,7 +130,7 @@ export default function SupportPage() {
         <div className="max-w-2xl mx-auto px-6">
           <div className="text-center mb-10">
             <h2 className="text-3xl font-bold mb-3 inline-flex items-center gap-2">
-              <Sparkles size={22} className="text-blue-600 dark:text-blue-400" />
+              <Send size={22} className="text-blue-600 dark:text-blue-400" />
               문의 보내기
             </h2>
             <p className="text-gray-500 dark:text-gray-400">
@@ -338,13 +336,13 @@ function ContactForm() {
         </div>
       </Field>
 
-      <Field label="이름 / 회사명" required>
+      <Field label="회사명" required>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
-          placeholder="홍길동 / OO버스"
+          placeholder="회사명"
           className={inputCls}
         />
       </Field>
@@ -385,15 +383,7 @@ function ContactForm() {
         disabled={submitting}
         className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2"
       >
-        {submitting ? (
-          <>
-            <Loader2 size={16} className="animate-spin" /> 보내는 중...
-          </>
-        ) : (
-          <>
-            <Send size={16} /> 문의 보내기
-          </>
-        )}
+        {submitting ? '보내는 중...' : '문의 보내기'}
       </button>
 
       <p className="text-xs text-gray-400 text-center">

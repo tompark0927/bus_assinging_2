@@ -145,6 +145,7 @@ model User {
   shiftGroup             String? // "1조", "2조" (1일 2교대 시스템)
   assignedBusNumber      String? // 담당 차량번호 (엑셀에서 추출)
   hoboong                Int? // 호봉 (급여 등급)
+  vacationDays           Int         @default(15) // 연간 보유 휴가 일수 (관리자 기입/수정, 잔여 = 보유 - 올해 비반려 휴무요청 수)
   kakaoId                String?     @unique
   expoPushToken          String?
   isActive               Boolean     @default(true)

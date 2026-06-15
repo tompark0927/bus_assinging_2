@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import axios from 'axios';
+import secureStore from '../utils/storage';
 
 const QUEUE_KEY = 'offline:requestQueue';
 const MAX_RETRY = 3;
@@ -46,12 +47,19 @@ export async function enqueueRequest(
   headers?: Record<string, string>,
 ): Promise<void> {
   const queue = await getQueue();
+  // 큐는 평문 AsyncStorage 에 저장되므로 인증 토큰을 헤더에 남기지 않는다.
+  // 재시도 시점에 SecureStore 의 최신 토큰으로 다시 채운다(processQueue 참고).
+  const safeHeaders = headers ? { ...headers } : undefined;
+  if (safeHeaders) {
+    delete safeHeaders.Authorization;
+    delete (safeHeaders as Record<string, string>).authorization;
+  }
   const entry: QueuedRequest = {
     id: generateId(),
     method,
     url,
     data,
-    headers,
+    headers: safeHeaders,
     timestamp: Date.now(),
     retryCount: 0,
   };
@@ -77,7 +85,7 @@ export async function processQueue(): Promise<void> {
     for (const req of queue) {
       try {
         // Retrieve current auth token for the retry
-        const token = await AsyncStorage.getItem('token');
+        const token = await secureStore.getItem('token');
         const authHeaders: Record<string, string> = {
           'Content-Type': 'application/json',
           ...(req.headers || {}),

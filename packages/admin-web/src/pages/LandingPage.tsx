@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowRight,
-  ChevronRight,
   Calendar,
   Brain,
   Bell,
@@ -105,7 +103,7 @@ export default function LandingPage() {
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
 
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-white font-sans overflow-x-hidden">
+    <div className="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-white font-sans overflow-x-clip">
       <MarketingNav />
 
       {/* ============================================================ */}
@@ -147,7 +145,6 @@ export default function LandingPage() {
                 className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-semibold text-lg transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25"
               >
                 시작하기
-                <ArrowRight size={20} />
               </button>
               <button
                 onClick={() => scrollTo('contact')}
@@ -281,34 +278,24 @@ export default function LandingPage() {
           </Section>
 
           <Section delay={100}>
-            <button
-              onClick={() => navigate('/register')}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-10 py-4 rounded-xl font-semibold text-lg transition-all shadow-lg shadow-blue-600/25 inline-flex items-center gap-2 mb-16"
-            >
-              무료로 시작하기
-              <ArrowRight size={20} />
-            </button>
-          </Section>
-
-          <Section delay={200}>
             <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-2xl p-8 lg:p-10 text-left max-w-xl mx-auto">
               <h3 className="text-xl font-bold mb-1">데모 상담 신청</h3>
               <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">연락처를 남겨주시면 빠르게 연락드리겠습니다.</p>
 
               <form onSubmit={handleContactSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1.5">회사명 또는 이름</label>
+                  <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1.5">회사명 <span className="text-red-500">*</span></label>
                   <input
                     type="text"
                     required
                     value={contactName}
                     onChange={(e) => setContactName(e.target.value)}
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-white/10 rounded-xl px-4 py-3 text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
-                    placeholder="홍길동 / OO버스"
+                    placeholder="회사명"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1.5">연락처</label>
+                  <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1.5">연락처 <span className="text-red-500">*</span></label>
                   <input
                     type="tel"
                     required
@@ -326,7 +313,7 @@ export default function LandingPage() {
                   {isSubmitting ? (
                     <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   ) : (
-                    <>상담 신청하기 <ChevronRight size={18} /></>
+                    <>상담 신청하기</>
                   )}
                 </button>
               </form>

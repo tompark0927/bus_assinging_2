@@ -86,7 +86,7 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">아이디 (이메일)</label>
+              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">이메일</label>
               <input
                 type="email"
                 value={email}

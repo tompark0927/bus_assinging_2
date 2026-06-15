@@ -13,7 +13,9 @@ i18n
     },
     lng: 'ko',
     fallbackLng: 'ko',
-    compatibilityJSON: 'v4',
+    // Hermes(RN 엔진)는 Intl.PluralRules 미지원 → v4 는 시작 시 콘솔 에러 후 v3 로 폴백한다.
+    // 한국어는 복수형 구분이 없고 복수형 접미사 키도 안 쓰므로 처음부터 v3 로 지정해 경고 제거.
+    compatibilityJSON: 'v3',
     interpolation: { escapeValue: false },
     react: { useSuspense: false },
   });

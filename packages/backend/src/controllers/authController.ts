@@ -9,6 +9,15 @@ import { sendSms, generateOtp } from '../services/smsService';
 import { sendEmail, otpEmailHtml } from '../services/emailService';
 import logger from '../utils/logger';
 
+// 타이밍 공격 방지용 상수 시간 비교.
+// sha256 으로 양쪽을 고정 길이 다이제스트로 만든 뒤 비교 → 입력 길이 차이로 인한
+// 타이밍/예외 노출까지 방지. (OTP·토큰 등 비밀값 비교에 사용)
+function safeEqual(a: string, b: string): boolean {
+  const ha = crypto.createHash('sha256').update(String(a ?? '')).digest();
+  const hb = crypto.createHash('sha256').update(String(b ?? '')).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
 // ─────────────────────────────────────────
 // 공통: 토큰 발급
 // ─────────────────────────────────────────
@@ -16,7 +25,7 @@ function issueAccessToken(user: { id: number; companyId: number; email: string |
   return jwt.sign(
     { id: user.id, companyId: user.companyId, email: user.email ?? '', role: user.role, name: user.name },
     process.env.JWT_SECRET!,
-    { expiresIn: '2h' } as jwt.SignOptions // 액세스 토큰: 2시간
+    { expiresIn: '2h', algorithm: 'HS256' } as jwt.SignOptions // 액세스 토큰: 2시간
   );
 }
 
@@ -413,7 +422,7 @@ export const verifyPhoneOtp = async (req: Request, res: Response) => {
         return { ok: false, locked: true };
       }
 
-      if (found.otp === otp) {
+      if (safeEqual(found.otp, otp)) {
         await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
         return { ok: true, record: found };
       }
@@ -473,20 +482,13 @@ export const verifyPhoneOtp = async (req: Request, res: Response) => {
 //        (2) OTP + 새 비밀번호 제출 → 검증 후 비밀번호 교체 + 전 세션 무효화 + 즉시 로그인
 // ─────────────────────────────────────────
 
-// 회사코드 + 아이디로 사용자 1명을 해석 (login 의 OR 조건과 동일 규칙 재사용)
-async function resolveUserByIdentifier(companyId: number, identifier: string) {
-  const idStr = String(identifier).trim();
-  const digits = idStr.replace(/\D/g, '');
+// 비밀번호 재설정은 이메일 전용 — 회사코드 + 이메일로 사용자 1명을 해석.
+async function resolveUserByEmail(companyId: number, email: string) {
   return prisma.user.findFirst({
     where: {
       companyId,
       isActive: true,
-      OR: [
-        { email: idStr },
-        { employeeId: idStr },
-        { phone: idStr },
-        ...(digits ? [{ phone: digits }] : []),
-      ],
+      email: String(email).trim(),
     },
   });
 }
@@ -496,7 +498,7 @@ export const forgotPasswordSendOtp = async (req: Request, res: Response) => {
   try {
     const { companyCode, identifier } = req.body;
     if (!companyCode || !identifier) {
-      return res.status(400).json({ success: false, message: '회사 코드와 아이디(이메일/사원번호)를 입력해주세요.' });
+      return res.status(400).json({ success: false, message: '회사 코드와 이메일을 입력해주세요.' });
     }
 
     const company = await prisma.company.findUnique({ where: { code: companyCode } });
@@ -504,7 +506,7 @@ export const forgotPasswordSendOtp = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: '유효하지 않은 회사 코드입니다.' });
     }
 
-    const user = await resolveUserByIdentifier(company.id, identifier);
+    const user = await resolveUserByEmail(company.id, identifier);
     if (!user) {
       return res.status(404).json({ success: false, message: '일치하는 계정을 찾을 수 없습니다. 회사 코드와 아이디를 확인해주세요.' });
     }
@@ -552,7 +554,7 @@ export const forgotPasswordReset = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: '유효하지 않은 회사 코드입니다.' });
     }
 
-    const user = await resolveUserByIdentifier(company.id, identifier);
+    const user = await resolveUserByEmail(company.id, identifier);
     if (!user || !user.email) {
       return res.status(404).json({ success: false, message: '일치하는 계정을 찾을 수 없습니다.' });
     }
@@ -569,7 +571,7 @@ export const forgotPasswordReset = async (req: Request, res: Response) => {
         await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
         return { ok: false, locked: true };
       }
-      if (found.otp === otp) {
+      if (safeEqual(found.otp, otp)) {
         await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
         return { ok: true, locked: false };
       }
@@ -709,7 +711,7 @@ export const verifyEmailOtp = async (req: Request, res: Response) => {
         await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
         return { ok: false, locked: true };
       }
-      if (found.otp === otp) {
+      if (safeEqual(found.otp, otp)) {
         await tx.otpVerification.update({ where: { id: found.id }, data: { used: true } });
         return { ok: true, locked: false };
       }
@@ -732,7 +734,7 @@ export const verifyEmailOtp = async (req: Request, res: Response) => {
     const emailVerifyToken = jwt.sign(
       { email: emailStr, purpose: 'email_verify' },
       process.env.JWT_SECRET!,
-      { expiresIn: '30m' } as jwt.SignOptions,
+      { expiresIn: '30m', algorithm: 'HS256' } as jwt.SignOptions,
     );
     return res.json({ success: true, message: '이메일 인증이 완료되었습니다.', data: { emailVerifyToken } });
   } catch (error) {
