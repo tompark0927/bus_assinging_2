@@ -1,4 +1,4 @@
-import { buildScenario, type ScenarioSpec } from '../bench/scenarios';
+import { buildScenario, SCENARIO_SUITE, type ScenarioSpec } from '../bench/scenarios';
 
 const spec: ScenarioSpec = {
   label: 'test-city-medium', seed: 123, policy: 'CITY_2SHIFT',
@@ -25,5 +25,21 @@ describe('buildScenario', () => {
     expect(input.year).toBe(2026);
     expect(input.month).toBe(5);
     expect(input.policy?.shiftSystem.kind).toBe('TWO_SHIFT');
+  });
+});
+
+describe('SCENARIO_SUITE', () => {
+  it('다양한 정책과 규모를 포함한다', () => {
+    expect(SCENARIO_SUITE.length).toBeGreaterThanOrEqual(18);
+    const policies = new Set(SCENARIO_SUITE.map((s) => s.policy));
+    expect(policies.has('CITY_2SHIFT')).toBe(true);
+    expect(policies.has('VILLAGE_1SHIFT')).toBe(true);
+  });
+  it('라벨이 모두 고유하다', () => {
+    const labels = SCENARIO_SUITE.map((s) => s.label);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+  it('모든 시나리오가 예외 없이 빌드된다', () => {
+    for (const spec of SCENARIO_SUITE) expect(() => buildScenario(spec)).not.toThrow();
   });
 });
