@@ -64,6 +64,10 @@ if (baselinePath) {
   const delta = compareToBaseline(agg, base);
   console.log('baseline 대비 (중앙값 델타):');
   for (const [k, v] of Object.entries(delta)) {
+    if (v.current === null || v.baseline === null || v.delta === null) {
+      console.log(`  ${k}: ${v.baseline ?? 'n/a'} → ${v.current ?? 'n/a'} (n/a)`);
+      continue;
+    }
     const arrow = v.delta > 0 ? '▲' : v.delta < 0 ? '▼' : '=';
     console.log(`  ${k}: ${v.baseline.toFixed(3)} → ${v.current.toFixed(3)} (${arrow}${Math.abs(v.delta).toFixed(3)})`);
   }

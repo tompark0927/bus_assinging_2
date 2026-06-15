@@ -82,5 +82,14 @@
     "median": 26.3,
     "mean": 28.50476190476191,
     "max": 61.7
-  }
+  },
+  "spareUtilizationRate": {
+    "min": 0.342566943674977,
+    "p25": 0.7799442896935933,
+    "median": 0.9163679808841101,
+    "mean": 0.8241436014775045,
+    "max": 1
+  },
+  "dayOffSatisfactionRate": null,
+  "preferenceSatisfactionRate": null
 }

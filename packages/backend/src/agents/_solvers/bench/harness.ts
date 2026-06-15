@@ -30,8 +30,11 @@ const NUMERIC_KEYS = [
 ] as const;
 type NumericKey = (typeof NUMERIC_KEYS)[number];
 
+const NULLABLE_KEYS = ['spareUtilizationRate', 'dayOffSatisfactionRate', 'preferenceSatisfactionRate'] as const;
+type NullableKey = (typeof NULLABLE_KEYS)[number];
+
 export interface Stat { min: number; p25: number; median: number; mean: number; max: number; }
-export type Aggregate = Record<NumericKey, Stat>;
+export type Aggregate = Record<NumericKey, Stat> & Record<NullableKey, Stat | null>;
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -50,6 +53,10 @@ export function aggregate(results: ScenarioResult[]): Aggregate {
   for (const key of NUMERIC_KEYS) {
     out[key] = statOf(ok.map((r) => r.quality![key] as number));
   }
+  for (const key of NULLABLE_KEYS) {
+    const vals = ok.map((r) => r.quality![key]).filter((v): v is number => v !== null && v !== undefined);
+    out[key] = vals.length > 0 ? statOf(vals) : null;
+  }
   return out;
 }
 
@@ -61,6 +68,8 @@ export interface GateSpec {
   maxConstitutionalTotal: number;
 }
 
+// ASPIRATIONAL launch targets (sub-projects 2–4 must reach these).
+// These are NOT the current baseline — the CLI exiting non-zero at baseline is EXPECTED, not a regression.
 export const DEFAULT_GATES: GateSpec = {
   maxWorkDayStdevMedian: 0.8,
   maxHardViolationTotal: 0,
@@ -82,28 +91,32 @@ export function evaluateGates(results: ScenarioResult[], gates: GateSpec): GateR
     failures.push(`workDayStdev median ${agg.workDayStdev.median.toFixed(2)} > ${gates.maxWorkDayStdevMedian}`);
   const hardTotal = ok.reduce((s, r) => s + r.quality!.hardViolationCount, 0);
   if (hardTotal > gates.maxHardViolationTotal)
-    failures.push(`hardViolationCount total ${hardTotal} > ${gates.maxHardViolationTotal}`);
+    failures.push(`hardViolationCount (driver-count) total ${hardTotal} > ${gates.maxHardViolationTotal}`);
   if (agg.unfilledRate.median > gates.maxUnfilledRateMedian)
     failures.push(`unfilledRate median ${agg.unfilledRate.median.toFixed(3)} > ${gates.maxUnfilledRateMedian}`);
   if (agg.restCycleCompliance.min < gates.minRestCycleComplianceMin)
     failures.push(`restCycleCompliance min ${agg.restCycleCompliance.min.toFixed(3)} < ${gates.minRestCycleComplianceMin}`);
   const constTotal = ok.reduce((s, r) => s + r.quality!.constitutionalViolationCount, 0);
   if (constTotal > gates.maxConstitutionalTotal)
-    failures.push(`constitutionalViolation total ${constTotal} > ${gates.maxConstitutionalTotal}`);
+    failures.push(`constitutionalViolation event total ${constTotal} > ${gates.maxConstitutionalTotal}`);
 
   return { passed: failures.length === 0, failures };
 }
 
 export interface DeltaReport {
-  [key: string]: { current: number; baseline: number; delta: number };
+  [key: string]: { current: number | null; baseline: number | null; delta: number | null };
 }
 
 export function compareToBaseline(current: Aggregate, baseline: Aggregate): DeltaReport {
   const out: DeltaReport = {};
-  for (const key of NUMERIC_KEYS) {
-    const cur = current[key].median;
-    const base = baseline[key].median;
-    out[key] = { current: cur, baseline: base, delta: cur - base };
+  const keys = [...NUMERIC_KEYS, ...NULLABLE_KEYS] as readonly string[];
+  for (const key of keys) {
+    const cs = (current as Record<string, Stat | null>)[key];
+    const bs = (baseline as Record<string, Stat | null>)[key];
+    const cur = cs ? cs.median : null;
+    const base = bs ? bs.median : null;
+    const delta = cur !== null && base !== null ? cur - base : null;
+    out[key] = { current: cur, baseline: base, delta };
   }
   return out;
 }
