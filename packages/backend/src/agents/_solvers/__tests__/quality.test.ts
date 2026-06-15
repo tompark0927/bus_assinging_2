@@ -66,6 +66,7 @@ describe('scheduleQuality — 야간/주말 라벨 정규화', () => {
     expect(q.nightStdev).toBeCloseTo(1, 5);
   });
   it('주말 근무 분포를 weekendStdev로 잡는다', () => {
+    // 2026-05-02는 토요일(주말), 2026-05-01은 금요일(평일)
     const input = baseInput([driver(1), driver(2)]);
     const out = output([slot(1, '2026-05-02', 'AM'), slot(2, '2026-05-01', 'AM')]);
     const q = scheduleQuality(input, out);
@@ -89,6 +90,12 @@ describe('scheduleQuality — SPARE 활용률', () => {
     const input = baseInput([driver(1, { homeBusId: 101 })]);
     expect(scheduleQuality(input, output([slot(1, '2026-05-01')])).spareUtilizationRate).toBeNull();
   });
+  it('홈 드라이버가 없고 스페어만 있으면 null을 반환한다', () => {
+    const spare = driver(2, { homeBusId: undefined });
+    const input = baseInput([spare]);
+    const out = output([{ date: '2026-05-01', busId: 200, routeId: 1, shift: 'AM', driverId: 2, familiarity: 'SAME_ROUTE', isHomeBus: false }]);
+    expect(scheduleQuality(input, out).spareUtilizationRate).toBeNull();
+  });
 });
 
 describe('scheduleQuality — 선호 휴무 + 종합 점수', () => {
@@ -101,6 +108,12 @@ describe('scheduleQuality — 선호 휴무 + 종합 점수', () => {
   it('선호 휴무가 아무에게도 없으면 null', () => {
     const input = baseInput([driver(1)]);
     expect(scheduleQuality(input, output([slot(1, '2026-05-01')])).dayOffSatisfactionRate).toBeNull();
+  });
+  it('기사가 없으면 compositeScore=100, stdev/idle=0 (의도된 동작)', () => {
+    const q = scheduleQuality(baseInput([]), output([]));
+    expect(q.compositeScore).toBe(100);
+    expect(q.workDayStdev).toBe(0);
+    expect(q.idleDriverCount).toBe(0);
   });
   it('compositeScore는 0~100 범위이고 완벽한 그리드일수록 높다', () => {
     const input = baseInput([driver(1), driver(2)]);
