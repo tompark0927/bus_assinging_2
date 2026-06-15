@@ -48,6 +48,7 @@ import {
   type UnfilledSlot,
   type WorkloadEvaluation,
 } from './types';
+import { createRng, type Rng } from '../../utils/seededRng';
 
 // ─────────────────────────────────────────────
 // 근무일수 평가 (tiered, 정책 기반)
@@ -66,6 +67,9 @@ import {
 //   EXEMPTED        — < hardMin + driver.exemptReason 있음  무페널티
 
 const HARD_VIOLATION_PENALTY = 1e9; // local search 가 사실상 거부할 큰 finite 값
+
+/** localSearch 기본 시드 (randomSeed 미지정 시). 고정값이라 프로덕션도 동일 입력 → 동일 결과. */
+const DEFAULT_SOLVER_SEED = 1234567;
 
 /**
  * 운전자에게 적용되는 effective bands.
@@ -315,7 +319,8 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
 
   // ── Phase C: 로컬 서치 ───
   const iterations = input.localSearchIterations ?? 1000;
-  const swaps = localSearch(ctx, slots, input.drivers, weights, restCycle, policy, iterations, monthStart);
+  const searchRng = createRng(input.randomSeed ?? DEFAULT_SOLVER_SEED);
+  const swaps = localSearch(ctx, slots, input.drivers, weights, restCycle, policy, iterations, monthStart, searchRng);
 
   // ── 메트릭 ───
   const violations = validateFullGrid(input.drivers, slots, monthStart, monthEnd, policy);
@@ -718,14 +723,15 @@ function localSearch(
   policy: CompanyPolicy,
   iterations: number,
   monthStart: Date,
+  rng: Rng,
 ): number {
   let swaps = 0;
   let currentObj = objective(slots, drivers, weights, policy);
 
   for (let i = 0; i < iterations; i++) {
     if (slots.length < 2) break;
-    const a = Math.floor(Math.random() * slots.length);
-    let b = Math.floor(Math.random() * slots.length);
+    const a = Math.floor(rng() * slots.length);
+    let b = Math.floor(rng() * slots.length);
     if (a === b) continue;
     const sa = slots[a];
     const sb = slots[b];
