@@ -35,13 +35,25 @@ describe('harness', () => {
     const delta = compareToBaseline(cur, base);
     expect(delta.compositeScore.delta).toBeCloseTo(20, 5);
   });
+
+  it('aggregate는 nullable 지표를 non-null 값만으로 집계하고, 전부 null이면 null이다', () => {
+    const stats = aggregate([
+      { label: 'a', spec: {} as never, elapsedMs: 1, quality: { ...q(80), spareUtilizationRate: 0.4 } },
+      { label: 'b', spec: {} as never, elapsedMs: 1, quality: { ...q(80), spareUtilizationRate: null } },
+      { label: 'c', spec: {} as never, elapsedMs: 1, quality: { ...q(80), spareUtilizationRate: 0.6 } },
+    ]);
+    // sorted [0.4, 0.6], percentile(0.5): idx = floor(0.5 * (2-1)) = 0 → 0.4
+    expect(stats.spareUtilizationRate?.median).toBeCloseTo(0.4, 5);
+    expect(stats.dayOffSatisfactionRate).toBeNull();
+  });
 });
 
-function q(composite: number) {
+function q(composite: number, overrides: Record<string, unknown> = {}) {
   return {
     workDayStdev: 0, nightStdev: 0, weekendStdev: 0, activeDriverRate: 1, spareUtilizationRate: null,
     idleDriverCount: 0, unfilledRate: 0, homeBusRate: 1, crossRouteRate: 0, preferenceSatisfactionRate: null,
     dayOffSatisfactionRate: null, hardViolationCount: 0, constitutionalViolationCount: 0, constitutionalByRule: {},
     restCycleCompliance: 1, compositeScore: composite,
+    ...overrides,
   };
 }

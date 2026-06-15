@@ -22,7 +22,7 @@ function pad(n: number): string { return String(n).padStart(2, '0'); }
 
 function randomDayOffs(rng: Rng, year: number, month: number, count: number): string[] {
   if (count <= 0) return [];
-  const daysInMonth = new Date(year, month, 0).getDate();
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const set = new Set<string>();
   let guard = 0;
   while (set.size < count && guard++ < 100) {
@@ -32,7 +32,7 @@ function randomDayOffs(rng: Rng, year: number, month: number, count: number): st
 }
 
 function buildOperatingDates(year: number, month: number, weekdayOps: number, weekendOps: number, busPositionInRoute: number, busesInRoute: number): string[] {
-  const daysInMonth = new Date(year, month, 0).getDate();
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const dates: string[] = [];
   for (let d = 1; d <= daysInMonth; d++) {
     const dow = new Date(Date.UTC(year, month - 1, d)).getUTCDay();
