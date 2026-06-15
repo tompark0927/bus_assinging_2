@@ -32,6 +32,18 @@ import {
 } from '../agents/_solvers/types';
 
 // ─────────────────────────────────────────────
+// 순수 헬퍼 — 선호 노선 정렬
+// ─────────────────────────────────────────────
+
+/**
+ * driverPreferences 배열을 priority 오름차순으로 정렬 후 routeId 만 추출.
+ * (priority 낮을수록 = 더 선호)
+ */
+export function mapPreferredRouteIds(prefs: { routeId: number; priority: number }[]): number[] {
+  return [...prefs].sort((a, b) => a.priority - b.priority).map((p) => p.routeId);
+}
+
+// ─────────────────────────────────────────────
 // 정책 로딩
 // ─────────────────────────────────────────────
 
@@ -204,6 +216,7 @@ export async function buildSolverInputFromDb(
     const isNewHire =
       d.createdAt && monthStart.getTime() - d.createdAt.getTime() < 30 * 24 * 60 * 60 * 1000;
 
+    const preferredRouteIds = mapPreferredRouteIds(d.driverPreferences);
     drivers.push({
       id: d.id,
       name: d.name,
@@ -219,6 +232,7 @@ export async function buildSolverInputFromDb(
       qualificationExpiresAt: d.qualificationExpiresAt ?? undefined,
       recentFatigueScore: 30, // placeholder; 향후 attendance·incident 기반 계산
       isNewHire: !!isNewHire,
+      ...(preferredRouteIds.length > 0 ? { preferredRouteIds } : {}),
     });
   }
 
