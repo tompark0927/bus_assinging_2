@@ -61,12 +61,21 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
     if (isWeekendDate(s.date)) weekendById.set(s.driverId, (weekendById.get(s.driverId) ?? 0) + 1);
   }
 
+  const spareIds = drivers.filter((d) => d.homeBusId === undefined).map((d) => d.id);
+  const homeIds = drivers.filter((d) => d.homeBusId !== undefined).map((d) => d.id);
+  const avg = (ids: number[]) => ids.length === 0 ? 0 : ids.reduce((s, id) => s + (workDaysById.get(id) ?? 0), 0) / ids.length;
+  let spareUtilizationRate: number | null = null;
+  if (spareIds.length > 0) {
+    const homeAvg = avg(homeIds);
+    spareUtilizationRate = homeAvg === 0 ? 0 : clamp(avg(spareIds) / homeAvg, 0, 1);
+  }
+
   const report: QualityReport = {
     workDayStdev: stdev(workDays),
     nightStdev: stdev(drivers.map((d) => nightById.get(d.id) ?? 0)),
     weekendStdev: stdev(drivers.map((d) => weekendById.get(d.id) ?? 0)),
     activeDriverRate,
-    spareUtilizationRate: null,
+    spareUtilizationRate,
     idleDriverCount,
     unfilledRate,
     homeBusRate: output.metrics.homeBusRate,
