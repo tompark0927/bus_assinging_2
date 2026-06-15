@@ -90,3 +90,25 @@ describe('scheduleQuality — SPARE 활용률', () => {
     expect(scheduleQuality(input, output([slot(1, '2026-05-01')])).spareUtilizationRate).toBeNull();
   });
 });
+
+describe('scheduleQuality — 선호 휴무 + 종합 점수', () => {
+  it('선호 휴무를 지킨 비율을 계산한다', () => {
+    const d1 = driver(1, { preferredDayOffs: ['2026-05-10', '2026-05-11'] });
+    const input = baseInput([d1]);
+    const out = output([slot(1, '2026-05-10')]);
+    expect(scheduleQuality(input, out).dayOffSatisfactionRate).toBeCloseTo(0.5, 5);
+  });
+  it('선호 휴무가 아무에게도 없으면 null', () => {
+    const input = baseInput([driver(1)]);
+    expect(scheduleQuality(input, output([slot(1, '2026-05-01')])).dayOffSatisfactionRate).toBeNull();
+  });
+  it('compositeScore는 0~100 범위이고 완벽한 그리드일수록 높다', () => {
+    const input = baseInput([driver(1), driver(2)]);
+    const balanced = output([slot(1, '2026-05-01'), slot(2, '2026-05-01')]);
+    const q = scheduleQuality(input, balanced);
+    expect(q.compositeScore).toBeGreaterThanOrEqual(0);
+    expect(q.compositeScore).toBeLessThanOrEqual(100);
+    const worse = output([slot(1, '2026-05-01'), slot(1, '2026-05-02')], 2);
+    expect(scheduleQuality(input, worse).compositeScore).toBeLessThan(q.compositeScore);
+  });
+});

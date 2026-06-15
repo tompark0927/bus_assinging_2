@@ -1,5 +1,10 @@
 import type { SolverInput, SolverOutput, ConstitutionalRuleKey, ShiftSystemPolicy } from './types';
 
+const QUALITY_WEIGHTS = {
+  workStdev: 8, nightStdev: 4, weekendStdev: 4, unfilledRate: 40,
+  idleRatio: 20, hardViolationRatio: 30, constitutionalRatio: 30, restCycleShortfall: 30,
+} as const;
+
 export interface QualityReport {
   workDayStdev: number;
   nightStdev: number;
@@ -61,6 +66,36 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
     if (isWeekendDate(s.date)) weekendById.set(s.driverId, (weekendById.get(s.driverId) ?? 0) + 1);
   }
 
+  const workedKey = new Set(output.slots.map((s) => `${s.driverId}|${s.date}`));
+  let prefTotal = 0, prefMet = 0;
+  for (const d of drivers) {
+    for (const day of d.preferredDayOffs ?? []) {
+      prefTotal += 1;
+      if (!workedKey.has(`${d.id}|${day}`)) prefMet += 1;
+    }
+  }
+  const dayOffSatisfactionRate = prefTotal === 0 ? null : prefMet / prefTotal;
+
+  const constitutionalByRule: Partial<Record<ConstitutionalRuleKey, number>> = {};
+  for (const v of output.metrics.constitutionalViolations) {
+    constitutionalByRule[v.ruleKey] = (constitutionalByRule[v.ruleKey] ?? 0) + 1;
+  }
+
+  const n = Math.max(1, drivers.length);
+  const idleRatio = idleDriverCount / n;
+  const hardViolationRatio = output.metrics.hardViolationCount / n;
+  const constitutionalRatio = output.metrics.constitutionalViolations.length / n;
+  const composite =
+    100
+    - QUALITY_WEIGHTS.workStdev * stdev(workDays)
+    - QUALITY_WEIGHTS.nightStdev * stdev(drivers.map((d) => nightById.get(d.id) ?? 0))
+    - QUALITY_WEIGHTS.weekendStdev * stdev(drivers.map((d) => weekendById.get(d.id) ?? 0))
+    - QUALITY_WEIGHTS.unfilledRate * unfilledRate
+    - QUALITY_WEIGHTS.idleRatio * idleRatio
+    - QUALITY_WEIGHTS.hardViolationRatio * hardViolationRatio
+    - QUALITY_WEIGHTS.constitutionalRatio * constitutionalRatio
+    - QUALITY_WEIGHTS.restCycleShortfall * (1 - output.metrics.restCycleCompliance);
+
   const spareIds = drivers.filter((d) => d.homeBusId === undefined).map((d) => d.id);
   const homeIds = drivers.filter((d) => d.homeBusId !== undefined).map((d) => d.id);
   const avg = (ids: number[]) => ids.length === 0 ? 0 : ids.reduce((s, id) => s + (workDaysById.get(id) ?? 0), 0) / ids.length;
@@ -81,12 +116,12 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
     homeBusRate: output.metrics.homeBusRate,
     crossRouteRate: output.metrics.crossRouteRate,
     preferenceSatisfactionRate: null,
-    dayOffSatisfactionRate: null,
+    dayOffSatisfactionRate,
     hardViolationCount: output.metrics.hardViolationCount,
     constitutionalViolationCount: output.metrics.constitutionalViolations.length,
-    constitutionalByRule: {},
+    constitutionalByRule,
     restCycleCompliance: output.metrics.restCycleCompliance,
-    compositeScore: 0,
+    compositeScore: Math.round(clamp(composite, 0, 100) * 10) / 10,
   };
   return report;
 }
