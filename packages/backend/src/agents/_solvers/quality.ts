@@ -1,5 +1,13 @@
 import type { SolverInput, SolverOutput, ConstitutionalRuleKey, ShiftSystemPolicy } from './types';
 
+/**
+ * 품질 가중치 — 측정 전용 (솔버 objective 와 무관).
+ *
+ * 페널티 합계가 의도적으로 100을 초과하도록 설계되어 있어,
+ * 최악의 일정도 0점 바닥에 고정됨. 아래의 clamp(..., 0, 100)은
+ * 이를 위한 핵심 처리이며 제거해서는 안 됨.
+ * 가중치는 일정 품질 측정용이며 솔버 목적함수와 독립적으로 동작함.
+ */
 const QUALITY_WEIGHTS = {
   workStdev: 8, nightStdev: 4, weekendStdev: 4, unfilledRate: 40,
   idleRatio: 20, hardViolationRatio: 30, constitutionalRatio: 30, restCycleShortfall: 30,
@@ -37,7 +45,15 @@ function nightLabels(shiftSystem: ShiftSystemPolicy): Set<string> {
   switch (shiftSystem.kind) {
     case 'TWO_SHIFT': return new Set(['PM']);
     case 'THREE_SHIFT': return new Set(['NIGHT']);
-    default: return new Set<string>();
+    case 'ONE_SHIFT':
+    case 'ALTERNATING_DAY':
+      return new Set<string>();
+    default: {
+      // 새 ShiftSystemPolicy.kind 추가 시 컴파일 에러로 누락 방지
+      const _exhaustive: never = shiftSystem;
+      void _exhaustive;
+      return new Set<string>();
+    }
   }
 }
 function isWeekendDate(isoDate: string): boolean {
@@ -102,7 +118,7 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
   let spareUtilizationRate: number | null = null;
   if (spareIds.length > 0) {
     const homeAvg = avg(homeIds);
-    spareUtilizationRate = homeAvg === 0 ? 0 : clamp(avg(spareIds) / homeAvg, 0, 1);
+    spareUtilizationRate = homeAvg === 0 ? null : clamp(avg(spareIds) / homeAvg, 0, 1);
   }
 
   const report: QualityReport = {
@@ -115,7 +131,7 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
     unfilledRate,
     homeBusRate: output.metrics.homeBusRate,
     crossRouteRate: output.metrics.crossRouteRate,
-    preferenceSatisfactionRate: null,
+    preferenceSatisfactionRate: null, // TODO: 하위 프로젝트 4에서 선호노선 데이터 연결 시 실측 (현재 데이터모델에 선호노선 없음)
     dayOffSatisfactionRate,
     hardViolationCount: output.metrics.hardViolationCount,
     constitutionalViolationCount: output.metrics.constitutionalViolations.length,
