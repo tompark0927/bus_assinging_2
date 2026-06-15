@@ -458,6 +458,8 @@ export interface SolverInput {
   policy?: CompanyPolicy;
   /** 휴리스틱 반복 횟수 (Phase C) */
   localSearchIterations?: number;
+  /** 로컬 서치 RNG 시드. 지정 시 동일 입력 → 동일 결과(재현·감사 가능). 미지정 시 고정 기본 시드 사용. */
+  randomSeed?: number;
 }
 
 export interface AssignedSlot {
