@@ -98,6 +98,23 @@ describe('scheduleQuality — SPARE 활용률', () => {
   });
 });
 
+describe('scheduleQuality — 선호 노선 충족률', () => {
+  it('선호 노선 보유 기사의 배정 슬롯 중 선호 노선 비율을 잰다', () => {
+    const d = driver(1, { preferredRouteIds: [1] }); // route 1 선호
+    const input = baseInput([d]);
+    // route 1 슬롯 2개(충족), route 2 슬롯 1개(미충족) => 2/3
+    const out = output([
+      slot(1, '2026-05-01'),
+      slot(1, '2026-05-02'),
+      { date: '2026-05-03', busId: 999, routeId: 2, shift: 'AM', driverId: 1, familiarity: 'CROSS_ROUTE', isHomeBus: false },
+    ]);
+    expect(scheduleQuality(input, out).preferenceSatisfactionRate).toBeCloseTo(2 / 3, 5);
+  });
+  it('선호 보유 기사가 없으면 null', () => {
+    expect(scheduleQuality(baseInput([driver(1)]), output([slot(1, '2026-05-01')])).preferenceSatisfactionRate).toBeNull();
+  });
+});
+
 describe('scheduleQuality — 선호 휴무 + 종합 점수', () => {
   it('선호 휴무를 지킨 비율을 계산한다', () => {
     const d1 = driver(1, { preferredDayOffs: ['2026-05-10', '2026-05-11'] });

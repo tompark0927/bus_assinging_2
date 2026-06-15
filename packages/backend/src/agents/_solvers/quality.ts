@@ -1,4 +1,4 @@
-import type { SolverInput, SolverOutput, ConstitutionalRuleKey, ShiftSystemPolicy } from './types';
+import type { SolverInput, SolverOutput, ConstitutionalRuleKey, ShiftSystemPolicy, AssignedSlot } from './types';
 
 /**
  * 품질 가중치 — 측정 전용 (솔버 objective 와 무관).
@@ -59,6 +59,38 @@ function nightLabels(shiftSystem: ShiftSystemPolicy): Set<string> {
 function isWeekendDate(isoDate: string): boolean {
   const dow = new Date(`${isoDate}T00:00:00Z`).getUTCDay();
   return dow === 0 || dow === 6;
+}
+
+/**
+ * 선호 노선 충족률 계산.
+ * 선호 노선이 있고 ≥1 슬롯을 배정받은 기사에 대해,
+ * 해당 기사 슬롯 중 선호 노선에 배정된 비율의 평균을 반환.
+ * 해당 기사가 없으면 null.
+ */
+function computePreferenceSatisfactionRate(
+  drivers: SolverInput['drivers'],
+  slots: AssignedSlot[],
+): number | null {
+  // Build slot map per driver
+  const slotsByDriver = new Map<number, AssignedSlot[]>();
+  for (const s of slots) {
+    const arr = slotsByDriver.get(s.driverId) ?? [];
+    arr.push(s);
+    slotsByDriver.set(s.driverId, arr);
+  }
+
+  const rates: number[] = [];
+  for (const d of drivers) {
+    if (!d.preferredRouteIds || d.preferredRouteIds.length === 0) continue;
+    const driverSlots = slotsByDriver.get(d.id) ?? [];
+    if (driverSlots.length === 0) continue;
+    const prefSet = new Set(d.preferredRouteIds);
+    const metCount = driverSlots.filter((s) => prefSet.has(s.routeId)).length;
+    rates.push(metCount / driverSlots.length);
+  }
+
+  if (rates.length === 0) return null;
+  return rates.reduce((a, b) => a + b, 0) / rates.length;
 }
 
 export function scheduleQuality(input: SolverInput, output: SolverOutput): QualityReport {
@@ -131,7 +163,7 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
     unfilledRate,
     homeBusRate: output.metrics.homeBusRate,
     crossRouteRate: output.metrics.crossRouteRate,
-    preferenceSatisfactionRate: null, // TODO: 하위 프로젝트 4에서 선호노선 데이터 연결 시 실측 (현재 데이터모델에 선호노선 없음)
+    preferenceSatisfactionRate: computePreferenceSatisfactionRate(drivers, output.slots),
     dayOffSatisfactionRate,
     hardViolationCount: output.metrics.hardViolationCount,
     constitutionalViolationCount: output.metrics.constitutionalViolations.length,
