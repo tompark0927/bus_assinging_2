@@ -103,6 +103,7 @@ export function buildScenario(spec: ScenarioSpec): SolverInput {
     crews,
     policy: spec.policy === 'VILLAGE_1SHIFT' ? POLICY_PRESETS.VILLAGE_1SHIFT : POLICY_PRESETS.CITY_2SHIFT,
     localSearchIterations: 2000,
+    randomSeed: spec.seed,
   };
 }
 
