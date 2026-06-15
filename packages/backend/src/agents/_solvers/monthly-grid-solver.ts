@@ -585,7 +585,9 @@ function candidateCost(
   const weekendCost = isWeekend(slot.date) ? weekendCount * 5 : 0;
 
   // 6) 선호 노선 미충족 페널티
-  const preferenceCost = driver.preferredRouteIds && driver.preferredRouteIds.length > 0 && !driver.preferredRouteIds.includes(slot.routeId) ? 12 : 0;
+  const preferenceCost = driver.preferredRouteIds && driver.preferredRouteIds.length > 0 && !driver.preferredRouteIds.includes(slot.routeId)
+    ? 2 // 약한 타이브레이커 — 근무일 밴드 결정을 뒤집지 않도록 작게 유지 (12→2)
+    : 0;
 
   return workloadCost + consistencyCost + alternationCost + fatigueCost + weekendCost + preferenceCost;
 }
