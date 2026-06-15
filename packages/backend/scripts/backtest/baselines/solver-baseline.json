@@ -1,0 +1,86 @@
+{
+  "workDayStdev": {
+    "min": 0.7216878364870323,
+    "p25": 1.0117976623598306,
+    "median": 1.236282759617877,
+    "mean": 2.364600237640208,
+    "max": 7.969316156358713
+  },
+  "nightStdev": {
+    "min": 0,
+    "p25": 0,
+    "median": 3.8203842839192967,
+    "mean": 2.8353849815333567,
+    "max": 4.554454473979903
+  },
+  "weekendStdev": {
+    "min": 2.318404623873926,
+    "p25": 3.1924980651125856,
+    "median": 3.2693866227304613,
+    "mean": 3.44202788383627,
+    "max": 4.732863826479693
+  },
+  "activeDriverRate": {
+    "min": 1,
+    "p25": 1,
+    "median": 1,
+    "mean": 1,
+    "max": 1
+  },
+  "idleDriverCount": {
+    "min": 0,
+    "p25": 0,
+    "median": 0,
+    "mean": 0,
+    "max": 0
+  },
+  "unfilledRate": {
+    "min": 0,
+    "p25": 0.036231884057971016,
+    "median": 0.1,
+    "mean": 0.09553304629131891,
+    "max": 0.22637590861889928
+  },
+  "homeBusRate": {
+    "min": 0.313,
+    "p25": 0.418,
+    "median": 0.535,
+    "mean": 0.5660000000000002,
+    "max": 0.85
+  },
+  "crossRouteRate": {
+    "min": 0,
+    "p25": 0,
+    "median": 0.045,
+    "mean": 0.07752380952380952,
+    "max": 0.242
+  },
+  "hardViolationCount": {
+    "min": 0,
+    "p25": 0,
+    "median": 0,
+    "mean": 3.619047619047619,
+    "max": 18
+  },
+  "constitutionalViolationCount": {
+    "min": 4,
+    "p25": 8,
+    "median": 60,
+    "mean": 45.095238095238095,
+    "max": 83
+  },
+  "restCycleCompliance": {
+    "min": 1,
+    "p25": 1,
+    "median": 1,
+    "mean": 1,
+    "max": 1
+  },
+  "compositeScore": {
+    "min": 0,
+    "p25": 22.3,
+    "median": 26.3,
+    "mean": 28.50476190476191,
+    "max": 61.7
+  }
+}
