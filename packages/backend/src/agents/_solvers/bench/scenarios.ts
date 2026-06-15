@@ -88,6 +88,7 @@ export function buildScenario(spec: ScenarioSpec): SolverInput {
         name: `R${r}-여유${s + 1}`,
         homeRouteId: routeId,
         canCrossRoute: false,
+        preferredRouteIds: [routeId],
         approvedDayOffs: rngChance(rng, spec.dayOffDensity) ? randomDayOffs(rng, spec.year, spec.month, rngInt(rng, 1, 2)) : [],
         recentFatigueScore: rngFloat(rng, 15, 45), // 스페어: 예비 인력이라 평균적으로 더 신선 15~45
         isNewHire: s === 0 && r === 1,

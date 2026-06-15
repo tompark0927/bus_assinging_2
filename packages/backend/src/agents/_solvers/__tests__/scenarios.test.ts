@@ -46,6 +46,17 @@ describe('buildScenario', () => {
   });
 });
 
+describe('buildScenario — 선호 노선 (preferredRouteIds)', () => {
+  it('spare 기사에게 homeRouteId 기반 preferredRouteIds가 설정된다', () => {
+    const input = buildScenario(spec);
+    const spares = input.drivers.filter((d) => d.homeBusId === undefined);
+    expect(spares.length).toBeGreaterThan(0);
+    expect(spares.every((d) => d.preferredRouteIds !== undefined && d.preferredRouteIds.length > 0)).toBe(true);
+    // preferredRouteIds[0] 은 homeRouteId 와 같아야 함
+    expect(spares.every((d) => d.preferredRouteIds![0] === d.homeRouteId)).toBe(true);
+  });
+});
+
 describe('SCENARIO_SUITE', () => {
   it('다양한 정책과 규모를 포함한다', () => {
     expect(SCENARIO_SUITE.length).toBe(21);
