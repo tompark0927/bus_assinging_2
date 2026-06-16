@@ -1,4 +1,4 @@
-import { POLICY_PRESETS, type SolverBus, type SolverCrew, type SolverDriver, type SolverInput } from '../types';
+import { POLICY_PRESETS, type SolverBus, type SolverCrew, type SolverDriver, type SolverInput, type WorkloadExemptionReason } from '../types';
 import { createRng, rngInt, rngFloat, rngChance, type Rng } from '../../../utils/seededRng';
 
 export type PolicyKey = 'CITY_2SHIFT' | 'VILLAGE_1SHIFT';
@@ -83,15 +83,43 @@ export function buildScenario(spec: ScenarioSpec): SolverInput {
       crews.push({ id: `C${crewCounter++}`, driverIds: crewDriverIds, busId: bId, routeId });
     }
     for (let s = 0; s < spec.sparesPerRoute; s++) {
+      const isNewHire = s === 0 && r === 1;
+      const policy = spec.policy === 'VILLAGE_1SHIFT' ? POLICY_PRESETS.VILLAGE_1SHIFT : POLICY_PRESETS.CITY_2SHIFT;
+      const bands = policy.workdayBands;
+
+      // 신규 입사 시뮬레이션: 월 초반 14일을 휴무(입사 전)로 처리해 hardMin 미달 상태를 확정 생성.
+      // dayOffDensity RNG 기반 휴무와 합산(중복 제거).
+      const rngDayOffs = rngChance(rng, spec.dayOffDensity)
+        ? randomDayOffs(rng, spec.year, spec.month, rngInt(rng, 1, 2))
+        : [];
+      const onboardingDayOffs = isNewHire
+        ? Array.from({ length: 14 }, (_, i) => `${spec.year}-${pad(spec.month)}-${pad(i + 1)}`)
+        : [];
+      const approvedDayOffs = isNewHire
+        ? Array.from(new Set([...onboardingDayOffs, ...rngDayOffs])).sort()
+        : rngDayOffs;
+
       drivers.push({
         id: driverId++,
         name: `R${r}-여유${s + 1}`,
         homeRouteId: routeId,
         canCrossRoute: true,
         preferredRouteIds: [routeId],
-        approvedDayOffs: rngChance(rng, spec.dayOffDensity) ? randomDayOffs(rng, spec.year, spec.month, rngInt(rng, 1, 2)) : [],
+        approvedDayOffs,
         recentFatigueScore: rngFloat(rng, 15, 45), // 스페어: 예비 인력이라 평균적으로 더 신선 15~45
-        isNewHire: s === 0 && r === 1,
+        isNewHire,
+        ...(isNewHire
+          ? {
+              workDayTarget: {
+                min: bands.hardMin,
+                max: bands.hardMax,
+                softMin: bands.sweetMin,
+                softMax: bands.sweetMax,
+                exemptReason: 'NEW_HIRE' as const,
+                exemptNote: '신규 입사 (시나리오)',
+              },
+            }
+          : {}),
       });
     }
   }
