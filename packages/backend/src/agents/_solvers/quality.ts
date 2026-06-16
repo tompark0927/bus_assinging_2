@@ -26,6 +26,7 @@ export interface QualityReport {
   preferenceSatisfactionRate: number | null;
   dayOffSatisfactionRate: number | null;
   hardViolationCount: number;
+  exemptedCount: number;
   constitutionalViolationCount: number;
   constitutionalByRule: Partial<Record<ConstitutionalRuleKey, number>>;
   restCycleCompliance: number;
@@ -95,14 +96,13 @@ function computePreferenceSatisfactionRate(
 
 export function scheduleQuality(input: SolverInput, output: SolverOutput): QualityReport {
   const drivers = input.drivers;
+  // "rated" drivers = those without an exemption reason (partial-month new hires etc. are excluded from fairness metrics)
+  const ratedDrivers = drivers.filter((d) => !d.workDayTarget?.exemptReason);
+
+  // Build per-driver counts from ALL slots (keeps the maps authoritative for slot lookups)
   const workDaysById = new Map<number, number>();
   for (const d of drivers) workDaysById.set(d.id, 0);
   for (const s of output.slots) workDaysById.set(s.driverId, (workDaysById.get(s.driverId) ?? 0) + 1);
-  const workDays = drivers.map((d) => workDaysById.get(d.id) ?? 0);
-  const idleDriverCount = workDays.filter((w) => w === 0).length;
-  const activeDriverRate = drivers.length === 0 ? 0 : (drivers.length - idleDriverCount) / drivers.length;
-  const totalSlots = output.slots.length + output.unfilled.length;
-  const unfilledRate = totalSlots === 0 ? 0 : output.unfilled.length / totalSlots;
 
   const policy = input.policy;
   const nightSet = policy ? nightLabels(policy.shiftSystem) : new Set<string>();
@@ -113,6 +113,17 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
     if (nightSet.has(s.shift)) nightById.set(s.driverId, (nightById.get(s.driverId) ?? 0) + 1);
     if (isWeekendDate(s.date)) weekendById.set(s.driverId, (weekendById.get(s.driverId) ?? 0) + 1);
   }
+
+  // Fairness stats: only over ratedDrivers (exempted new-hires excluded)
+  const ratedWorkDays = ratedDrivers.map((d) => workDaysById.get(d.id) ?? 0);
+  const ratedNights = ratedDrivers.map((d) => nightById.get(d.id) ?? 0);
+  const ratedWeekends = ratedDrivers.map((d) => weekendById.get(d.id) ?? 0);
+
+  const idleDriverCount = ratedWorkDays.filter((w) => w === 0).length;
+  const activeDriverRate = ratedDrivers.length === 0 ? 1 : (ratedDrivers.length - idleDriverCount) / ratedDrivers.length;
+
+  const totalSlots = output.slots.length + output.unfilled.length;
+  const unfilledRate = totalSlots === 0 ? 0 : output.unfilled.length / totalSlots;
 
   const workedKey = new Set(output.slots.map((s) => `${s.driverId}|${s.date}`));
   let prefTotal = 0, prefMet = 0;
@@ -130,22 +141,23 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
   }
 
   const n = Math.max(1, drivers.length);
-  const idleRatio = idleDriverCount / n;
+  const idleRatio = ratedDrivers.length === 0 ? 0 : idleDriverCount / ratedDrivers.length;
   const hardViolationRatio = output.metrics.hardViolationCount / n;
   const constitutionalRatio = output.metrics.constitutionalViolations.length / n;
   const composite =
     100
-    - QUALITY_WEIGHTS.workStdev * stdev(workDays)
-    - QUALITY_WEIGHTS.nightStdev * stdev(drivers.map((d) => nightById.get(d.id) ?? 0))
-    - QUALITY_WEIGHTS.weekendStdev * stdev(drivers.map((d) => weekendById.get(d.id) ?? 0))
+    - QUALITY_WEIGHTS.workStdev * stdev(ratedWorkDays)
+    - QUALITY_WEIGHTS.nightStdev * stdev(ratedNights)
+    - QUALITY_WEIGHTS.weekendStdev * stdev(ratedWeekends)
     - QUALITY_WEIGHTS.unfilledRate * unfilledRate
     - QUALITY_WEIGHTS.idleRatio * idleRatio
     - QUALITY_WEIGHTS.hardViolationRatio * hardViolationRatio
     - QUALITY_WEIGHTS.constitutionalRatio * constitutionalRatio
     - QUALITY_WEIGHTS.restCycleShortfall * (1 - output.metrics.restCycleCompliance);
 
-  const spareIds = drivers.filter((d) => d.homeBusId === undefined).map((d) => d.id);
-  const homeIds = drivers.filter((d) => d.homeBusId !== undefined).map((d) => d.id);
+  // spareUtilizationRate: only rated drivers (exempt new-hire spares excluded from pool)
+  const spareIds = ratedDrivers.filter((d) => d.homeBusId === undefined).map((d) => d.id);
+  const homeIds = ratedDrivers.filter((d) => d.homeBusId !== undefined).map((d) => d.id);
   const avg = (ids: number[]) => ids.length === 0 ? 0 : ids.reduce((s, id) => s + (workDaysById.get(id) ?? 0), 0) / ids.length;
   let spareUtilizationRate: number | null = null;
   if (spareIds.length > 0) {
@@ -154,9 +166,9 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
   }
 
   const report: QualityReport = {
-    workDayStdev: stdev(workDays),
-    nightStdev: stdev(drivers.map((d) => nightById.get(d.id) ?? 0)),
-    weekendStdev: stdev(drivers.map((d) => weekendById.get(d.id) ?? 0)),
+    workDayStdev: stdev(ratedWorkDays),
+    nightStdev: stdev(ratedNights),
+    weekendStdev: stdev(ratedWeekends),
     activeDriverRate,
     spareUtilizationRate,
     idleDriverCount,
@@ -166,6 +178,7 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
     preferenceSatisfactionRate: computePreferenceSatisfactionRate(drivers, output.slots),
     dayOffSatisfactionRate,
     hardViolationCount: output.metrics.hardViolationCount,
+    exemptedCount: output.metrics.exemptedCount,
     constitutionalViolationCount: output.metrics.constitutionalViolations.length,
     constitutionalByRule,
     restCycleCompliance: output.metrics.restCycleCompliance,
