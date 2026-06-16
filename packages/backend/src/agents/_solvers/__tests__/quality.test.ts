@@ -115,6 +115,19 @@ describe('scheduleQuality — 선호 노선 충족률', () => {
   });
 });
 
+describe('scheduleQuality — 면제 기사 제외', () => {
+  it('exemptReason 있는 기사는 workDayStdev/idle 집계에서 제외된다', () => {
+    // D1,D2 정상 각 2일, D3 면제 0일 — 면제 제외 시 stdev=0, idle=0
+    const d3 = driver(3, { workDayTarget: { min: 18, max: 23, softMin: 19, softMax: 22, exemptReason: 'NEW_HIRE' } });
+    const input = baseInput([driver(1), driver(2), d3]);
+    const out = output([slot(1, '2026-05-01'), slot(1, '2026-05-02'), slot(2, '2026-05-01'), slot(2, '2026-05-02')]);
+    const q = scheduleQuality(input, out);
+    expect(q.workDayStdev).toBeCloseTo(0, 5);   // D3(0일) 제외 → [2,2] stdev 0
+    expect(q.idleDriverCount).toBe(0);          // D3 제외
+    expect(q.exemptedCount).toBe(out.metrics.exemptedCount);
+  });
+});
+
 describe('scheduleQuality — 선호 휴무 + 종합 점수', () => {
   it('선호 휴무를 지킨 비율을 계산한다', () => {
     const d1 = driver(1, { preferredDayOffs: ['2026-05-10', '2026-05-11'] });
