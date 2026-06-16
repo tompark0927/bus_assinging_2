@@ -46,6 +46,49 @@ export function mapPreferredRouteIds(prefs: { routeId: number; priority: number 
 }
 
 // ─────────────────────────────────────────────
+// 순수 헬퍼 — 전월 피로도 계산
+// ─────────────────────────────────────────────
+
+/**
+ * 전월 근무 슬롯의 노선 fatigueScore 합을 0~100 으로 정규화한 피로도.
+ *
+ * @param priorSlots 해당 기사의 전월 비휴무 슬롯 [{ routeId }]
+ * @param routeFatigueById routeId → fatigueScore(1~5) 매핑
+ *
+ * 정규화 공식:
+ *   1. avgRouteFatigue = 근무 슬롯의 평균 nolineFatigue (Map 에 없는 노선 → 3 처리)
+ *   2. base = (avgRouteFatigue - 1) / 4 * 100   (1→0, 5→100 선형 매핑)
+ *   3. intensity = min(1, slots.length / 22)     (22 ≈ 풀 월 근무일)
+ *   4. score = round(clamp(base * intensity, 0, 100))
+ *   5. 전월 슬롯 없음 → 30 (중립 기본값; 기존 placeholder 와 동일하므로 이력 없는 기사 안전)
+ *
+ * 단조성:
+ *   - 노선 피로도가 높을수록 score ↑
+ *   - 근무일수가 많을수록 score ↑ (22일 이상은 상한)
+ *   - 결과: 0~100 정수, 항상 clamp 보장
+ */
+export function computeRecentFatigue(
+  priorSlots: { routeId: number }[],
+  routeFatigueById: Map<number, number>,
+): number {
+  if (priorSlots.length === 0) return 30;
+
+  const DEFAULT_FATIGUE = 3; // 노선 정보 없을 때 중립값
+
+  const total = priorSlots.reduce((sum, slot) => {
+    const fatigue = routeFatigueById.get(slot.routeId) ?? DEFAULT_FATIGUE;
+    return sum + fatigue;
+  }, 0);
+
+  const avgRouteFatigue = total / priorSlots.length;          // 1..5
+  const base = ((avgRouteFatigue - 1) / 4) * 100;            // 0..100
+  const intensity = Math.min(1, priorSlots.length / 22);     // 0..1
+  const score = Math.round(Math.min(100, Math.max(0, base * intensity)));
+
+  return score;
+}
+
+// ─────────────────────────────────────────────
 // 순수 헬퍼 — 신규 입사 근무일수 면제 타겟
 // ─────────────────────────────────────────────
 
@@ -178,6 +221,41 @@ export async function buildSolverInputFromDb(
   const monthStart = new Date(Date.UTC(year, month - 1, 1));
   const monthEnd = new Date(Date.UTC(year, month, 0));
 
+  // ── 전월 날짜 범위 (Jan → prev Dec 롤오버 처리) ───
+  const prevYear = month === 1 ? year - 1 : year;
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const prevMonthStart = new Date(Date.UTC(prevYear, prevMonth - 1, 1));
+  const prevMonthEnd = new Date(Date.UTC(prevYear, prevMonth, 0));
+
+  // ── 전월 비휴무 슬롯 + 노선 피로도 (recentFatigueScore 계산용) ───
+  const [prevSlots, dbRoutes] = await Promise.all([
+    prisma.scheduleSlot.findMany({
+      where: {
+        schedule: { companyId },
+        isRestDay: false,
+        date: { gte: prevMonthStart, lte: prevMonthEnd },
+      },
+      select: { driverId: true, routeId: true },
+    }),
+    prisma.route.findMany({
+      where: { companyId },
+      select: { id: true, fatigueScore: true },
+    }),
+  ]);
+
+  // routeId → fatigueScore 맵
+  const routeFatigueById = new Map<number, number>(
+    dbRoutes.map((r) => [r.id, r.fatigueScore]),
+  );
+
+  // 기사별 전월 슬롯 그룹화 (routeId nullable 방어: routeId는 schema상 Int(non-null)이므로 항상 존재)
+  const prevSlotsByDriver = new Map<number, { routeId: number }[]>();
+  for (const slot of prevSlots) {
+    const arr = prevSlotsByDriver.get(slot.driverId) ?? [];
+    arr.push({ routeId: slot.routeId });
+    prevSlotsByDriver.set(slot.driverId, arr);
+  }
+
   // ── 운전자 (DRIVER 권한, 활성) ───
   const dbDrivers = await prisma.user.findMany({
     where: { companyId, role: 'DRIVER', isActive: true },
@@ -262,7 +340,10 @@ export async function buildSolverInputFromDb(
       ),
       licenseExpiresAt: d.licenseExpiresAt ?? undefined,
       qualificationExpiresAt: d.qualificationExpiresAt ?? undefined,
-      recentFatigueScore: 30, // placeholder; 향후 attendance·incident 기반 계산
+      recentFatigueScore: computeRecentFatigue(
+        prevSlotsByDriver.get(d.id) ?? [],
+        routeFatigueById,
+      ),
       isNewHire: !!isNewHire,
       workDayTarget: newHireWorkdayTarget(!!isNewHire, policy.workdayBands),
       ...(preferredRouteIds.length > 0 ? { preferredRouteIds } : {}),
