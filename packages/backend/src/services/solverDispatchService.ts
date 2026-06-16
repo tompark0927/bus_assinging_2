@@ -23,12 +23,14 @@ import {
   DEFAULT_POLICY,
   POLICY_PRESETS,
   type CompanyPolicy,
+  type DriverWorkdayTarget,
   type PolicyPreset,
   type ShiftSlot,
   type SolverCrew,
   type SolverDriver,
   type SolverInput,
   type SolverOutput,
+  type WorkdayBandsPolicy,
 } from '../agents/_solvers/types';
 
 // ─────────────────────────────────────────────
@@ -41,6 +43,36 @@ import {
  */
 export function mapPreferredRouteIds(prefs: { routeId: number; priority: number }[]): number[] {
   return [...prefs].sort((a, b) => a.priority - b.priority).map((p) => p.routeId);
+}
+
+// ─────────────────────────────────────────────
+// 순수 헬퍼 — 신규 입사 근무일수 면제 타겟
+// ─────────────────────────────────────────────
+
+/**
+ * 신규 입사자(isNewHire=true)에게 workDayTarget을 생성한다.
+ *
+ * 입사 30일 이내 기사는 월중 입사로 hardMin을 채우지 못하는 경우가 많으므로
+ * UNDER_MIN 발생 시 hard violation이 아닌 EXEMPTED 처리가 되어야 한다.
+ * evaluateWorkload는 이미 exemptReason을 지원하므로 여기서는 타겟만 생성.
+ *
+ * @param isNewHire DB의 isNewHire 여부 (createdAt < 30일)
+ * @param bands 회사 policy.workdayBands
+ * @returns DriverWorkdayTarget (신규) 또는 undefined (일반)
+ */
+export function newHireWorkdayTarget(
+  isNewHire: boolean,
+  bands: WorkdayBandsPolicy,
+): DriverWorkdayTarget | undefined {
+  if (!isNewHire) return undefined;
+  return {
+    min: bands.hardMin,
+    max: bands.hardMax,
+    softMin: bands.sweetMin,
+    softMax: bands.sweetMax,
+    exemptReason: 'NEW_HIRE',
+    exemptNote: '입사 30일 이내',
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -232,6 +264,7 @@ export async function buildSolverInputFromDb(
       qualificationExpiresAt: d.qualificationExpiresAt ?? undefined,
       recentFatigueScore: 30, // placeholder; 향후 attendance·incident 기반 계산
       isNewHire: !!isNewHire,
+      workDayTarget: newHireWorkdayTarget(!!isNewHire, policy.workdayBands),
       ...(preferredRouteIds.length > 0 ? { preferredRouteIds } : {}),
     });
   }
