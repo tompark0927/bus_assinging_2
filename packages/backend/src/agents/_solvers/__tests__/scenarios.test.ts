@@ -1,4 +1,5 @@
 import { buildScenario, SCENARIO_SUITE, type ScenarioSpec } from '../bench/scenarios';
+import { POLICY_PRESETS } from '../types';
 
 const spec: ScenarioSpec = {
   label: 'test-city-medium', seed: 123, policy: 'CITY_2SHIFT',
@@ -54,6 +55,56 @@ describe('buildScenario — 선호 노선 (preferredRouteIds)', () => {
     expect(spares.every((d) => d.preferredRouteIds !== undefined && d.preferredRouteIds.length > 0)).toBe(true);
     // preferredRouteIds[0] 은 homeRouteId 와 같아야 함
     expect(spares.every((d) => d.preferredRouteIds![0] === d.homeRouteId)).toBe(true);
+  });
+});
+
+describe('buildScenario — 신규 입사 (NEW_HIRE) 면제', () => {
+  // spec: routes=1, sparesPerRoute=2 → s===0 && r===1 조건의 spare가 신규 입사자
+  const newHireSpec: ScenarioSpec = {
+    label: 'test-newhire', seed: 42, policy: 'CITY_2SHIFT',
+    routes: 1, busesPerRoute: 2, sparesPerRoute: 2,
+    weekdayOps: 1, weekendOps: 1, dayOffDensity: 0, year: 2026, month: 5,
+  };
+
+  it('첫 번째 route의 첫 번째 spare는 isNewHire=true이다', () => {
+    const input = buildScenario(newHireSpec);
+    const spares = input.drivers.filter((d) => d.homeBusId === undefined);
+    expect(spares.some((d) => d.isNewHire)).toBe(true);
+  });
+
+  it('신규 입사 spare에게 workDayTarget.exemptReason === NEW_HIRE가 설정된다', () => {
+    const input = buildScenario(newHireSpec);
+    const newHire = input.drivers.find((d) => d.isNewHire);
+    expect(newHire).toBeDefined();
+    expect(newHire!.workDayTarget?.exemptReason).toBe('NEW_HIRE');
+  });
+
+  it('신규 입사 spare에게 approvedDayOffs가 14개 이상이다 (월 초반 입사 시뮬레이션)', () => {
+    const input = buildScenario(newHireSpec);
+    const newHire = input.drivers.find((d) => d.isNewHire);
+    expect(newHire).toBeDefined();
+    expect(newHire!.approvedDayOffs.length).toBeGreaterThanOrEqual(14);
+  });
+
+  it('workDayTarget 밴드가 회사 정책(CITY_2SHIFT)과 일치한다', () => {
+    const input = buildScenario(newHireSpec);
+    const newHire = input.drivers.find((d) => d.isNewHire);
+    const bands = POLICY_PRESETS.CITY_2SHIFT.workdayBands;
+    expect(newHire!.workDayTarget).toMatchObject({
+      min: bands.hardMin,
+      max: bands.hardMax,
+      softMin: bands.sweetMin,
+      softMax: bands.sweetMax,
+    });
+  });
+
+  it('VILLAGE_1SHIFT 정책에서도 신규 입사 spare에 밴드가 VILLAGE_1SHIFT 기준으로 설정된다', () => {
+    const vilSpec: ScenarioSpec = { ...newHireSpec, policy: 'VILLAGE_1SHIFT' };
+    const input = buildScenario(vilSpec);
+    const newHire = input.drivers.find((d) => d.isNewHire);
+    const bands = POLICY_PRESETS.VILLAGE_1SHIFT.workdayBands;
+    expect(newHire!.workDayTarget?.exemptReason).toBe('NEW_HIRE');
+    expect(newHire!.workDayTarget?.min).toBe(bands.hardMin);
   });
 });
 
