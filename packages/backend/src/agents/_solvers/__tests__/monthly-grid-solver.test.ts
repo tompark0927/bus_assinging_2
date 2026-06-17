@@ -638,6 +638,87 @@ describe('solveMonthlyGrid v2', () => {
   // Phase C FILL move — SP4-1
   // ─────────────────────────────────────────
 
+  // ─────────────────────────────────────────
+  // Phase C-3 REASSIGN move — SP4-2
+  // ─────────────────────────────────────────
+
+  test('[SP4-2] REASSIGN: over-loaded 운전자 → under-loaded 운전자로 슬롯 이전, workDayStdev 감소', () => {
+    /**
+     * 설계:
+     *   노선 100, 버스 2대 (busId=1001, 1002), 1교대(FULL_DAY).
+     *   운전자 4명 — 2페어. 5/2 사이클.
+     *   추가로 spare 4명 (id=5..8) 을 같은 노선에 배치.
+     *
+     *   VILLAGE_1SHIFT 프리셋 사용 (sweet 23~26일).
+     *   차량 수가 2대이므로 슬롯은 2×31=62개.
+     *   운전자 8명이 있지만 차량 2대 + 휴무 사이클로 인해
+     *   Phase B 후 일부 운전자(spare)는 배정을 거의 받지 못해 under-loaded 상태,
+     *   HOME 운전자들은 상대적으로 over-loaded 상태가 될 수 있다.
+     *
+     *   검증 목표:
+     *     reassign 이 실제로 동작하면 over-loaded driver (count >= sweetMin) 의 슬롯이
+     *     under-loaded driver (count < sweetMin) 으로 이동하여 workDayStdev 가
+     *     reassign-disabled 케이스보다 낮아야 한다.
+     *
+     *   NOTE: 이 테스트는 reassign 구현 전에는 FAIL 해야 한다.
+     *   (reassign 없이는 HOME 운전자들의 슬롯 수 불균형이 스왑만으로는 충분히 해소되지 않음)
+     */
+    const { POLICY_PRESETS } = require('../types');
+    // VILLAGE_1SHIFT: SOLO crew, FULL_DAY slot, sweet=23~26
+    const policy = POLICY_PRESETS.VILLAGE_1SHIFT;
+
+    // 버스 2대 + spare 4명 — HOME 운전자(1~4) 는 busId 고정,
+    // spare(5~8) 는 homeRouteId=100 만 설정 → Phase B 에서 HOME 할당 못받아 under-loaded
+    const drivers = [
+      { id: 1, name: 'H1', homeBusId: 1001, homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+      { id: 2, name: 'H2', homeBusId: 1002, homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+      // spare — homeRouteId=100 이지만 homeBusId 없음 → Phase B 에서 SAME_ROUTE 후순위
+      { id: 3, name: 'S1', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 4, name: 'S2', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 5, name: 'S3', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 6, name: 'S4', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+    ];
+
+    const result = solveMonthlyGrid({
+      year: 2026,
+      month: 5,
+      drivers,
+      buses: [
+        { id: 1001, routeId: 100 },
+        { id: 1002, routeId: 100 },
+      ],
+      // SOLO crew — 각 버스에 1명 HOME 운전자
+      crews: [
+        { id: 'C1', driverIds: [1], busId: 1001, routeId: 100 },
+        { id: 'C2', driverIds: [2], busId: 1002, routeId: 100 },
+      ],
+      policy,
+      localSearchIterations: 500,
+      randomSeed: 42,
+    });
+
+    const workDays = result.workloads.map((w) => w.workDays);
+    const mean = workDays.reduce((a, b) => a + b, 0) / workDays.length;
+    const stdev = Math.sqrt(workDays.reduce((acc, x) => acc + (x - mean) ** 2, 0) / workDays.length);
+
+    // Without reassign, H1/H2 will have ~31 days (all slots) while spares have 0 → stdev ~14.
+    // With reassign, slots are redistributed so stdev should drop significantly.
+    // We assert stdev < 10 as a meaningful improvement over the ~14 without-reassign baseline.
+    expect(stdev).toBeLessThan(10);
+
+    // Also: the over-loaded driver's count should decrease (reassign donated some slots)
+    // and at least one spare should have received slots
+    const spareWorkDays = result.workloads
+      .filter((w) => [3, 4, 5, 6].includes(w.driverId))
+      .map((w) => w.workDays);
+    expect(spareWorkDays.some((d) => d > 0)).toBe(true);
+
+    // Hard constraints must be preserved: no unfilled slots added, no hard violations added
+    // (hardViolation count check is best-effort — with VILLAGE_1SHIFT sweet=23~26 and
+    // 2 buses × 31 days = 62 slots / 6 drivers ≈ 10.3 days, many will be UNDER_MIN.
+    // We only assert stdev improvement, not zero hard violations for this small scenario.)
+  });
+
   test('FILL move: Phase B 미배정 슬롯을 Phase C 로컬서치가 여유 운전자에게 채운다', () => {
     /**
      * 설계:
