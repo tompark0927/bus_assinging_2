@@ -209,7 +209,10 @@ export function computeRecentFatigue(
   const DEFAULT_FATIGUE = 3; // 노선 정보 없을 때 중립값
 
   const total = priorSlots.reduce((sum, slot) => {
-    const fatigue = routeFatigueById.get(slot.routeId) ?? DEFAULT_FATIGUE;
+    const raw = routeFatigueById.get(slot.routeId);
+    // Guard: ?? only catches undefined/null, not NaN. Explicit isNaN check is required
+    // so that corrupt DB values (NaN) fall back to DEFAULT_FATIGUE instead of propagating.
+    const fatigue = (raw === undefined || raw === null || Number.isNaN(raw)) ? DEFAULT_FATIGUE : raw;
     return sum + fatigue;
   }, 0);
 

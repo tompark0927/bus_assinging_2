@@ -1131,6 +1131,30 @@ function canSwap(
   return !violA && !violB && !ftA && !ftB;
 }
 
+/**
+ * Compute familiarity and isHomeBus for a driver assigned to a given bus/route.
+ *
+ * Mirrors the exact tier logic used by pickDriver (HOME → SAME_ROUTE → CROSS_ROUTE)
+ * and the FILL / REASSIGN moves so all code paths stay consistent.
+ *
+ * HOME        = driver.homeBusId === busId
+ * SAME_ROUTE  = driver.homeRouteId === routeId  (and NOT home bus)
+ * CROSS_ROUTE = everything else
+ */
+function familiarityFor(
+  driver: SolverDriver,
+  busId: number,
+  routeId: number,
+): { familiarity: Familiarity; isHomeBus: boolean } {
+  const isHomeBus = driver.homeBusId === busId;
+  const familiarity: Familiarity = isHomeBus
+    ? 'HOME'
+    : driver.homeRouteId === routeId
+      ? 'SAME_ROUTE'
+      : 'CROSS_ROUTE';
+  return { familiarity, isHomeBus };
+}
+
 function applySwap(
   ctx: ConstraintContext,
   sa: AssignedSlot,
@@ -1146,6 +1170,17 @@ function applySwap(
 
   sa.driverId = oldB;
   sb.driverId = oldA;
+
+  // Recompute familiarity/isHomeBus for the new driver assignment.
+  // Without this, labels stay stale after the swap (e.g. HOME but homeBusId !== busId).
+  const driverB = ctx.drivers.get(oldB)!;
+  const driverA = ctx.drivers.get(oldA)!;
+  const famA = familiarityFor(driverB, sa.busId, sa.routeId);
+  sa.familiarity = famA.familiarity;
+  sa.isHomeBus = famA.isHomeBus;
+  const famB = familiarityFor(driverA, sb.busId, sb.routeId);
+  sb.familiarity = famB.familiarity;
+  sb.isHomeBus = famB.isHomeBus;
 
   arrB.push(sa);
   arrA.push(sb);
