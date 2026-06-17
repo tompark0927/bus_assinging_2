@@ -717,6 +717,41 @@ function addSlot(
 }
 
 // ─────────────────────────────────────────────
+// 공유 feasibility 프레디케이트 (FILL + REASSIGN 공용)
+// ─────────────────────────────────────────────
+
+/**
+ * 주어진 운전자(driverId)가 슬롯(date/shift/routeId)을 받을 수 있는지 판별.
+ * FILL move 와 REASSIGN move 양쪽에서 동일하게 사용하는 단일 진입점.
+ *
+ * 검증 내용:
+ *   1. checkAssignment — 승인휴무·면허·자격·중복배정 등 헌법 슬롯 단위 룰
+ *   2. violatesRestCycle — 연속근무 사이클 위반
+ *   3. wouldViolateGridRules — 야간 연속·주간 최대·주말 최소 등 그리드 집계 룰
+ *
+ * REASSIGN 용도: ctx 에서 슬롯 S 를 잠시 A 에서 제거한 상태에서 호출해야
+ * B 의 restCycle/checkAssignment 가 정확히 평가된다.
+ * (ctx mutation + revert 는 호출자 책임)
+ */
+function canAssignFill(
+  ctx: ConstraintContext,
+  driverId: number,
+  date: string,
+  shift: ShiftSlot,
+  routeId: number,
+  restCycle: RestCyclePolicy,
+  policy: CompanyPolicy,
+  monthStart: Date,
+  monthEnd: Date,
+): boolean {
+  return (
+    checkAssignment(ctx, driverId, date, shift, routeId, policy) === null &&
+    !violatesRestCycle(ctx, driverId, date, restCycle, monthStart) &&
+    !wouldViolateGridRules(ctx, driverId, date, shift, policy, monthStart, monthEnd)
+  );
+}
+
+// ─────────────────────────────────────────────
 // FILL move 헬퍼 — 그리드 후처리 제약 사전 검증
 // ─────────────────────────────────────────────
 
@@ -879,13 +914,11 @@ function localSearch(
         if (s.routeId === U.routeId) routeDriverSet.add(s.driverId);
       }
 
-      // Filter to feasible: all hard constraints + grid-level rules
+      // Filter to feasible: all hard constraints + grid-level rules (shared predicate)
       const feasible = drivers.filter(
         (d) =>
           routeDriverSet.has(d.id) &&
-          checkAssignment(ctx, d.id, U.date, U.shift, U.routeId, policy) === null &&
-          !violatesRestCycle(ctx, d.id, U.date, restCycle, monthStart) &&
-          !wouldViolateGridRules(ctx, d.id, U.date, U.shift, policy, monthStart, monthEnd),
+          canAssignFill(ctx, d.id, U.date, U.shift, U.routeId, restCycle, policy, monthStart, monthEnd),
       );
       if (feasible.length === 0) continue;
 
@@ -937,6 +970,135 @@ function localSearch(
       }
     }
     if (!anyFilled) break; // no progress in this pass → stop early
+  }
+
+  // ── Phase C-3: REASSIGN — over-loaded → under-loaded transfers (same route) ──
+  //
+  // Goal: reduce workDayStdev by MOVING assigned slots from donor (over-loaded) drivers
+  // to recipient (under-loaded) feasible drivers on the SAME route.
+  //
+  // Unlike SWAP (which exchanges two slots without changing counts), REASSIGN changes
+  // workday counts and therefore directly reduces variance.
+  //
+  // Donor selection rule:
+  //   A is a donor candidate iff aCount > sweetMin(A).
+  //   Reasoning: after donating one slot, A's count becomes aCount-1.
+  //   If aCount > sweetMin, then aCount-1 >= sweetMin (still at or above sweet floor).
+  //   Drivers already at/below sweetMin should NOT donate — that would worsen their own load.
+  //   OVER_MAX (aCount > hardMax) drivers always qualify (aCount > softMin trivially true).
+  //
+  // Recipient selection rule:
+  //   B is a recipient candidate iff bCount < sweetMin(B) (under-loaded, needs more work)
+  //   AND homeRouteId === S.routeId (same-route restriction, SP4-3 handles cross-route).
+  //   Among feasible under-loaded candidates, pick the MOST under-loaded (fewest slots).
+  //   Tie-break by id asc (deterministic).
+  //
+  // The objective check is the ultimate acceptance gate.
+  // Seeded rng picks the donor slot — deterministic.
+  //
+  // Iteration budget: same `iterations` bound as SWAP/FILL.
+  // RNG sequence continues from where FILL left off (FILL is deterministic / no rng draws).
+  for (let i = 0; i < iterations; i++) {
+    if (slots.length === 0) break;
+
+    // Pick a random assigned slot S
+    const idx = Math.floor(rng() * slots.length);
+    const S = slots[idx];
+    const A = ctx.drivers.get(S.driverId);
+    if (!A) continue;
+
+    // Donor pre-filter: A must have count > sweetMin (can afford to give up one slot)
+    const aCount = ctx.driverSlots.get(A.id)?.length ?? 0;
+    const aEval = evaluateWorkload(A, aCount, policy);
+    const aSweetMin = aEval.appliedSweetRange.min;
+    if (aCount <= aSweetMin) continue; // A is at/below sweet floor — not a donor
+
+    // Find under-loaded feasible same-route recipients (B !== A)
+    // 1. Build same-route driver set (by homeRouteId matching S.routeId)
+    const routeDrivers = drivers.filter(
+      (d) => d.id !== A.id && d.homeRouteId === S.routeId,
+    );
+
+    // 2. Among route drivers, find those that are under-loaded (bCount < sweetMin(B))
+    //    AND pass feasibility after temporarily removing S from A's ctx list.
+    //    We must remove S from A's list before checking B's constraints so that
+    //    checkAssignment / violatesRestCycle see the post-move state correctly.
+    const aArr = ctx.driverSlots.get(A.id)!;
+    const aIdxInArr = aArr.indexOf(S);
+    if (aIdxInArr >= 0) aArr.splice(aIdxInArr, 1); // temporarily remove from A
+
+    let bestB: SolverDriver | null = null;
+    let bestBCount = Infinity;
+
+    for (const B of routeDrivers) {
+      const bCount = ctx.driverSlots.get(B.id)?.length ?? 0;
+      const bEval = evaluateWorkload(B, bCount, policy);
+      const bSweetMin = bEval.appliedSweetRange.min;
+      // Recipient: must be under-loaded (below sweet min)
+      if (bCount >= bSweetMin) continue;
+      // Must pass all hard constraints with S.date/shift/routeId
+      if (!canAssignFill(ctx, B.id, S.date, S.shift, S.routeId, restCycle, policy, monthStart, monthEnd)) continue;
+      // Pick the most under-loaded (fewest slots); tie-break by id asc
+      if (bCount < bestBCount || (bCount === bestBCount && bestB !== null && B.id < bestB.id)) {
+        bestB = B;
+        bestBCount = bCount;
+      }
+    }
+
+    // Restore A's ctx list before deciding
+    if (aIdxInArr >= 0) aArr.splice(aIdxInArr, 0, S);
+
+    if (!bestB) continue; // no eligible recipient found
+
+    // === MOVE: S from A → bestB ===
+    // 1. Remove S from A's ctx list
+    const aArrForMove = ctx.driverSlots.get(A.id)!;
+    const aIdxMove = aArrForMove.indexOf(S);
+    if (aIdxMove >= 0) aArrForMove.splice(aIdxMove, 1);
+
+    // 2. Store originals for revert
+    const origDriverId = S.driverId;
+    const origFamiliarity = S.familiarity;
+    const origIsHomeBus = S.isHomeBus;
+
+    // 3. Assign S to bestB — recompute familiarity/isHomeBus
+    S.driverId = bestB.id;
+    S.isHomeBus = bestB.homeBusId === S.busId;
+    S.familiarity = S.isHomeBus
+      ? 'HOME'
+      : bestB.homeRouteId === S.routeId
+        ? 'SAME_ROUTE'
+        : 'CROSS_ROUTE';
+
+    // 4. Add S to bestB's ctx list
+    const bArr = ctx.driverSlots.get(bestB.id) ?? [];
+    bArr.push(S);
+    ctx.driverSlots.set(bestB.id, bArr);
+
+    // 5. Evaluate objective
+    const newObj = objective(slots, drivers, weights, policy, unfilled.length);
+    if (newObj < currentObj) {
+      // Accept the move
+      currentObj = newObj;
+      swaps++;
+    } else {
+      // REVERT: move S back to A, restore familiarity/isHomeBus
+      const bArrRevert = ctx.driverSlots.get(bestB.id)!;
+      const bIdxRevert = bArrRevert.indexOf(S);
+      if (bIdxRevert >= 0) bArrRevert.splice(bIdxRevert, 1);
+
+      S.driverId = origDriverId;
+      S.familiarity = origFamiliarity;
+      S.isHomeBus = origIsHomeBus;
+
+      // Restore to A's ctx list at original position
+      const aArrRevert = ctx.driverSlots.get(A.id)!;
+      if (aIdxMove >= 0) {
+        aArrRevert.splice(aIdxMove, 0, S);
+      } else {
+        aArrRevert.push(S);
+      }
+    }
   }
 
   return swaps;
