@@ -21,6 +21,7 @@
 
 import {
   checkAssignment,
+  countWeekendDays,
   formatDate,
   isWeekend,
   parseDate,
@@ -770,6 +771,10 @@ function wouldViolateGridRules(
   }
 
   // weeklyMaxWorkDays — 해당 주 현재 근무일 수 확인
+  // weeklyCount is the PRE-fill count (existing slots only, candidate not included).
+  // Post-fill count = weeklyCount + 1. validateFullGrid flags when final count > maxDays,
+  // so the fill is illegal iff (weeklyCount + 1) > maxDays ⟺ weeklyCount >= maxDays.
+  // The >= comparison is therefore correct and intentional.
   const weeklyRule = constitutional?.weeklyMaxWorkDays;
   if (weeklyRule?.enabled) {
     const d = parseDate(date);
@@ -792,7 +797,7 @@ function wouldViolateGridRules(
   if (weekendRule?.enabled && isWeekend(date)) {
     const monthStartIso = formatDate(monthStart);
     const monthEndIso = formatDate(monthEnd);
-    const totalWeekendDays = countMonthWeekendDays(monthStart, monthEnd);
+    const totalWeekendDays = countWeekendDays(monthStart, monthEnd);
     const workedWeekends = existing.filter(
       (s) => s.date >= monthStartIso && s.date <= monthEndIso && isWeekend(s.date),
     ).length;
@@ -802,17 +807,6 @@ function wouldViolateGridRules(
   }
 
   return false;
-}
-
-function countMonthWeekendDays(start: Date, end: Date): number {
-  let count = 0;
-  const cur = new Date(start);
-  while (cur <= end) {
-    const day = cur.getUTCDay();
-    if (day === 0 || day === 6) count++;
-    cur.setUTCDate(cur.getUTCDate() + 1);
-  }
-  return count;
 }
 
 // ─────────────────────────────────────────────

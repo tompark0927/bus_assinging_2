@@ -337,7 +337,7 @@ function countByWeek(slots: AssignedSlot[]): Map<string, number> {
   return result;
 }
 
-function countWeekendDays(start: Date, end: Date): number {
+export function countWeekendDays(start: Date, end: Date): number {
   let count = 0;
   const cur = new Date(start);
   while (cur <= end) {
