@@ -633,4 +633,73 @@ describe('solveMonthlyGrid v2', () => {
       // spare가 슬롯을 전혀 못 받은 경우는 건너뜀 (tight schedule 가능)
     });
   });
+
+  // ─────────────────────────────────────────
+  // Phase C FILL move — SP4-1
+  // ─────────────────────────────────────────
+
+  test('FILL move: Phase B 미배정 슬롯을 Phase C 로컬서치가 여유 운전자에게 채운다', () => {
+    /**
+     * 설계:
+     *   노선 100, 버스 1대 (busId=1001), 2교대(AM/PM).
+     *   페어 운전자 2명 (id=1,2) 이 전월 전일 approvedDayOffs 로 막혀
+     *   Phase B 에서 AM/PM 슬롯 전체가 미배정됨.
+     *   같은 노선에 여유 운전자(id=3..8) 6명이 있어 feasible → FILL move 로 채워야 함.
+     *
+     *   2교대 × 31일 = 62슬롯. 6명 × ~22일 = ~132 용량 >> 62. 5/2 restCycle 제약 충분히 여유.
+     *
+     *   검증: result.metrics.unfilledCount 가 0 이어야 함.
+     */
+    const { POLICY_PRESETS } = require('../types');
+    const policy = POLICY_PRESETS.CITY_2SHIFT; // AM/PM 2교대
+
+    const allMayDays = Array.from({ length: 31 }, (_, i) =>
+      `2026-05-${String(i + 1).padStart(2, '0')}`);
+
+    const drivers: SolverDriver[] = [
+      // 페어 (busId=1001 home) — 전체 휴무로 Phase B 에서 미배정 유발
+      {
+        id: 1, name: 'PairA', homeBusId: 1001, homeRouteId: 100, partnerId: 2,
+        canCrossRoute: false,
+        approvedDayOffs: allMayDays,
+        recentFatigueScore: 30, isNewHire: false,
+      },
+      {
+        id: 2, name: 'PairB', homeBusId: 1001, homeRouteId: 100, partnerId: 1,
+        canCrossRoute: false,
+        approvedDayOffs: allMayDays,
+        recentFatigueScore: 30, isNewHire: false,
+      },
+      // 여유 운전자 6명 — 같은 노선, 휴무 없음, 충분한 여유 (62슬롯 커버 가능)
+      { id: 3, name: 'Spare1', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 4, name: 'Spare2', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 5, name: 'Spare3', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 6, name: 'Spare4', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 7, name: 'Spare5', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 8, name: 'Spare6', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+    ];
+
+    const result = solveMonthlyGrid({
+      year: 2026,
+      month: 5,
+      drivers,
+      buses: [{ id: 1001, routeId: 100 }],
+      crews: [{ id: 'C1', driverIds: [1, 2], busId: 1001, routeId: 100 }],
+      policy,
+      localSearchIterations: 5000,
+      randomSeed: 42,
+    });
+
+    // FILL move 가 없었다면 62슬롯이 모두 unfilled 였을 것.
+    // FILL move 가 있으면 Spare3~8 가 채워서 unfilledCount=0 이어야 함.
+    expect(result.metrics.unfilledCount).toBe(0);
+
+    // Hard constraint 보존: 페어(1,2)는 전일 approvedDayOffs → 슬롯 0개
+    const pairSlots = result.slots.filter((s) => s.driverId === 1 || s.driverId === 2);
+    expect(pairSlots).toHaveLength(0);
+
+    // Spare 가 슬롯을 받았어야 함
+    const spareSlots = result.slots.filter((s) => s.driverId >= 3);
+    expect(spareSlots.length).toBeGreaterThan(0);
+  });
 });

@@ -320,7 +320,7 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
   // ── Phase C: 로컬 서치 ───
   const iterations = input.localSearchIterations ?? 1000;
   const searchRng = createRng(input.randomSeed ?? DEFAULT_SOLVER_SEED);
-  const swaps = localSearch(ctx, slots, input.drivers, weights, restCycle, policy, iterations, monthStart, searchRng);
+  const swaps = localSearch(ctx, slots, unfilled, input.drivers, weights, restCycle, policy, iterations, monthStart, searchRng, monthEnd);
 
   // ── 메트릭 ───
   const violations = validateFullGrid(input.drivers, slots, monthStart, monthEnd, policy);
@@ -716,12 +716,113 @@ function addSlot(
 }
 
 // ─────────────────────────────────────────────
+// FILL move 헬퍼 — 그리드 후처리 제약 사전 검증
+// ─────────────────────────────────────────────
+
+/**
+ * FILL move 후보를 위한 그리드 레벨 제약 사전 검증.
+ *
+ * checkAssignment 가 슬롯 단위(승인휴무·면허·중복배정 등)를 처리하는 반면,
+ * 아래 규칙은 validateFullGrid 에서 사후 검출하는 연속·주간 집계 룰이다.
+ * FILL move 전에 미리 걸러 constitutional violation total 이 증가하지 않도록 한다.
+ *
+ * 검증 대상:
+ *   - noNightStreak: 야간 시프트 연속 횟수 (이미 maxConsecutive 에 도달했으면 거부)
+ *   - weeklyMaxWorkDays: 해당 주 근무일이 maxDays 에 달했으면 거부
+ *
+ * guaranteedWeekendOff 는 월 집계 룰이라 사전 검증이 어렵지만,
+ * 해당 슬롯이 주말이고 드라이버가 아직 이번 달 단 하나의 주말 휴무도 없는 상태면 거부.
+ */
+function wouldViolateGridRules(
+  ctx: ConstraintContext,
+  driverId: number,
+  date: string,
+  shift: ShiftSlot,
+  policy: CompanyPolicy,
+  monthStart: Date,
+  monthEnd: Date,
+): boolean {
+  const constitutional = policy.constitutional;
+  const existing = ctx.driverSlots.get(driverId) ?? [];
+
+  // noNightStreak — 현재 ctx 기준으로 야간 연속 일수 시뮬레이션
+  const nightRule = constitutional?.noNightStreak;
+  if (nightRule?.enabled && nightRule.nightShifts.includes(shift)) {
+    // 추가하려는 날 기준으로 뒤/앞 연속 야간 일수를 계산
+    const nightDates = new Set(
+      existing.filter((s) => nightRule.nightShifts.includes(s.shift)).map((s) => s.date),
+    );
+    let backward = 0;
+    let cursor = parseDate(date);
+    for (let i = 0; i < nightRule.maxConsecutive; i++) {
+      cursor.setUTCDate(cursor.getUTCDate() - 1);
+      if (nightDates.has(formatDate(cursor))) backward++;
+      else break;
+    }
+    let forward = 0;
+    cursor = parseDate(date);
+    for (let i = 0; i < nightRule.maxConsecutive; i++) {
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+      if (nightDates.has(formatDate(cursor))) forward++;
+      else break;
+    }
+    if (backward + 1 + forward > nightRule.maxConsecutive) return true;
+  }
+
+  // weeklyMaxWorkDays — 해당 주 현재 근무일 수 확인
+  const weeklyRule = constitutional?.weeklyMaxWorkDays;
+  if (weeklyRule?.enabled) {
+    const d = parseDate(date);
+    const dayOfWeek = d.getUTCDay();
+    const weekStartDate = new Date(d);
+    weekStartDate.setUTCDate(d.getUTCDate() - dayOfWeek);
+    const weekEndDate = new Date(weekStartDate);
+    weekEndDate.setUTCDate(weekStartDate.getUTCDate() + 6);
+    const weekStartIso = formatDate(weekStartDate);
+    const weekEndIso = formatDate(weekEndDate);
+    const weeklyCount = existing.filter(
+      (s) => s.date >= weekStartIso && s.date <= weekEndIso,
+    ).length;
+    if (weeklyCount >= weeklyRule.maxDays) return true;
+  }
+
+  // guaranteedWeekendOff — 주말 슬롯이고 드라이버가 아직 이달 주말 휴무가 없는 경우 거부
+  // (월 내 총 주말 일수 중 workedWeekends + 1 이 모두 채워지면 minPerMonth 보장 불가)
+  const weekendRule = constitutional?.guaranteedWeekendOff;
+  if (weekendRule?.enabled && isWeekend(date)) {
+    const monthStartIso = formatDate(monthStart);
+    const monthEndIso = formatDate(monthEnd);
+    const totalWeekendDays = countMonthWeekendDays(monthStart, monthEnd);
+    const workedWeekends = existing.filter(
+      (s) => s.date >= monthStartIso && s.date <= monthEndIso && isWeekend(s.date),
+    ).length;
+    // 이 슬롯을 추가하면 workedWeekends+1 이 되는데, 남은 주말 휴무 가능 일수 확인
+    // totalWeekendDays - (workedWeekends+1) < minPerMonth → 거부
+    if (totalWeekendDays - (workedWeekends + 1) < weekendRule.minPerMonth) return true;
+  }
+
+  return false;
+}
+
+function countMonthWeekendDays(start: Date, end: Date): number {
+  let count = 0;
+  const cur = new Date(start);
+  while (cur <= end) {
+    const day = cur.getUTCDay();
+    if (day === 0 || day === 6) count++;
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return count;
+}
+
+// ─────────────────────────────────────────────
 // Phase C: 로컬 서치
 // ─────────────────────────────────────────────
 
 function localSearch(
   ctx: ConstraintContext,
   slots: AssignedSlot[],
+  unfilled: UnfilledSlot[],
   drivers: SolverDriver[],
   weights: SolverWeights,
   restCycle: RestCyclePolicy,
@@ -729,10 +830,16 @@ function localSearch(
   iterations: number,
   monthStart: Date,
   rng: Rng,
+  monthEnd: Date,
 ): number {
   let swaps = 0;
-  let currentObj = objective(slots, drivers, weights, policy);
+  let currentObj = objective(slots, drivers, weights, policy, unfilled.length);
 
+  // ── Phase C-1: SWAP phase (identical to baseline, RNG-driven) ─────────────
+  // This is the original local-search SWAP loop, now using the unfilled-aware
+  // objective. Because unfilled.length is constant during SWAP (swaps don't
+  // change unfilled), the acceptance criterion (newObj < currentObj) is
+  // equivalent to the original — the constant unfilled penalty cancels out.
   for (let i = 0; i < iterations; i++) {
     if (slots.length < 2) break;
     const a = Math.floor(rng() * slots.length);
@@ -750,13 +857,92 @@ function localSearch(
     if (!canSwap(ctx, sa, sb, restCycle, policy, monthStart)) continue;
 
     applySwap(ctx, sa, sb);
-    const newObj = objective(slots, drivers, weights, policy);
+    const newObj = objective(slots, drivers, weights, policy, unfilled.length);
     if (newObj < currentObj) {
       currentObj = newObj;
       swaps++;
     } else {
       applySwap(ctx, sa, sb);
     }
+  }
+
+  // ── Phase C-2: FILL pass (greedy, deterministic, no RNG) ─────────────────
+  // Runs AFTER the SWAP phase so the SWAP's RNG sequence and slot indices are
+  // unaffected. Greedily fills remaining unfilled slots with the most
+  // under-loaded feasible same-route driver. Multiple passes until no progress.
+  const maxFillPasses = 5; // enough for most tight scenarios
+  for (let pass = 0; pass < maxFillPasses && unfilled.length > 0; pass++) {
+    let anyFilled = false;
+    for (let u = unfilled.length - 1; u >= 0; u--) {
+      const U = unfilled[u];
+
+      // Find candidates on same route only
+      const routeDriverSet = new Set<number>();
+      for (const d of drivers) {
+        if (d.homeRouteId === U.routeId) routeDriverSet.add(d.id);
+      }
+      for (const s of slots) {
+        if (s.routeId === U.routeId) routeDriverSet.add(s.driverId);
+      }
+
+      // Filter to feasible: all hard constraints + grid-level rules
+      const feasible = drivers.filter(
+        (d) =>
+          routeDriverSet.has(d.id) &&
+          checkAssignment(ctx, d.id, U.date, U.shift, U.routeId, policy) === null &&
+          !violatesRestCycle(ctx, d.id, U.date, restCycle, monthStart) &&
+          !wouldViolateGridRules(ctx, d.id, U.date, U.shift, policy, monthStart, monthEnd),
+      );
+      if (feasible.length === 0) continue;
+
+      // Pick most under-loaded driver; tie-break by id asc (deterministic)
+      feasible.sort((a, b) => {
+        const aCount = ctx.driverSlots.get(a.id)?.length ?? 0;
+        const bCount = ctx.driverSlots.get(b.id)?.length ?? 0;
+        if (aCount !== bCount) return aCount - bCount;
+        return a.id - b.id;
+      });
+      const chosen = feasible[0];
+
+      const familiarity: Familiarity =
+        chosen.homeBusId === U.busId
+          ? 'HOME'
+          : chosen.homeRouteId === U.routeId
+            ? 'SAME_ROUTE'
+            : 'CROSS_ROUTE';
+
+      const newSlot: AssignedSlot = {
+        date: U.date,
+        busId: U.busId,
+        routeId: U.routeId,
+        shift: U.shift,
+        driverId: chosen.id,
+        familiarity,
+        isHomeBus: chosen.homeBusId === U.busId,
+      };
+
+      // Tentatively apply
+      addSlot(ctx, slots, newSlot);
+      unfilled.splice(u, 1);
+
+      const newObj = objective(slots, drivers, weights, policy, unfilled.length);
+      if (newObj < currentObj) {
+        currentObj = newObj;
+        swaps++;
+        anyFilled = true;
+      } else {
+        // Revert cleanly — no orphan slots/ctx leaks
+        const slotIdx = slots.indexOf(newSlot);
+        if (slotIdx >= 0) slots.splice(slotIdx, 1);
+        const driverArr = ctx.driverSlots.get(chosen.id);
+        if (driverArr) {
+          const dIdx = driverArr.indexOf(newSlot);
+          if (dIdx >= 0) driverArr.splice(dIdx, 1);
+        }
+        unfilled.splice(u, 0, U);
+      }
+    }
+    if (!anyFilled) break; // no progress in this pass → stop early
   }
 
   return swaps;
@@ -820,6 +1006,7 @@ function objective(
   drivers: SolverDriver[],
   weights: SolverWeights,
   policy: CompanyPolicy,
+  unfilledCount: number,
 ): number {
   const counts = new Map<number, number>();
   const weekendCounts = new Map<number, number>();
@@ -882,7 +1069,8 @@ function objective(
     crossRoute * weights.familiarityCost +
     weekendVar * weights.weekendFairness +
     fatigueVar * weights.fatigueVariance +
-    preferencePenalty * weights.routePreference
+    preferencePenalty * weights.routePreference +
+    unfilledCount * weights.unfilled
   );
 }
 
