@@ -293,17 +293,19 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
           restCycle,
           policy,
           monthStart,
+          monthEnd,
         });
 
         if (pickResult.driver) {
+          const fam = familiarityFor(pickResult.driver, s.busId, s.routeId);
           addSlot(ctx, slots, {
             date: s.date,
             busId: s.busId,
             routeId: s.routeId,
             shift: s.shift,
             driverId: pickResult.driver.id,
-            familiarity: pickResult.familiarity,
-            isHomeBus: pickResult.familiarity === 'HOME',
+            familiarity: fam.familiarity,
+            isHomeBus: fam.isHomeBus,
           });
         } else {
           unfilled.push({
@@ -445,6 +447,7 @@ interface PickArgs {
   restCycle: RestCyclePolicy;
   policy: CompanyPolicy;
   monthStart: Date;
+  monthEnd: Date;
 }
 
 interface PickResult {
@@ -454,7 +457,7 @@ interface PickResult {
 }
 
 function pickDriver(args: PickArgs): PickResult {
-  const { slot, ctx, crew, driversByRoute, allDrivers, restPlan, restCycle, policy } = args;
+  const { slot, ctx, crew, driversByRoute, allDrivers, restPlan, restCycle, policy, monthStart, monthEnd } = args;
 
   // 후보 우선순위: ① 차량 주 운전자 (HOME) → ② 같은 노선 → ③ 다른 노선 (canCrossRoute 인 경우만)
   const homeIds = new Set(crew.driverIds);
@@ -495,7 +498,9 @@ function pickDriver(args: PickArgs): PickResult {
       // 헌법 + restCycle 룰 검증
       const v = checkAssignment(ctx, cand.id, slot.date, slot.shift, slot.routeId, policy);
       if (v) continue;
-      if (violatesRestCycle(ctx, cand.id, slot.date, restCycle, args.monthStart)) continue;
+      if (violatesRestCycle(ctx, cand.id, slot.date, restCycle, monthStart)) continue;
+      // Phase B 헌법 그리드 룰 (R1 야간연속·R2 주간최대·R9 주말최소) — 위반 후보 거부
+      if (wouldViolateGridRules(ctx, cand.id, slot.date, slot.shift, policy, monthStart, monthEnd)) continue;
       // 신규 + CROSS_ROUTE/EMERGENCY 금지
       if (cand.isNewHire && tier.familiarity === 'CROSS_ROUTE') continue;
       return {
@@ -883,7 +888,7 @@ function localSearch(
     //   - 시프트는 다를 수 있음 (TWO_SHIFT 의 AM↔PM 도 한 노선 내라면 허용)
     if (sa.routeId !== sb.routeId) continue;
 
-    if (!canSwap(ctx, sa, sb, restCycle, policy, monthStart)) continue;
+    if (!canSwap(ctx, sa, sb, restCycle, policy, monthStart, monthEnd)) continue;
 
     applySwap(ctx, sa, sb);
     const newObj = objective(slots, drivers, weights, policy, unfilled.length);
@@ -1111,6 +1116,7 @@ function canSwap(
   restCycle: RestCyclePolicy,
   policy: CompanyPolicy,
   monthStart: Date,
+  monthEnd: Date,
 ): boolean {
   const tmpA = ctx.driverSlots.get(sa.driverId)!;
   const tmpB = ctx.driverSlots.get(sb.driverId)!;
@@ -1124,11 +1130,15 @@ function canSwap(
   const violA = checkAssignment(ctx, sa.driverId, sb.date, sb.shift, sb.routeId, policy);
   const ftB = violatesRestCycle(ctx, sb.driverId, sa.date, restCycle, monthStart);
   const ftA = violatesRestCycle(ctx, sa.driverId, sb.date, restCycle, monthStart);
+  // Grid-level constitutional rules (R1 noNightStreak, R2 weeklyMaxWorkDays, R9 guaranteedWeekendOff).
+  // Checked in the temp-removed state so wouldViolateGridRules sees the correct post-swap context.
+  const grB = wouldViolateGridRules(ctx, sb.driverId, sa.date, sa.shift, policy, monthStart, monthEnd);
+  const grA = wouldViolateGridRules(ctx, sa.driverId, sb.date, sb.shift, policy, monthStart, monthEnd);
 
   if (idxA >= 0) tmpA.splice(idxA, 0, sa);
   if (idxB >= 0) tmpB.splice(idxB, 0, sb);
 
-  return !violA && !violB && !ftA && !ftB;
+  return !violA && !violB && !ftA && !ftB && !grA && !grB;
 }
 
 /**
