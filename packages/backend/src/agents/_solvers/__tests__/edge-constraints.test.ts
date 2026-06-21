@@ -31,6 +31,7 @@
  */
 
 import { solveMonthlyGrid } from '../monthly-grid-solver';
+import { validateFullGrid } from '../constraints';
 import type {
   SolverInput,
   SolverDriver,
@@ -1644,5 +1645,210 @@ describe('Full invariant sweep: composite realistic scenarios', () => {
     expect(checkInvG(output.slots)).toHaveLength(0);
     expect(checkInvA(output.slots)).toHaveLength(0);
   }, 60_000);
+
+});
+
+// ─────────────────────────────────────────────
+// SUITE: INV-K — Grid-rule enforcement during Phase B construction
+//   R1 noNightStreak, R2 weeklyMaxWorkDays, R9 guaranteedWeekendOff
+//   must produce ZERO constitutional violations among ASSIGNED slots.
+//
+// Strategy: build adversarial inputs that provoked these violations under the
+// old code (which only validated post-hoc), confirm they are now absent.
+//
+// INV-K guarantee:
+//   validateFullGrid(assigned slots only) returns no R1/R2/R9 violations.
+//   Unfilled slots (refused by the stricter gate) are acceptable and expected.
+// ─────────────────────────────────────────────
+
+describe('INV-K: R1/R2/R9 grid-rule enforcement during Phase B construction', () => {
+
+  /**
+   * Helper: run solver, return R1/R2/R9 constitutional violations among assigned slots.
+   * Uses validateFullGrid on the ASSIGNED slots only (unfilled slots are legal voids).
+   */
+  function gridViolations(
+    input: SolverInput,
+  ): { r1: number; r2: number; r9: number; total: number } {
+    const policy = input.policy ?? CITY;
+    const monthStart = new Date(Date.UTC(input.year, input.month - 1, 1));
+    const monthEnd = new Date(Date.UTC(input.year, input.month, 0));
+    const output = solveMonthlyGrid(input);
+    const viols = validateFullGrid(input.drivers, output.slots, monthStart, monthEnd, policy);
+    const r1 = viols.filter((v) => v.ruleKey === 'noNightStreak').length;
+    const r2 = viols.filter((v) => v.ruleKey === 'weeklyMaxWorkDays').length;
+    const r9 = viols.filter((v) => v.ruleKey === 'guaranteedWeekendOff').length;
+    return { r1, r2, r9, total: r1 + r2 + r9 };
+  }
+
+  /**
+   * INV-K1: R1 (noNightStreak) — tight scenario forcing long PM streaks.
+   *
+   * Setup: 1 CITY bus (AM+PM). 2 drivers. Driver A has approved days off for the
+   * entire first 6 working days of the month (2026-05-01 through 2026-05-06).
+   * Driver B must cover all slots during that period, creating 6 consecutive PM
+   * assignments — which exceeds maxConsecutive=3.
+   *
+   * Before SP3 fix: solver constructed the schedule anyway → ≥1 R1 violation.
+   * After SP3 fix:  solver refuses PM assignments beyond streak=3 → 0 R1 violations
+   *                 (some PM slots go unfilled; that is the correct tradeoff).
+   */
+  test('INV-K1: R1 noNightStreak — consecutive PM slots capped at maxConsecutive=3', () => {
+    const d1Off = ['2026-05-01','2026-05-02','2026-05-03','2026-05-04','2026-05-05','2026-05-06'];
+    const input: SolverInput = {
+      year: YEAR, month: MONTH,
+      drivers: [
+        makeDriver(1, { homeBusId: 1, homeRouteId: 10, approvedDayOffs: d1Off }),
+        makeDriver(2, { homeBusId: 1, homeRouteId: 10 }),
+      ],
+      buses: [makeBus(1, 10)],
+      crews: [makeCrew('C1', [1, 2], 1, 10)],
+      policy: CITY,
+      localSearchIterations: 0, // disable local search to isolate Phase B behaviour
+      randomSeed: 1,
+    };
+    const v = gridViolations(input);
+    expect(v.r1).toBe(0); // no noNightStreak violation among assigned slots
+    // Sanity: R2 and R9 must also hold
+    expect(v.r2).toBe(0);
+    expect(v.r9).toBe(0);
+  });
+
+  /**
+   * INV-K2: R2 (weeklyMaxWorkDays) — 1 driver forced to cover 7 days in a week.
+   *
+   * Setup: 2 CITY buses (1 bus, PAIR of 2 drivers each). Three of the four drivers
+   * have ALL days in the week of 2026-05-04 (Mon–Sun) as approved off. Driver 2
+   * is the only option for that entire week across both buses. With AM+PM × 7 days
+   * = 14 slots potentially needing driver 2, old code could assign them 7 days
+   * (> maxDays=6). New code refuses the 7th working-day entry → 0 R2 violations.
+   *
+   * Note: only driver 2 is available that week, so slots will go unfilled past
+   * maxDays — that is the intended correct tradeoff.
+   */
+  test('INV-K2: R2 weeklyMaxWorkDays — weekly work-day count capped at maxDays=6', () => {
+    // Week of May 4–10 (Mon–Sun)
+    const firstWeek = ['2026-05-04','2026-05-05','2026-05-06','2026-05-07',
+                       '2026-05-08','2026-05-09','2026-05-10'];
+    const input: SolverInput = {
+      year: YEAR, month: MONTH,
+      drivers: [
+        makeDriver(1, { homeBusId: 1, homeRouteId: 10, approvedDayOffs: firstWeek }),
+        makeDriver(2, { homeBusId: 1, homeRouteId: 10 }), // only one available all week
+        makeDriver(3, { homeBusId: 2, homeRouteId: 10, approvedDayOffs: firstWeek }),
+        makeDriver(4, { homeBusId: 2, homeRouteId: 10, approvedDayOffs: firstWeek }),
+      ],
+      buses: [makeBus(1, 10), makeBus(2, 10)],
+      crews: [
+        makeCrew('C1', [1, 2], 1, 10),
+        makeCrew('C2', [3, 4], 2, 10),
+      ],
+      policy: CITY,
+      localSearchIterations: 0,
+      randomSeed: 2,
+    };
+    const v = gridViolations(input);
+    expect(v.r2).toBe(0); // no weeklyMaxWorkDays violation among assigned slots
+    expect(v.r1).toBe(0);
+  });
+
+  /**
+   * INV-K3: R9 (guaranteedWeekendOff) — driver cannot be assigned on ALL weekend days.
+   *
+   * Setup: 1 CITY bus (AM+PM). 2 drivers. Driver 1 has approved offs on every
+   * weekday of the month (Mon–Fri), so they are only available on weekends. Driver 2
+   * is available all month. With 10 weekend days in May 2026 and minPerMonth=1, each
+   * driver needs ≥1 weekend off. Old code assigned driver 1 to all weekend AM+PM
+   * slots → 0 weekend days off → R9 violation. New code refuses the last weekend
+   * assignment that would leave driver 1 with no weekend off → 0 R9 violations.
+   *
+   * NOTE: If driver 1 is only present on weekends (10 days) and each weekend day is
+   * a work day for them, they need at least 1 of those 10 days free. The enforcement
+   * guarantees totalWeekendDays - (workedWeekends+1) >= minPerMonth before adding.
+   */
+  test('INV-K3: R9 guaranteedWeekendOff — at least minPerMonth=1 weekend day off enforced', () => {
+    // All weekday dates in May 2026 (Mon-Fri only)
+    const weekdays = monthDates(YEAR, MONTH).filter((d) => {
+      const day = new Date(`${d}T00:00:00Z`).getUTCDay();
+      return day >= 1 && day <= 5; // Mon=1 .. Fri=5
+    });
+    const input: SolverInput = {
+      year: YEAR, month: MONTH,
+      drivers: [
+        // Driver 1 only available on weekends (weekdays are all approved off)
+        makeDriver(1, { homeBusId: 1, homeRouteId: 10, approvedDayOffs: weekdays }),
+        makeDriver(2, { homeBusId: 1, homeRouteId: 10 }),
+      ],
+      buses: [makeBus(1, 10)],
+      crews: [makeCrew('C1', [1, 2], 1, 10)],
+      policy: CITY,
+      localSearchIterations: 0,
+      randomSeed: 3,
+    };
+    const v = gridViolations(input);
+    expect(v.r9).toBe(0); // no guaranteedWeekendOff violation
+    expect(v.r1).toBe(0);
+    expect(v.r2).toBe(0);
+  });
+
+  /**
+   * INV-K4: All three rules hold simultaneously for a full-month CITY schedule.
+   *
+   * A realistic 4-bus CITY schedule with standard staffing. The invariant must hold
+   * for the entire month without any R1/R2/R9 violations among assigned slots.
+   */
+  test('INV-K4: full CITY month — zero R1+R2+R9 constitutional violations among assigned slots', () => {
+    const drivers: SolverDriver[] = [];
+    const buses: SolverBus[] = [];
+    const crews: SolverCrew[] = [];
+    for (let b = 1; b <= 4; b++) {
+      buses.push(makeBus(b, 10));
+      drivers.push(makeDriver(b * 2 - 1, { homeBusId: b, homeRouteId: 10 }));
+      drivers.push(makeDriver(b * 2,     { homeBusId: b, homeRouteId: 10 }));
+      crews.push(makeCrew(`C${b}`, [b * 2 - 1, b * 2], b, 10));
+    }
+    const input: SolverInput = {
+      year: YEAR, month: MONTH,
+      drivers, buses, crews,
+      policy: CITY,
+      localSearchIterations: 3000,
+      randomSeed: 42,
+    };
+    const v = gridViolations(input);
+    expect(v.total).toBe(0);
+    expect(v.r1).toBe(0);
+    expect(v.r2).toBe(0);
+    expect(v.r9).toBe(0);
+    // Standard hard invariants must still hold
+    assertHardInvariants('INV-K4', input, solveMonthlyGrid(input));
+  });
+
+  /**
+   * INV-K5: VILLAGE_1SHIFT — same guarantee for FULL_DAY (no PM/noNightStreak).
+   *
+   * R2 (maxDays=6) and R9 (minPerMonth=1) still apply.
+   */
+  test('INV-K5: full VILLAGE month — zero R2+R9 constitutional violations among assigned slots', () => {
+    const drivers: SolverDriver[] = [];
+    const buses: SolverBus[] = [];
+    const crews: SolverCrew[] = [];
+    for (let b = 1; b <= 3; b++) {
+      buses.push(makeBus(b, 20));
+      drivers.push(makeDriver(b, { homeBusId: b, homeRouteId: 20 }));
+      crews.push(makeCrew(`V${b}`, [b], b, 20));
+    }
+    const input: SolverInput = {
+      year: YEAR, month: MONTH,
+      drivers, buses, crews,
+      policy: VILLAGE,
+      localSearchIterations: 3000,
+      randomSeed: 99,
+    };
+    const v = gridViolations(input);
+    expect(v.r2).toBe(0);
+    expect(v.r9).toBe(0);
+    // R1 not applicable in VILLAGE (noNightStreak disabled) — but must be 0 either way
+    expect(v.r1).toBe(0);
+  });
 
 });
