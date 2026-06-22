@@ -883,10 +883,16 @@ function localSearch(
     const sb = slots[b];
     if (sa.driverId === sb.driverId) continue;
 
-    // 다양한 swap 종류 허용 (이전: 같은 routeId + 같은 shift 만):
+    // 다양한 swap 종류 허용:
     //   - 기본: 같은 노선 (familiarity 보존)
     //   - 시프트는 다를 수 있음 (TWO_SHIFT 의 AM↔PM 도 한 노선 내라면 허용)
-    if (sa.routeId !== sb.routeId) continue;
+    //   - SP4-3: 다른 노선 swap — 양쪽 드라이버 모두 canCrossRoute===true 인 경우만 허용
+    //     HARD GATE: 어느 한 쪽이라도 canCrossRoute!==true 이면 무조건 스킵
+    if (sa.routeId !== sb.routeId) {
+      const dA = ctx.drivers.get(sa.driverId);
+      const dB = ctx.drivers.get(sb.driverId);
+      if (dA?.canCrossRoute !== true || dB?.canCrossRoute !== true) continue;
+    }
 
     if (!canSwap(ctx, sa, sb, restCycle, policy, monthStart, monthEnd)) continue;
 
@@ -903,14 +909,21 @@ function localSearch(
   // ── Phase C-2: FILL pass (greedy, deterministic, no RNG) ─────────────────
   // Runs AFTER the SWAP phase so the SWAP's RNG sequence and slot indices are
   // unaffected. Greedily fills remaining unfilled slots with the most
-  // under-loaded feasible same-route driver. Multiple passes until no progress.
+  // under-loaded feasible driver. Same-route drivers are tried first (preferred
+  // by objective: familiarityCost << unfilled=1000); cross-route drivers with
+  // canCrossRoute===true are included so otherwise-empty slots can be filled.
+  // Multiple passes until no progress.
   const maxFillPasses = 5; // enough for most tight scenarios
   for (let pass = 0; pass < maxFillPasses && unfilled.length > 0; pass++) {
     let anyFilled = false;
     for (let u = unfilled.length - 1; u >= 0; u--) {
       const U = unfilled[u];
 
-      // Find candidates on same route only
+      // Build candidate set: same-route drivers (by homeRouteId or prior assignment)
+      // PLUS cross-route drivers with canCrossRoute===true.
+      // Same-route candidates are preferred by the objective (familiarityCost weight
+      // is tiny vs unfilled=1000), so cross-route candidates only win when no
+      // same-route driver is feasible or all same-route options are over-loaded.
       const routeDriverSet = new Set<number>();
       for (const d of drivers) {
         if (d.homeRouteId === U.routeId) routeDriverSet.add(d.id);
@@ -919,22 +932,45 @@ function localSearch(
         if (s.routeId === U.routeId) routeDriverSet.add(s.driverId);
       }
 
-      // Filter to feasible: all hard constraints + grid-level rules (shared predicate)
-      const feasible = drivers.filter(
+      // Same-route feasible candidates (preferred).
+      // HARD GATE: canCrossRoute=false drivers with homeRouteId !== U.routeId must
+      // NEVER appear in the fill candidate set (that invariant is checked by tests).
+      const sameRouteFeasible = drivers.filter(
         (d) =>
           routeDriverSet.has(d.id) &&
           canAssignFill(ctx, d.id, U.date, U.shift, U.routeId, restCycle, policy, monthStart, monthEnd),
       );
-      if (feasible.length === 0) continue;
 
-      // Pick most under-loaded driver; tie-break by id asc (deterministic)
-      feasible.sort((a, b) => {
-        const aCount = ctx.driverSlots.get(a.id)?.length ?? 0;
-        const bCount = ctx.driverSlots.get(b.id)?.length ?? 0;
-        if (aCount !== bCount) return aCount - bCount;
-        return a.id - b.id;
-      });
-      const chosen = feasible[0];
+      // Cross-route fallback: only used when NO same-route driver is feasible
+      // ("accepts cross-route to fill otherwise-empty slots" per SP4-3 spec).
+      // This preserves same-route preference and avoids unnecessary preference violations.
+      let chosen: typeof drivers[0];
+      if (sameRouteFeasible.length > 0) {
+        // Same-route available: pick most under-loaded (original behavior)
+        sameRouteFeasible.sort((a, b) => {
+          const aCount = ctx.driverSlots.get(a.id)?.length ?? 0;
+          const bCount = ctx.driverSlots.get(b.id)?.length ?? 0;
+          if (aCount !== bCount) return aCount - bCount;
+          return a.id - b.id;
+        });
+        chosen = sameRouteFeasible[0];
+      } else {
+        // No same-route driver feasible — try cross-route canCrossRoute===true spares.
+        const crossRouteFeasible = drivers.filter(
+          (d) =>
+            d.canCrossRoute === true &&
+            d.homeRouteId !== U.routeId &&
+            canAssignFill(ctx, d.id, U.date, U.shift, U.routeId, restCycle, policy, monthStart, monthEnd),
+        );
+        if (crossRouteFeasible.length === 0) continue;
+        crossRouteFeasible.sort((a, b) => {
+          const aCount = ctx.driverSlots.get(a.id)?.length ?? 0;
+          const bCount = ctx.driverSlots.get(b.id)?.length ?? 0;
+          if (aCount !== bCount) return aCount - bCount;
+          return a.id - b.id;
+        });
+        chosen = crossRouteFeasible[0];
+      }
 
       const familiarity: Familiarity =
         chosen.homeBusId === U.busId
@@ -1018,11 +1054,18 @@ function localSearch(
     const aSweetMin = aEval.appliedSweetRange.min;
     if (aCount <= aSweetMin) continue; // A is at/below sweet floor — not a donor
 
-    // Find under-loaded feasible same-route recipients (B !== A)
-    // 1. Build same-route driver set (by homeRouteId matching S.routeId)
-    const routeDrivers = drivers.filter(
-      (d) => d.id !== A.id && d.homeRouteId === S.routeId,
-    );
+    // Find under-loaded feasible recipients (B !== A).
+    // Recipient pool: same-route drivers (homeRouteId === S.routeId) PLUS
+    // cross-route drivers with canCrossRoute===true.
+    // HARD GATE: canCrossRoute=false drivers with homeRouteId !== S.routeId
+    // must NEVER appear as reassign recipients (invariant enforced by tests).
+    const routeDrivers = drivers.filter((d) => {
+      if (d.id === A.id) return false;
+      const isSameRoute = d.homeRouteId === S.routeId;
+      const isCrossRouteEligible =
+        d.canCrossRoute === true && d.homeRouteId !== S.routeId;
+      return isSameRoute || isCrossRouteEligible;
+    });
 
     // 2. Among route drivers, find those that are under-loaded (bCount < sweetMin(B))
     //    AND pass feasibility after temporarily removing S from A's ctx list.
