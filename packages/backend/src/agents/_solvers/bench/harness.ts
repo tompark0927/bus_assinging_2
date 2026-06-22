@@ -25,7 +25,7 @@ export function runSuite(specs: ScenarioSpec[]): ScenarioResult[] {
 
 const NUMERIC_KEYS = [
   'workDayStdev', 'nightStdev', 'weekendStdev', 'activeDriverRate', 'idleDriverCount',
-  'unfilledRate', 'homeBusRate', 'crossRouteRate', 'hardViolationCount',
+  'unfilledRate', 'homeBusRate', 'crossRouteRate', 'hardViolationCount', 'exemptedCount',
   'constitutionalViolationCount', 'restCycleCompliance', 'compositeScore',
 ] as const;
 type NumericKey = (typeof NUMERIC_KEYS)[number];
