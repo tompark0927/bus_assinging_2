@@ -42,6 +42,8 @@ export interface SolverDriver {
   approvedDayOffs: string[];
   /** 희망 휴무일 (소프트, 미승인) */
   preferredDayOffs?: string[];
+  /** 선호 노선 IDs (우선순위 순, 가장 선호 먼저). 소프트 제약. */
+  preferredRouteIds?: number[];
   licenseExpiresAt?: Date;
   qualificationExpiresAt?: Date;
   /** 직전 월 누적 fatigue 점수 (0~100, 높을수록 피로) */
@@ -126,6 +128,13 @@ export interface SolverWeights {
   weeklyShiftAlternation: number;
   /** 주말 휴무 불공정 페널티 */
   weekendFairness: number;
+  /** 선호 노선 미충족 페널티 (선호 보유 기사가 비선호 노선 배정 시) */
+  routePreference: number;
+  /**
+   * 미배정 슬롯당 페널티 — 커버리지를 최우선으로 달성하도록 높은 값.
+   * 각 미배정 슬롯은 운행 공백(운영 사고)이므로 다른 soft penalty 보다 훨씬 무겁게.
+   */
+  unfilled: number;
 }
 
 export const DEFAULT_WEIGHTS: SolverWeights = {
@@ -136,6 +145,8 @@ export const DEFAULT_WEIGHTS: SolverWeights = {
   weeklyShiftConsistency: 3,
   weeklyShiftAlternation: 2,
   weekendFairness: 4,
+  routePreference: 6,
+  unfilled: 1000,
 };
 
 // ─────────────────────────────────────────────

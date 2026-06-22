@@ -1,4 +1,4 @@
-import type { SolverInput, SolverOutput, ConstitutionalRuleKey, ShiftSystemPolicy } from './types';
+import type { SolverInput, SolverOutput, ConstitutionalRuleKey, ShiftSystemPolicy, AssignedSlot } from './types';
 
 /**
  * 품질 가중치 — 측정 전용 (솔버 objective 와 무관).
@@ -26,6 +26,7 @@ export interface QualityReport {
   preferenceSatisfactionRate: number | null;
   dayOffSatisfactionRate: number | null;
   hardViolationCount: number;
+  exemptedCount: number;
   constitutionalViolationCount: number;
   constitutionalByRule: Partial<Record<ConstitutionalRuleKey, number>>;
   restCycleCompliance: number;
@@ -61,16 +62,47 @@ function isWeekendDate(isoDate: string): boolean {
   return dow === 0 || dow === 6;
 }
 
+/**
+ * 선호 노선 충족률 계산.
+ * 선호 노선이 있고 ≥1 슬롯을 배정받은 기사에 대해,
+ * 해당 기사 슬롯 중 선호 노선에 배정된 비율의 평균을 반환.
+ * 해당 기사가 없으면 null.
+ */
+function computePreferenceSatisfactionRate(
+  drivers: SolverInput['drivers'],
+  slots: AssignedSlot[],
+): number | null {
+  // Build slot map per driver
+  const slotsByDriver = new Map<number, AssignedSlot[]>();
+  for (const s of slots) {
+    const arr = slotsByDriver.get(s.driverId) ?? [];
+    arr.push(s);
+    slotsByDriver.set(s.driverId, arr);
+  }
+
+  const rates: number[] = [];
+  for (const d of drivers) {
+    if (!d.preferredRouteIds || d.preferredRouteIds.length === 0) continue;
+    const driverSlots = slotsByDriver.get(d.id) ?? [];
+    if (driverSlots.length === 0) continue;
+    const prefSet = new Set(d.preferredRouteIds);
+    const metCount = driverSlots.filter((s) => prefSet.has(s.routeId)).length;
+    rates.push(metCount / driverSlots.length);
+  }
+
+  if (rates.length === 0) return null;
+  return rates.reduce((a, b) => a + b, 0) / rates.length;
+}
+
 export function scheduleQuality(input: SolverInput, output: SolverOutput): QualityReport {
   const drivers = input.drivers;
+  // "rated" drivers = those without an exemption reason (partial-month new hires etc. are excluded from fairness metrics)
+  const ratedDrivers = drivers.filter((d) => !d.workDayTarget?.exemptReason);
+
+  // Build per-driver counts from ALL slots (keeps the maps authoritative for slot lookups)
   const workDaysById = new Map<number, number>();
   for (const d of drivers) workDaysById.set(d.id, 0);
   for (const s of output.slots) workDaysById.set(s.driverId, (workDaysById.get(s.driverId) ?? 0) + 1);
-  const workDays = drivers.map((d) => workDaysById.get(d.id) ?? 0);
-  const idleDriverCount = workDays.filter((w) => w === 0).length;
-  const activeDriverRate = drivers.length === 0 ? 0 : (drivers.length - idleDriverCount) / drivers.length;
-  const totalSlots = output.slots.length + output.unfilled.length;
-  const unfilledRate = totalSlots === 0 ? 0 : output.unfilled.length / totalSlots;
 
   const policy = input.policy;
   const nightSet = policy ? nightLabels(policy.shiftSystem) : new Set<string>();
@@ -81,6 +113,17 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
     if (nightSet.has(s.shift)) nightById.set(s.driverId, (nightById.get(s.driverId) ?? 0) + 1);
     if (isWeekendDate(s.date)) weekendById.set(s.driverId, (weekendById.get(s.driverId) ?? 0) + 1);
   }
+
+  // Fairness stats: only over ratedDrivers (exempted new-hires excluded)
+  const ratedWorkDays = ratedDrivers.map((d) => workDaysById.get(d.id) ?? 0);
+  const ratedNights = ratedDrivers.map((d) => nightById.get(d.id) ?? 0);
+  const ratedWeekends = ratedDrivers.map((d) => weekendById.get(d.id) ?? 0);
+
+  const idleDriverCount = ratedWorkDays.filter((w) => w === 0).length;
+  const activeDriverRate = ratedDrivers.length === 0 ? 1 : (ratedDrivers.length - idleDriverCount) / ratedDrivers.length;
+
+  const totalSlots = output.slots.length + output.unfilled.length;
+  const unfilledRate = totalSlots === 0 ? 0 : output.unfilled.length / totalSlots;
 
   const workedKey = new Set(output.slots.map((s) => `${s.driverId}|${s.date}`));
   let prefTotal = 0, prefMet = 0;
@@ -98,22 +141,23 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
   }
 
   const n = Math.max(1, drivers.length);
-  const idleRatio = idleDriverCount / n;
+  const idleRatio = ratedDrivers.length === 0 ? 0 : idleDriverCount / ratedDrivers.length;
   const hardViolationRatio = output.metrics.hardViolationCount / n;
   const constitutionalRatio = output.metrics.constitutionalViolations.length / n;
   const composite =
     100
-    - QUALITY_WEIGHTS.workStdev * stdev(workDays)
-    - QUALITY_WEIGHTS.nightStdev * stdev(drivers.map((d) => nightById.get(d.id) ?? 0))
-    - QUALITY_WEIGHTS.weekendStdev * stdev(drivers.map((d) => weekendById.get(d.id) ?? 0))
+    - QUALITY_WEIGHTS.workStdev * stdev(ratedWorkDays)
+    - QUALITY_WEIGHTS.nightStdev * stdev(ratedNights)
+    - QUALITY_WEIGHTS.weekendStdev * stdev(ratedWeekends)
     - QUALITY_WEIGHTS.unfilledRate * unfilledRate
     - QUALITY_WEIGHTS.idleRatio * idleRatio
     - QUALITY_WEIGHTS.hardViolationRatio * hardViolationRatio
     - QUALITY_WEIGHTS.constitutionalRatio * constitutionalRatio
     - QUALITY_WEIGHTS.restCycleShortfall * (1 - output.metrics.restCycleCompliance);
 
-  const spareIds = drivers.filter((d) => d.homeBusId === undefined).map((d) => d.id);
-  const homeIds = drivers.filter((d) => d.homeBusId !== undefined).map((d) => d.id);
+  // spareUtilizationRate: only rated drivers (exempt new-hire spares excluded from pool)
+  const spareIds = ratedDrivers.filter((d) => d.homeBusId === undefined).map((d) => d.id);
+  const homeIds = ratedDrivers.filter((d) => d.homeBusId !== undefined).map((d) => d.id);
   const avg = (ids: number[]) => ids.length === 0 ? 0 : ids.reduce((s, id) => s + (workDaysById.get(id) ?? 0), 0) / ids.length;
   let spareUtilizationRate: number | null = null;
   if (spareIds.length > 0) {
@@ -122,18 +166,19 @@ export function scheduleQuality(input: SolverInput, output: SolverOutput): Quali
   }
 
   const report: QualityReport = {
-    workDayStdev: stdev(workDays),
-    nightStdev: stdev(drivers.map((d) => nightById.get(d.id) ?? 0)),
-    weekendStdev: stdev(drivers.map((d) => weekendById.get(d.id) ?? 0)),
+    workDayStdev: stdev(ratedWorkDays),
+    nightStdev: stdev(ratedNights),
+    weekendStdev: stdev(ratedWeekends),
     activeDriverRate,
     spareUtilizationRate,
     idleDriverCount,
     unfilledRate,
     homeBusRate: output.metrics.homeBusRate,
     crossRouteRate: output.metrics.crossRouteRate,
-    preferenceSatisfactionRate: null, // TODO: 하위 프로젝트 4에서 선호노선 데이터 연결 시 실측 (현재 데이터모델에 선호노선 없음)
+    preferenceSatisfactionRate: computePreferenceSatisfactionRate(drivers, output.slots),
     dayOffSatisfactionRate,
     hardViolationCount: output.metrics.hardViolationCount,
+    exemptedCount: output.metrics.exemptedCount,
     constitutionalViolationCount: output.metrics.constitutionalViolations.length,
     constitutionalByRule,
     restCycleCompliance: output.metrics.restCycleCompliance,

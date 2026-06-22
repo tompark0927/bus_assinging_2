@@ -23,13 +23,236 @@ import {
   DEFAULT_POLICY,
   POLICY_PRESETS,
   type CompanyPolicy,
+  type DriverWorkdayTarget,
   type PolicyPreset,
   type ShiftSlot,
   type SolverCrew,
   type SolverDriver,
   type SolverInput,
   type SolverOutput,
+  type WorkdayBandsPolicy,
 } from '../agents/_solvers/types';
+
+// ─────────────────────────────────────────────
+// 순수 헬퍼 — 선호 노선 정렬
+// ─────────────────────────────────────────────
+
+/**
+ * driverPreferences 배열을 priority 오름차순으로 정렬 후 routeId 만 추출.
+ * (priority 낮을수록 = 더 선호)
+ */
+export function mapPreferredRouteIds(prefs: { routeId: number; priority: number }[]): number[] {
+  return [...prefs].sort((a, b) => a.priority - b.priority).map((p) => p.routeId);
+}
+
+// ─────────────────────────────────────────────
+// 내부 헬퍼 — Prisma ShiftType → SolverShiftSlot 역매핑
+// ─────────────────────────────────────────────
+
+/**
+ * DB ShiftType (MORNING/AFTERNOON/FULL_DAY) → solver ShiftSlot ('AM'/'PM'/'FULL_DAY').
+ * toPrismaShift 의 역방향.
+ *   MORNING    → 'AM'
+ *   AFTERNOON  → 'PM'
+ *   FULL_DAY   → 'FULL_DAY'
+ */
+function fromPrismaShift(shift: string): ShiftSlot {
+  switch (shift) {
+    case 'MORNING':
+      return 'AM';
+    case 'AFTERNOON':
+      return 'PM';
+    default:
+      return 'FULL_DAY';
+  }
+}
+
+// ─────────────────────────────────────────────
+// 순수 헬퍼 — 전월 이월 패턴 계산
+// ─────────────────────────────────────────────
+
+/**
+ * 전월 마지막 근무 패턴 → carryOverPattern.
+ *
+ * @param priorSlots 한 기사의 전월 슬롯 (정렬 불필요)
+ *   - date: 'YYYY-MM-DD' (UTC)
+ *   - shift: ShiftSlot ('AM'|'PM'|'FULL_DAY' 등, solver 레이블)
+ *   - isRestDay: true 이면 휴무 (비근무)
+ * @param prevMonthEnd 전월 마지막 날 ('YYYY-MM-DD')
+ *
+ * 반환 undefined: 전월 데이터 없음.
+ *
+ * 로직:
+ *   - workedDates: isRestDay=false 인 슬롯의 날짜 집합
+ *   - consecutiveWorkDays: prevMonthEnd 부터 역방향으로 연속 근무일 카운트
+ *   - lastShift: 마지막 근무일의 슬롯 (같은 날 복수 슬롯이면 PM 우선, 없으면 null)
+ *   - lastWeekDominantShift: prevMonthEnd 기준 최근 7일의 가장 많은 시프트 ('MIXED' if tie)
+ */
+export function computeCarryOverPattern(
+  priorSlots: { date: string; shift: ShiftSlot; isRestDay: boolean }[],
+  prevMonthEnd: string,
+): {
+  consecutiveWorkDays: number;
+  lastShift: ShiftSlot | null;
+  lastWeekDominantShift: ShiftSlot | 'MIXED';
+} | undefined {
+  if (priorSlots.length === 0) return undefined;
+
+  // ── 날짜별 비휴무 슬롯 목록 구성 ──────────────────────────────
+  // date → ShiftSlot[] (isRestDay=false 인 것만)
+  const workedSlotsByDate = new Map<string, ShiftSlot[]>();
+  for (const s of priorSlots) {
+    if (s.isRestDay) continue;
+    const arr = workedSlotsByDate.get(s.date) ?? [];
+    arr.push(s.shift);
+    workedSlotsByDate.set(s.date, arr);
+  }
+
+  // ── lastShift — 마지막 날짜(prevMonthEnd)의 근무 슬롯 ─────────
+  // 같은 날에 복수 슬롯이면 PM 우선 (TWO_SHIFT 패턴 대응)
+  const lastDaySlots = workedSlotsByDate.get(prevMonthEnd) ?? [];
+  let lastShift: ShiftSlot | null = null;
+  if (lastDaySlots.length > 0) {
+    lastShift = lastDaySlots.includes('PM') ? 'PM' : lastDaySlots[0];
+  }
+
+  // ── consecutiveWorkDays — prevMonthEnd 부터 역방향 카운트 ──────
+  let consecutiveWorkDays = 0;
+  // prevMonthEnd를 Date로 변환 (UTC)
+  const endParts = prevMonthEnd.split('-').map(Number);
+  let curDate = new Date(Date.UTC(endParts[0], endParts[1] - 1, endParts[2]));
+
+  while (true) {
+    const dateStr = curDate.toISOString().slice(0, 10);
+    if (!workedSlotsByDate.has(dateStr)) break; // 슬롯 없음 or 휴무 → 스트릭 종료
+    consecutiveWorkDays++;
+    curDate = new Date(curDate.getTime() - 86400000); // -1일 (ms)
+  }
+
+  // ── lastWeekDominantShift — 마지막 7일 (prevMonthEnd 포함) ─────
+  const endMs = new Date(Date.UTC(endParts[0], endParts[1] - 1, endParts[2])).getTime();
+  const weekStartMs = endMs - 6 * 86400000; // 7일 = prevMonthEnd - 6days ~ prevMonthEnd
+
+  const shiftCount = new Map<ShiftSlot, number>();
+  for (const [dateStr, shifts] of workedSlotsByDate) {
+    const dateParts = dateStr.split('-').map(Number);
+    const dateMs = Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]);
+    if (dateMs < weekStartMs || dateMs > endMs) continue;
+    for (const sh of shifts) {
+      shiftCount.set(sh, (shiftCount.get(sh) ?? 0) + 1);
+    }
+  }
+
+  let lastWeekDominantShift: ShiftSlot | 'MIXED';
+  if (shiftCount.size === 0) {
+    // 마지막 7일에 근무 없음 → 전체 슬롯 중 가장 최근 근무일 시프트로 폴백
+    // (lastShift 는 prevMonthEnd 기준이므로, prevMonthEnd 에 슬롯 없을 때 null 이 될 수 있음)
+    let mostRecentDateMs = -Infinity;
+    let mostRecentShift: ShiftSlot | null = null;
+    for (const [dateStr, shifts] of workedSlotsByDate) {
+      const dateParts = dateStr.split('-').map(Number);
+      const dateMs = Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]);
+      if (dateMs > mostRecentDateMs) {
+        mostRecentDateMs = dateMs;
+        mostRecentShift = shifts.includes('PM') ? 'PM' : shifts[0];
+      }
+    }
+    lastWeekDominantShift = mostRecentShift ?? 'MIXED';
+  } else {
+    // 가장 높은 빈도 찾기 (동점 → MIXED)
+    let maxCount = 0;
+    let dominant: ShiftSlot | null = null;
+    let isTie = false;
+    for (const [sh, cnt] of shiftCount) {
+      if (cnt > maxCount) {
+        maxCount = cnt;
+        dominant = sh;
+        isTie = false;
+      } else if (cnt === maxCount) {
+        isTie = true;
+      }
+    }
+    lastWeekDominantShift = isTie || dominant === null ? 'MIXED' : dominant;
+  }
+
+  return { consecutiveWorkDays, lastShift, lastWeekDominantShift };
+}
+
+// ─────────────────────────────────────────────
+// 순수 헬퍼 — 전월 피로도 계산
+// ─────────────────────────────────────────────
+
+/**
+ * 전월 근무 슬롯의 노선 fatigueScore 합을 0~100 으로 정규화한 피로도.
+ *
+ * @param priorSlots 해당 기사의 전월 비휴무 슬롯 [{ routeId }]
+ * @param routeFatigueById routeId → fatigueScore(1~5) 매핑
+ *
+ * 정규화 공식:
+ *   1. avgRouteFatigue = 근무 슬롯의 평균 nolineFatigue (Map 에 없는 노선 → 3 처리)
+ *   2. base = (avgRouteFatigue - 1) / 4 * 100   (1→0, 5→100 선형 매핑)
+ *   3. intensity = min(1, slots.length / 22)     (22 ≈ 풀 월 근무일)
+ *   4. score = round(clamp(base * intensity, 0, 100))
+ *   5. 전월 슬롯 없음 → 30 (중립 기본값; 기존 placeholder 와 동일하므로 이력 없는 기사 안전)
+ *
+ * 단조성:
+ *   - 노선 피로도가 높을수록 score ↑
+ *   - 근무일수가 많을수록 score ↑ (22일 이상은 상한)
+ *   - 결과: 0~100 정수, 항상 clamp 보장
+ */
+export function computeRecentFatigue(
+  priorSlots: { routeId: number }[],
+  routeFatigueById: Map<number, number>,
+): number {
+  if (priorSlots.length === 0) return 30;
+
+  const DEFAULT_FATIGUE = 3; // 노선 정보 없을 때 중립값
+
+  const total = priorSlots.reduce((sum, slot) => {
+    const raw = routeFatigueById.get(slot.routeId);
+    // Guard: ?? only catches undefined/null, not NaN. Explicit isNaN check is required
+    // so that corrupt DB values (NaN) fall back to DEFAULT_FATIGUE instead of propagating.
+    const fatigue = (raw === undefined || raw === null || Number.isNaN(raw)) ? DEFAULT_FATIGUE : raw;
+    return sum + fatigue;
+  }, 0);
+
+  const avgRouteFatigue = total / priorSlots.length;          // 1..5
+  const base = ((avgRouteFatigue - 1) / 4) * 100;            // 0..100
+  const intensity = Math.min(1, priorSlots.length / 22);     // 0..1
+  const score = Math.round(Math.min(100, Math.max(0, base * intensity)));
+
+  return score;
+}
+
+// ─────────────────────────────────────────────
+// 순수 헬퍼 — 신규 입사 근무일수 면제 타겟
+// ─────────────────────────────────────────────
+
+/**
+ * 신규 입사자(isNewHire=true)에게 workDayTarget을 생성한다.
+ *
+ * 입사 30일 이내 기사는 월중 입사로 hardMin을 채우지 못하는 경우가 많으므로
+ * UNDER_MIN 발생 시 hard violation이 아닌 EXEMPTED 처리가 되어야 한다.
+ * evaluateWorkload는 이미 exemptReason을 지원하므로 여기서는 타겟만 생성.
+ *
+ * @param isNewHire DB의 isNewHire 여부 (createdAt < 30일)
+ * @param bands 회사 policy.workdayBands
+ * @returns DriverWorkdayTarget (신규) 또는 undefined (일반)
+ */
+export function newHireWorkdayTarget(
+  isNewHire: boolean,
+  bands: WorkdayBandsPolicy,
+): DriverWorkdayTarget | undefined {
+  if (!isNewHire) return undefined;
+  return {
+    min: bands.hardMin,
+    max: bands.hardMax,
+    softMin: bands.sweetMin,
+    softMax: bands.sweetMax,
+    exemptReason: 'NEW_HIRE',
+    exemptNote: '입사 30일 이내',
+  };
+}
 
 // ─────────────────────────────────────────────
 // 정책 로딩
@@ -134,6 +357,69 @@ export async function buildSolverInputFromDb(
   const monthStart = new Date(Date.UTC(year, month - 1, 1));
   const monthEnd = new Date(Date.UTC(year, month, 0));
 
+  // ── 전월 날짜 범위 (Jan → prev Dec 롤오버 처리) ───
+  const prevYear = month === 1 ? year - 1 : year;
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const prevMonthStart = new Date(Date.UTC(prevYear, prevMonth - 1, 1));
+  const prevMonthEnd = new Date(Date.UTC(prevYear, prevMonth, 0));
+
+  // ── 전월 슬롯 + 노선 피로도 (recentFatigueScore + carryOverPattern 계산용) ───
+  // NOTE: isRestDay 필터 제거 — carryOverPattern 은 휴무일도 포함해야 스트릭을 올바르게 계산.
+  //       피로도 계산은 비휴무 슬롯만 쓰므로 아래 그룹화 시 isRestDay 기준으로 분리.
+  const [prevSlots, dbRoutes] = await Promise.all([
+    prisma.scheduleSlot.findMany({
+      where: {
+        schedule: { companyId },
+        date: { gte: prevMonthStart, lte: prevMonthEnd },
+      },
+      select: {
+        driverId: true,
+        routeId: true,
+        date: true,
+        shift: true,
+        isRestDay: true,
+      },
+    }),
+    prisma.route.findMany({
+      where: { companyId },
+      select: { id: true, fatigueScore: true },
+    }),
+  ]);
+
+  // routeId → fatigueScore 맵
+  const routeFatigueById = new Map<number, number>(
+    dbRoutes.map((r) => [r.id, r.fatigueScore]),
+  );
+
+  // 기사별 전월 슬롯 그룹화
+  //   - fatigue 계산용: 비휴무 슬롯의 routeId
+  //   - carryOver 계산용: 전체 슬롯 (date, shift, isRestDay)
+  const prevFatigueSlotsByDriver = new Map<number, { routeId: number }[]>();
+  const prevCarrySlotsByDriver = new Map<
+    number,
+    { date: string; shift: ShiftSlot; isRestDay: boolean }[]
+  >();
+
+  // prevMonthEnd string ('YYYY-MM-DD') for computeCarryOverPattern
+  const prevMonthEndStr = prevMonthEnd.toISOString().slice(0, 10);
+
+  for (const s of prevSlots) {
+    // Fatigue: 비휴무 슬롯만
+    if (!s.isRestDay) {
+      const arr = prevFatigueSlotsByDriver.get(s.driverId) ?? [];
+      arr.push({ routeId: s.routeId });
+      prevFatigueSlotsByDriver.set(s.driverId, arr);
+    }
+    // CarryOver: 모든 슬롯
+    const carryArr = prevCarrySlotsByDriver.get(s.driverId) ?? [];
+    carryArr.push({
+      date: s.date.toISOString().slice(0, 10),
+      shift: fromPrismaShift(s.shift),
+      isRestDay: s.isRestDay,
+    });
+    prevCarrySlotsByDriver.set(s.driverId, carryArr);
+  }
+
   // ── 운전자 (DRIVER 권한, 활성) ───
   const dbDrivers = await prisma.user.findMany({
     where: { companyId, role: 'DRIVER', isActive: true },
@@ -204,6 +490,7 @@ export async function buildSolverInputFromDb(
     const isNewHire =
       d.createdAt && monthStart.getTime() - d.createdAt.getTime() < 30 * 24 * 60 * 60 * 1000;
 
+    const preferredRouteIds = mapPreferredRouteIds(d.driverPreferences);
     drivers.push({
       id: d.id,
       name: d.name,
@@ -217,8 +504,20 @@ export async function buildSolverInputFromDb(
       ),
       licenseExpiresAt: d.licenseExpiresAt ?? undefined,
       qualificationExpiresAt: d.qualificationExpiresAt ?? undefined,
-      recentFatigueScore: 30, // placeholder; 향후 attendance·incident 기반 계산
+      recentFatigueScore: computeRecentFatigue(
+        prevFatigueSlotsByDriver.get(d.id) ?? [],
+        routeFatigueById,
+      ),
       isNewHire: !!isNewHire,
+      workDayTarget: newHireWorkdayTarget(!!isNewHire, policy.workdayBands),
+      ...(preferredRouteIds.length > 0 ? { preferredRouteIds } : {}),
+      // 전월 이월 패턴 (5/2 룰 + 주간 시프트 교대 연속성)
+      ...((() => {
+        const carrySlots = prevCarrySlotsByDriver.get(d.id);
+        if (!carrySlots) return {};
+        const pattern = computeCarryOverPattern(carrySlots, prevMonthEndStr);
+        return pattern ? { carryOverPattern: pattern } : {};
+      })()),
     });
   }
 

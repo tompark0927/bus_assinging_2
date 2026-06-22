@@ -52,7 +52,7 @@ function q(composite: number, overrides: Record<string, unknown> = {}) {
   return {
     workDayStdev: 0, nightStdev: 0, weekendStdev: 0, activeDriverRate: 1, spareUtilizationRate: null,
     idleDriverCount: 0, unfilledRate: 0, homeBusRate: 1, crossRouteRate: 0, preferenceSatisfactionRate: null,
-    dayOffSatisfactionRate: null, hardViolationCount: 0, constitutionalViolationCount: 0, constitutionalByRule: {},
+    dayOffSatisfactionRate: null, hardViolationCount: 0, exemptedCount: 0, constitutionalViolationCount: 0, constitutionalByRule: {},
     restCycleCompliance: 1, compositeScore: composite,
     ...overrides,
   };

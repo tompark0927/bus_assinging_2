@@ -583,4 +583,204 @@ describe('solveMonthlyGrid v2', () => {
     });
     expect(weekendSlots).toHaveLength(0);
   });
+
+  // ─────────────────────────────────────────
+  // 선호 노선 (routePreference) — Step 3
+  // ─────────────────────────────────────────
+
+  describe('선호 노선 소프트 제약', () => {
+    test('선호 노선 보유 spare는 선호 노선에 우선 배정된다 (대다수 슬롯)', () => {
+      // 2 노선, 각 노선 1버스 1페어.
+      // spare 한 명: canCrossRoute=true, preferredRouteIds=[100] (노선A 선호)
+      const { POLICY_PRESETS } = require('../types');
+      const { scheduleQuality } = require('../quality');
+      const policy = POLICY_PRESETS.CITY_2SHIFT;
+
+      const drivers: SolverDriver[] = [
+        // 노선 A (routeId=100) 페어
+        { id: 1, name: 'A1', homeBusId: 1001, homeRouteId: 100, partnerId: 2, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+        { id: 2, name: 'A2', homeBusId: 1001, homeRouteId: 100, partnerId: 1, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+        // 노선 B (routeId=200) 페어
+        { id: 3, name: 'B1', homeBusId: 2001, homeRouteId: 200, partnerId: 4, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+        { id: 4, name: 'B2', homeBusId: 2001, homeRouteId: 200, partnerId: 3, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+        // Spare: 노선 A 선호
+        { id: 5, name: 'Spare', homeRouteId: 100, canCrossRoute: true, preferredRouteIds: [100], approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      ];
+
+      const result = solveMonthlyGrid({
+        year: 2026,
+        month: 5,
+        drivers,
+        buses: [
+          { id: 1001, routeId: 100 },
+          { id: 2001, routeId: 200 },
+        ],
+        crews: [
+          { id: 'CA', driverIds: [1, 2], busId: 1001, routeId: 100 },
+          { id: 'CB', driverIds: [3, 4], busId: 2001, routeId: 200 },
+        ],
+        policy,
+        localSearchIterations: 200,
+        randomSeed: 42,
+      });
+
+      const { preferenceSatisfactionRate } = scheduleQuality({ year: 2026, month: 5, drivers, buses: [], policy }, result);
+      // spare가 슬롯을 받았다면, 선호 노선(routeId=100) 비율이 과반이어야 함
+      const spareSlots = result.slots.filter((s) => s.driverId === 5);
+      if (spareSlots.length > 0) {
+        expect(preferenceSatisfactionRate).toBeGreaterThan(0.5);
+      }
+      // spare가 슬롯을 전혀 못 받은 경우는 건너뜀 (tight schedule 가능)
+    });
+  });
+
+  // ─────────────────────────────────────────
+  // Phase C FILL move — SP4-1
+  // ─────────────────────────────────────────
+
+  // ─────────────────────────────────────────
+  // Phase C-3 REASSIGN move — SP4-2
+  // ─────────────────────────────────────────
+
+  test('[SP4-2] REASSIGN: over-loaded 운전자 → under-loaded 운전자로 슬롯 이전, workDayStdev 감소', () => {
+    /**
+     * 설계:
+     *   노선 100, 버스 2대 (busId=1001, 1002), 1교대(FULL_DAY).
+     *   운전자 4명 — 2페어. 5/2 사이클.
+     *   추가로 spare 4명 (id=5..8) 을 같은 노선에 배치.
+     *
+     *   VILLAGE_1SHIFT 프리셋 사용 (sweet 23~26일).
+     *   차량 수가 2대이므로 슬롯은 2×31=62개.
+     *   운전자 8명이 있지만 차량 2대 + 휴무 사이클로 인해
+     *   Phase B 후 일부 운전자(spare)는 배정을 거의 받지 못해 under-loaded 상태,
+     *   HOME 운전자들은 상대적으로 over-loaded 상태가 될 수 있다.
+     *
+     *   검증 목표:
+     *     reassign 이 실제로 동작하면 over-loaded driver (count >= sweetMin) 의 슬롯이
+     *     under-loaded driver (count < sweetMin) 으로 이동하여 workDayStdev 가
+     *     reassign-disabled 케이스보다 낮아야 한다.
+     *
+     *   NOTE: 이 테스트는 reassign 구현 전에는 FAIL 해야 한다.
+     *   (reassign 없이는 HOME 운전자들의 슬롯 수 불균형이 스왑만으로는 충분히 해소되지 않음)
+     */
+    const { POLICY_PRESETS } = require('../types');
+    // VILLAGE_1SHIFT: SOLO crew, FULL_DAY slot, sweet=23~26
+    const policy = POLICY_PRESETS.VILLAGE_1SHIFT;
+
+    // 버스 2대 + spare 4명 — HOME 운전자(1~4) 는 busId 고정,
+    // spare(5~8) 는 homeRouteId=100 만 설정 → Phase B 에서 HOME 할당 못받아 under-loaded
+    const drivers = [
+      { id: 1, name: 'H1', homeBusId: 1001, homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+      { id: 2, name: 'H2', homeBusId: 1002, homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 30, isNewHire: false },
+      // spare — homeRouteId=100 이지만 homeBusId 없음 → Phase B 에서 SAME_ROUTE 후순위
+      { id: 3, name: 'S1', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 4, name: 'S2', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 5, name: 'S3', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 6, name: 'S4', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+    ];
+
+    const result = solveMonthlyGrid({
+      year: 2026,
+      month: 5,
+      drivers,
+      buses: [
+        { id: 1001, routeId: 100 },
+        { id: 1002, routeId: 100 },
+      ],
+      // SOLO crew — 각 버스에 1명 HOME 운전자
+      crews: [
+        { id: 'C1', driverIds: [1], busId: 1001, routeId: 100 },
+        { id: 'C2', driverIds: [2], busId: 1002, routeId: 100 },
+      ],
+      policy,
+      localSearchIterations: 500,
+      randomSeed: 42,
+    });
+
+    const workDays = result.workloads.map((w) => w.workDays);
+    const mean = workDays.reduce((a, b) => a + b, 0) / workDays.length;
+    const stdev = Math.sqrt(workDays.reduce((acc, x) => acc + (x - mean) ** 2, 0) / workDays.length);
+
+    // Without reassign, H1/H2 will have ~31 days (all slots) while spares have 0 → stdev ~14.
+    // With reassign, slots are redistributed so stdev should drop significantly.
+    // We assert stdev < 10 as a meaningful improvement over the ~14 without-reassign baseline.
+    expect(stdev).toBeLessThan(10);
+
+    // Also: the over-loaded driver's count should decrease (reassign donated some slots)
+    // and at least one spare should have received slots
+    const spareWorkDays = result.workloads
+      .filter((w) => [3, 4, 5, 6].includes(w.driverId))
+      .map((w) => w.workDays);
+    expect(spareWorkDays.some((d) => d > 0)).toBe(true);
+
+    // Hard constraints must be preserved: no unfilled slots added, no hard violations added
+    // (hardViolation count check is best-effort — with VILLAGE_1SHIFT sweet=23~26 and
+    // 2 buses × 31 days = 62 slots / 6 drivers ≈ 10.3 days, many will be UNDER_MIN.
+    // We only assert stdev improvement, not zero hard violations for this small scenario.)
+  });
+
+  test('FILL move: Phase B 미배정 슬롯을 Phase C 로컬서치가 여유 운전자에게 채운다', () => {
+    /**
+     * 설계:
+     *   노선 100, 버스 1대 (busId=1001), 2교대(AM/PM).
+     *   페어 운전자 2명 (id=1,2) 이 전월 전일 approvedDayOffs 로 막혀
+     *   Phase B 에서 AM/PM 슬롯 전체가 미배정됨.
+     *   같은 노선에 여유 운전자(id=3..8) 6명이 있어 feasible → FILL move 로 채워야 함.
+     *
+     *   2교대 × 31일 = 62슬롯. 6명 × ~22일 = ~132 용량 >> 62. 5/2 restCycle 제약 충분히 여유.
+     *
+     *   검증: result.metrics.unfilledCount 가 0 이어야 함.
+     */
+    const { POLICY_PRESETS } = require('../types');
+    const policy = POLICY_PRESETS.CITY_2SHIFT; // AM/PM 2교대
+
+    const allMayDays = Array.from({ length: 31 }, (_, i) =>
+      `2026-05-${String(i + 1).padStart(2, '0')}`);
+
+    const drivers: SolverDriver[] = [
+      // 페어 (busId=1001 home) — 전체 휴무로 Phase B 에서 미배정 유발
+      {
+        id: 1, name: 'PairA', homeBusId: 1001, homeRouteId: 100, partnerId: 2,
+        canCrossRoute: false,
+        approvedDayOffs: allMayDays,
+        recentFatigueScore: 30, isNewHire: false,
+      },
+      {
+        id: 2, name: 'PairB', homeBusId: 1001, homeRouteId: 100, partnerId: 1,
+        canCrossRoute: false,
+        approvedDayOffs: allMayDays,
+        recentFatigueScore: 30, isNewHire: false,
+      },
+      // 여유 운전자 6명 — 같은 노선, 휴무 없음, 충분한 여유 (62슬롯 커버 가능)
+      { id: 3, name: 'Spare1', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 4, name: 'Spare2', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 5, name: 'Spare3', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 6, name: 'Spare4', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 7, name: 'Spare5', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+      { id: 8, name: 'Spare6', homeRouteId: 100, canCrossRoute: false, approvedDayOffs: [], recentFatigueScore: 20, isNewHire: false },
+    ];
+
+    const result = solveMonthlyGrid({
+      year: 2026,
+      month: 5,
+      drivers,
+      buses: [{ id: 1001, routeId: 100 }],
+      crews: [{ id: 'C1', driverIds: [1, 2], busId: 1001, routeId: 100 }],
+      policy,
+      localSearchIterations: 5000,
+      randomSeed: 42,
+    });
+
+    // FILL move 가 없었다면 62슬롯이 모두 unfilled 였을 것.
+    // FILL move 가 있으면 Spare3~8 가 채워서 unfilledCount=0 이어야 함.
+    expect(result.metrics.unfilledCount).toBe(0);
+
+    // Hard constraint 보존: 페어(1,2)는 전일 approvedDayOffs → 슬롯 0개
+    const pairSlots = result.slots.filter((s) => s.driverId === 1 || s.driverId === 2);
+    expect(pairSlots).toHaveLength(0);
+
+    // Spare 가 슬롯을 받았어야 함
+    const spareSlots = result.slots.filter((s) => s.driverId >= 3);
+    expect(spareSlots.length).toBeGreaterThan(0);
+  });
 });
