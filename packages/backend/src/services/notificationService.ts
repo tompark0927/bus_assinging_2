@@ -131,20 +131,22 @@ export async function sendPushNotification(
   type: NotificationType,
   data?: Record<string, unknown>
 ) {
+  // 대상 사용자의 companyId 를 먼저 조회 — 알림함 조회가 companyId 로 필터되므로
+  // 생성 시 반드시 실제 회사 ID를 넣어야 한다 (미지정 시 default 1 로 저장되어 안 보임).
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { companyId: true, expoPushToken: true },
+  });
+  if (!user) return;
+
   const notification = await prisma.notification.create({
-    data: { userId, title, body, type, data: (data as any) || {} },
+    data: { userId, companyId: user.companyId, title, body, type, data: (data as any) || {} },
   });
 
   // Socket.IO: 실시간 알림 전송
   emitToUser(userId, 'notification:new', { notification });
 
-  // Get user's push token
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { expoPushToken: true },
-  });
-
-  if (!user?.expoPushToken) return;
+  if (!user.expoPushToken) return;
 
   if (!Expo.isExpoPushToken(user.expoPushToken)) {
     logger.warn(`Invalid Expo push token for user ${userId}`);
@@ -156,7 +158,8 @@ export async function sendPushNotification(
     sound: 'default',
     title,
     body,
-    data: data || {},
+    // type 을 payload 에 포함 — 앱이 푸시 탭 시 알림 유형별 화면 라우팅에 사용
+    data: { ...(data || {}), type },
   };
 
   try {

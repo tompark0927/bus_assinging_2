@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PageHeader from '../components/PageHeader';
+import { dailyReportsHelp } from '../help/helpContent';
 
 // ─────────────────────────────────────────
 // Types
@@ -220,6 +221,7 @@ export default function DailyReportsPage() {
     <div className="max-w-full">
       {/* 헤더 */}
       <PageHeader
+        help={dailyReportsHelp}
         icon={FileText}
         title="일일 운영 보고서"
         description="매일 09:00 AI 에이전트가 작성하는 회사 운영 보고서"
@@ -341,9 +343,6 @@ export default function DailyReportsPage() {
             <div className="flex flex-col items-center justify-center py-20 text-gray-500">
               <FileText size={40} className="mb-3 text-gray-300" />
               <p className="text-sm">아직 작성된 보고서가 없습니다.</p>
-              <p className="text-xs mt-2 text-center">
-                DailyReportAgent 가 활성화되면 매일 09:00 자동 작성됩니다.
-              </p>
             </div>
           )}
         </div>

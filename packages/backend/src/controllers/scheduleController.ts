@@ -54,6 +54,10 @@ export const getSchedule = async (req: AuthRequest, res: Response) => {
           },
         },
       });
+      // 발행 전(DRAFT) 배차표는 기사에게 노출하지 않음
+      if (schedule && schedule.status === 'DRAFT') {
+        return res.json({ success: true, data: null });
+      }
       return res.json({ success: true, data: schedule });
     }
 
@@ -85,7 +89,8 @@ export const getMyMonthlySummary = async (req: AuthRequest, res: Response) => {
     });
 
     // 내 배차 화면과 동일한 병합 규칙: 드랍은 휴무로 집계
-    const slots = schedule?.slots ?? [];
+    // 발행 전(DRAFT) 배차표는 요약에도 포함하지 않음
+    const slots = schedule && schedule.status !== 'DRAFT' ? schedule.slots : [];
     const isRest = (s: { isRestDay: boolean; status: string }) =>
       s.isRestDay || s.status === 'DROPPED';
     const workDays = slots.filter((s) => !isRest(s)).length;
@@ -158,7 +163,8 @@ export const generateSchedule = async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     logger.error(error);
-    if (error instanceof Error) {
+    // 내부 오류 문구(영문/기술 상세)는 사용자에게 그대로 노출하지 않음
+    if (error instanceof Error && /[가-힣]/.test(error.message)) {
       return res.status(400).json({ success: false, message: error.message });
     }
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
@@ -456,12 +462,16 @@ export const deleteSchedule = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
     }
 
-    if (schedule.status === 'PUBLISHED') {
-      return res.status(400).json({ success: false, message: '발행된 배차표는 삭제할 수 없습니다.' });
+    if (schedule.status === 'ARCHIVED') {
+      return res.status(400).json({ success: false, message: '보관된 배차표는 삭제할 수 없습니다.' });
     }
 
-    await prisma.scheduleSlot.deleteMany({ where: { scheduleId: schedule.id } });
-    await prisma.schedule.delete({ where: { id: schedule.id } });
+    // 슬롯에 연결된 대타 요청부터 정리 (FK 제약) 후 슬롯·배차표 삭제
+    await prisma.$transaction([
+      prisma.emergencyDrop.deleteMany({ where: { slot: { scheduleId: schedule.id } } }),
+      prisma.scheduleSlot.deleteMany({ where: { scheduleId: schedule.id } }),
+      prisma.schedule.delete({ where: { id: schedule.id } }),
+    ]);
 
     await createAuditLog({
       req: req as any,
@@ -497,7 +507,8 @@ export const exportScheduleExcel = async (req: AuthRequest, res: Response) => {
     return res.send(buffer);
   } catch (error) {
     logger.error(error);
-    if (error instanceof Error) {
+    // 내부 오류 문구(영문/기술 상세)는 사용자에게 그대로 노출하지 않음
+    if (error instanceof Error && /[가-힣]/.test(error.message)) {
       return res.status(400).json({ success: false, message: error.message });
     }
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });

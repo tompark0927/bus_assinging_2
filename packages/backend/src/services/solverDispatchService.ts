@@ -231,11 +231,11 @@ export function computeRecentFatigue(
 /**
  * 신규 입사자(isNewHire=true)에게 workDayTarget을 생성한다.
  *
- * 입사 30일 이내 기사는 월중 입사로 hardMin을 채우지 못하는 경우가 많으므로
+ * 신규 기사는 월중 입사로 hardMin을 채우지 못하는 경우가 많으므로
  * UNDER_MIN 발생 시 hard violation이 아닌 EXEMPTED 처리가 되어야 한다.
  * evaluateWorkload는 이미 exemptReason을 지원하므로 여기서는 타겟만 생성.
  *
- * @param isNewHire DB의 isNewHire 여부 (createdAt < 30일)
+ * @param isNewHire 배차표 생성 시 관리자가 신규로 지정한 기사 여부
  * @param bands 회사 policy.workdayBands
  * @returns DriverWorkdayTarget (신규) 또는 undefined (일반)
  */
@@ -250,7 +250,29 @@ export function newHireWorkdayTarget(
     softMin: bands.sweetMin,
     softMax: bands.sweetMax,
     exemptReason: 'NEW_HIRE',
-    exemptNote: '입사 30일 이내',
+    exemptNote: '관리자 지정 신규 기사',
+  };
+}
+
+/**
+ * 예비(스페어) 기사 workDayTarget — 정규 배차 하한 면제.
+ *
+ * 스페어는 대타·휴가 충원이 본업이라 정규 배차가 적은 것이 정상 상태다.
+ * 하한(UNDER_MIN)을 hard violation 으로 잡으면 공정성 점수가 왜곡되므로 면제 처리.
+ * 상한(OVER_MAX)은 안전·노동법 사안이라 그대로 적용된다.
+ */
+export function spareWorkdayTarget(
+  isSpare: boolean,
+  bands: WorkdayBandsPolicy,
+): DriverWorkdayTarget | undefined {
+  if (!isSpare) return undefined;
+  return {
+    min: bands.hardMin,
+    max: bands.hardMax,
+    softMin: bands.sweetMin,
+    softMax: bands.sweetMax,
+    exemptReason: 'SPARE_DRIVER',
+    exemptNote: '예비 기사 — 정규 배차 하한 미적용',
   };
 }
 
@@ -348,12 +370,16 @@ interface BuildInputArgs {
   policy: CompanyPolicy;
   /** 운휴 차량 매핑 (없으면 매일 운행) */
   busOperatingDates?: Map<number, string[]>;
+  /** 배차표 생성 시 관리자가 직접 지정한 신규 기사 (자동 판정 없음) */
+  newHireDriverIds?: Set<number>;
+  /** 사고 등으로 특정 노선 배차를 금지할 기사 매핑 (driverId → 금지 routeId 목록) */
+  blockedRouteIdsByDriver?: Map<number, number[]>;
 }
 
 export async function buildSolverInputFromDb(
   args: BuildInputArgs,
 ): Promise<SolverInput> {
-  const { companyId, year, month, policy, busOperatingDates } = args;
+  const { companyId, year, month, policy, busOperatingDates, newHireDriverIds, blockedRouteIdsByDriver } = args;
   const monthStart = new Date(Date.UTC(year, month - 1, 1));
   const monthEnd = new Date(Date.UTC(year, month, 0));
 
@@ -430,7 +456,6 @@ export async function buildSolverInputFromDb(
       assignedBusNumber: true,
       licenseExpiresAt: true,
       qualificationExpiresAt: true,
-      createdAt: true,
       routeAssignments: {
         where: { isActive: true },
         select: { routeId: true, startDate: true, endDate: true },
@@ -486,9 +511,11 @@ export async function buildSolverInputFromDb(
 
     if (homeBusId !== undefined) homeBusByDriverId.set(d.id, homeBusId);
 
-    // 신규 (입사 30일 이내)
-    const isNewHire =
-      d.createdAt && monthStart.getTime() - d.createdAt.getTime() < 30 * 24 * 60 * 60 * 1000;
+    // 신규 = 배차표 생성 시 관리자가 직접 지정한 기사만 (자동 판정 제거)
+    const isNewHire = !!newHireDriverIds?.has(d.id);
+
+    // 사고 등으로 배차 금지된 노선 (driverId 기준)
+    const blockedRouteIds = blockedRouteIdsByDriver?.get(d.id);
 
     const preferredRouteIds = mapPreferredRouteIds(d.driverPreferences);
     drivers.push({
@@ -508,8 +535,12 @@ export async function buildSolverInputFromDb(
         prevFatigueSlotsByDriver.get(d.id) ?? [],
         routeFatigueById,
       ),
-      isNewHire: !!isNewHire,
-      workDayTarget: newHireWorkdayTarget(!!isNewHire, policy.workdayBands),
+      isNewHire,
+      // 신규 지정이 우선, 아니면 스페어 기사 하한 면제 적용
+      workDayTarget:
+        newHireWorkdayTarget(isNewHire, policy.workdayBands) ??
+        spareWorkdayTarget(d.driverType === 'SPARE', policy.workdayBands),
+      ...(blockedRouteIds && blockedRouteIds.length > 0 ? { blockedRouteIds } : {}),
       ...(preferredRouteIds.length > 0 ? { preferredRouteIds } : {}),
       // 전월 이월 패턴 (5/2 룰 + 주간 시프트 교대 연속성)
       ...((() => {
@@ -614,12 +645,12 @@ export async function persistSolverOutput(args: PersistArgs): Promise<{
       if (existing) {
         if (existing.status === 'PUBLISHED' || existing.status === 'ARCHIVED') {
           throw new Error(
-            `이미 발행/아카이브된 ${year}년 ${month}월 배차표가 있습니다 (status=${existing.status}). 새 솔버 결과로 덮어쓸 수 없습니다.`,
+            `이미 발행된 ${year}년 ${month}월 배차표가 있습니다. 기존 배차표를 삭제한 후 다시 생성해주세요.`,
           );
         }
         if (!overwriteDraft) {
           throw new Error(
-            `${year}년 ${month}월 DRAFT 배차표가 이미 있습니다. overwriteDraft=true 로 덮어쓰세요.`,
+            `${year}년 ${month}월 배차표 초안이 이미 있습니다. 초안을 삭제하거나 덮어쓰기를 선택해주세요.`,
           );
         }
         // 기존 DRAFT 슬롯 모두 삭제
@@ -690,27 +721,41 @@ export async function generateMonthlyScheduleV2(args: {
   /** override policy (테스트·시뮬레이션용). 미지정 시 회사 정책 자동 로드 */
   policyOverride?: CompanyPolicy;
   overwriteDraft?: boolean;
+  /** 생성 시 수동 지정 신규 기사 ID */
+  newHireDriverIds?: number[];
+  /** 노선별 사고(배차 금지) 기사 — 노선 id 기준 */
+  blockedRoutes?: { routeId: number; driverIds: number[] }[];
 }): Promise<GenerateScheduleV2Result> {
   const start = Date.now();
   const policy = args.policyOverride ?? (await loadCompanyPolicy(args.companyId));
+
+  // 노선별 사고 기사 → driverId → 금지 routeId 목록 으로 변환
+  const blockedRouteIdsByDriver = new Map<number, number[]>();
+  for (const b of args.blockedRoutes ?? []) {
+    for (const did of b.driverIds) {
+      const arr = blockedRouteIdsByDriver.get(did) ?? [];
+      if (!arr.includes(b.routeId)) arr.push(b.routeId);
+      blockedRouteIdsByDriver.set(did, arr);
+    }
+  }
 
   const input = await buildSolverInputFromDb({
     companyId: args.companyId,
     year: args.year,
     month: args.month,
     policy,
+    newHireDriverIds: args.newHireDriverIds ? new Set(args.newHireDriverIds) : undefined,
+    blockedRouteIdsByDriver: blockedRouteIdsByDriver.size > 0 ? blockedRouteIdsByDriver : undefined,
   });
 
   if (input.drivers.length === 0) {
-    throw new Error(`회사 ${args.companyId} 에 활성 운전자가 없습니다.`);
+    throw new Error('등록된 활성 기사가 없습니다. 기본정보 관리에서 기사를 먼저 등록해주세요.');
   }
   if (input.buses.length === 0) {
-    throw new Error(`회사 ${args.companyId} 에 노선 배정된 차량이 없습니다.`);
+    throw new Error('노선에 배정된 차량이 없습니다. 기본정보 관리에서 차량과 노선을 먼저 등록해주세요.');
   }
   if (!input.crews || input.crews.length === 0) {
-    throw new Error(
-      `회사 ${args.companyId} 에 차량별 운전자 (assignedBusNumber) 매핑이 없습니다. 운전자 등록 시 차번을 입력하세요.`,
-    );
+    throw new Error('차량에 배정된 기사가 없습니다. 기사 등록 시 담당 차량(차번)을 입력해주세요.');
   }
 
   const output = solveMonthlyGrid(input);

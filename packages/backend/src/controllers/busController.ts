@@ -43,12 +43,12 @@ export const getBusById = async (req: AuthRequest, res: Response) => {
 
 export const createBus = async (req: AuthRequest, res: Response) => {
   try {
-    const { busNumber, plateNumber, model, year, capacity, routeId } = req.body;
+    const { busNumber, plateNumber, model, year, routeId } = req.body;
 
     const bus = await prisma.bus.create({
-      data: { 
+      data: {
         companyId: req.user!.companyId,
-        busNumber, plateNumber, model, year, capacity, routeId 
+        busNumber, plateNumber, model, year, routeId
       },
       include: { route: true },
     });
@@ -62,7 +62,7 @@ export const createBus = async (req: AuthRequest, res: Response) => {
 
 export const updateBus = async (req: AuthRequest, res: Response) => {
   try {
-    const { busNumber, plateNumber, model, year, capacity, routeId, isActive } = req.body;
+    const { busNumber, plateNumber, model, year, routeId, isActive } = req.body;
     const busId = parseInt(req.params.id);
 
     const existingBus = await prisma.bus.findFirst({ where: { id: busId, companyId: req.user!.companyId } });
@@ -72,7 +72,7 @@ export const updateBus = async (req: AuthRequest, res: Response) => {
 
     const bus = await prisma.bus.update({
       where: { id: busId },
-      data: { busNumber, plateNumber, model, year, capacity, routeId, isActive },
+      data: { busNumber, plateNumber, model, year, routeId, isActive },
       include: { route: true },
     });
 

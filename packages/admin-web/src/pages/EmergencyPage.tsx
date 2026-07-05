@@ -20,12 +20,13 @@ import {
   Loader2,
   ArrowRight,
 } from 'lucide-react';
-import { emergencyApi, schedulesApi, usersApi } from '../services/api';
+import { emergencyApi, schedulesApi } from '../services/api';
 import { format, formatDistanceToNow, isToday } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { parseSlotDate } from '../utils/date';
 import PageHeader from '../components/PageHeader';
+import { emergencyHelp } from '../help/helpContent';
 
 /* ─────────────────────── Types ─────────────────────── */
 
@@ -52,6 +53,8 @@ interface ScheduleSlot {
   id: number;
   date: string;
   shift: string;
+  status?: string;
+  isRestDay?: boolean;
   route: { routeNumber: string; name: string };
   bus?: { busNumber: string };
   driver?: { id: number; name: string; employeeId: string };
@@ -81,6 +84,7 @@ const SHIFT_LABELS: Record<string, string> = {
 export default function EmergencyPage() {
   const queryClient = useQueryClient();
   const [selectedSlotId, setSelectedSlotId] = useState<number | ''>('');
+  const [selectedDateKey, setSelectedDateKey] = useState<string>('');
   const [dropReason, setDropReason] = useState('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [manualFillDrop, setManualFillDrop] = useState<EmergencyDrop | null>(null);
@@ -91,14 +95,20 @@ export default function EmergencyPage() {
 
   /* ── Queries ── */
   const {
-    data: openDrops = [],
+    data: openData,
     isLoading: openLoading,
     isRefetching: openRefetching,
-  } = useQuery<EmergencyDrop[]>({
+  } = useQuery<{ drops: EmergencyDrop[]; agentEnabled: boolean }>({
     queryKey: ['emergency', 'OPEN'],
-    queryFn: () => emergencyApi.list({ status: 'OPEN' }).then((r) => r.data.data ?? r.data),
+    queryFn: () =>
+      emergencyApi.list({ status: 'OPEN' }).then((r) => ({
+        drops: r.data.data ?? r.data,
+        agentEnabled: Boolean(r.data.agentEnabled),
+      })),
     refetchInterval: 10000,
   });
+  const openDrops = openData?.drops ?? [];
+  const agentEnabled = openData?.agentEnabled ?? false;
 
   const { data: recentDrops = [], isLoading: recentLoading } = useQuery<EmergencyDrop[]>({
     queryKey: ['emergency', 'recent'],
@@ -121,6 +131,17 @@ export default function EmergencyPage() {
   const { data: scheduleData } = useQuery({
     queryKey: ['schedules', year, month],
     queryFn: () => schedulesApi.get(year, month).then((r) => r.data),
+    retry: 1,
+  });
+
+  // 다음 달 배차표 — 기사 앱과 동일하게 이번 달 + 다음 달의 미래 슬롯을 대상으로 함
+  const nextMonthDate = new Date(year, month, 1);
+  const nextYear = nextMonthDate.getFullYear();
+  const nextMonth = nextMonthDate.getMonth() + 1;
+  const { data: nextScheduleData } = useQuery({
+    queryKey: ['schedules', nextYear, nextMonth],
+    queryFn: () => schedulesApi.get(nextYear, nextMonth).then((r) => r.data),
+    retry: 1,
   });
 
   /* ── Mutations ── */
@@ -150,12 +171,35 @@ export default function EmergencyPage() {
   });
 
   /* ── Derived data ── */
-  const todaySlots: ScheduleSlot[] = useMemo(() => {
-    if (!scheduleData) return [];
-    const slots = scheduleData.data?.slots ?? scheduleData.slots ?? [];
+  // 오늘 이후의 드랍 가능한 슬롯을 날짜별로 그룹핑 (기사 앱과 동일한 기준: 휴무 아님 · SCHEDULED · 미래 날짜)
+  const upcomingSlotsByDate = useMemo(() => {
+    const map = new Map<string, ScheduleSlot[]>();
     const todayStr = format(today, 'yyyy-MM-dd');
-    return slots.filter((s: ScheduleSlot) => s.date?.startsWith(todayStr) && s.driver);
-  }, [scheduleData]);
+    const collect = (data: unknown) => {
+      const d = data as { data?: { status?: string; slots?: ScheduleSlot[] }; status?: string; slots?: ScheduleSlot[] } | undefined;
+      const sched = d?.data ?? d;
+      // 발행 전(DRAFT) 배차표는 기사에게 보이지 않으므로 대타 요청 대상에서 제외
+      if (!sched || sched.status === 'DRAFT') return;
+      const slots = sched.slots ?? [];
+      for (const s of slots) {
+        if (!s.driver || s.isRestDay) continue;
+        if (s.status && s.status !== 'SCHEDULED') continue;
+        const dateKey = s.date?.slice(0, 10);
+        if (!dateKey || dateKey < todayStr) continue;
+        if (!map.has(dateKey)) map.set(dateKey, []);
+        map.get(dateKey)!.push(s);
+      }
+    };
+    collect(scheduleData);
+    collect(nextScheduleData);
+    return new Map([...map.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+  }, [scheduleData, nextScheduleData]);
+
+  const availableDateKeys = useMemo(() => [...upcomingSlotsByDate.keys()], [upcomingSlotsByDate]);
+  const effectiveDateKey = selectedDateKey && upcomingSlotsByDate.has(selectedDateKey)
+    ? selectedDateKey
+    : (availableDateKeys[0] ?? '');
+  const slotsForSelectedDate = upcomingSlotsByDate.get(effectiveDateKey) ?? [];
 
 
   /* ── Handlers ── */
@@ -215,9 +259,10 @@ export default function EmergencyPage() {
     <div className="space-y-8">
       {/* Page Header */}
       <PageHeader
+        help={emergencyHelp}
         icon={AlertTriangle}
         title="대타 관리"
-        description="당일 슬롯 드랍 및 대타 배정 현황을 관리합니다."
+        description="슬롯 드랍 및 대타 배정 현황을 관리합니다."
         actions={
           <button
             onClick={handleRefresh}
@@ -368,9 +413,10 @@ export default function EmergencyPage() {
                     {/* AI 충원 상태 — 에이전트 진행 가시화 */}
                     <div className="flex items-center gap-3">
                       <span className="text-[15px] text-gray-400 dark:text-gray-500 w-20 shrink-0">
-                        AI 충원
+                        {agentEnabled ? 'AI 충원' : '충원 상태'}
                       </span>
                       <AgentStatusBadge
+                        agentEnabled={agentEnabled}
                         escalationLevel={drop.escalationLevel}
                         lastEscalatedAt={drop.lastEscalatedAt}
                         createdAt={drop.createdAt}
@@ -412,6 +458,9 @@ export default function EmergencyPage() {
                           {format(new Date(drop.lastEscalatedAt), 'M월 d일 HH:mm', { locale: ko })}
                         </p>
                       )}
+
+                      {/* 알림 발송 대상 기사 */}
+                      <NotifiedDriversList dropId={drop.id} />
                     </div>
                   )}
 
@@ -457,10 +506,48 @@ export default function EmergencyPage() {
 
         <div className="card">
           <p className="text-[16px] text-gray-500 dark:text-gray-400 mb-5">
-            오늘 배정된 슬롯 중에서 드랍할 슬롯을 선택하고 사유를 입력하세요.
+            날짜를 선택한 뒤 드랍할 슬롯을 선택하고 사유를 입력하세요. (오늘 포함 이후 날짜만 가능)
           </p>
 
           <div className="space-y-4">
+            {/* Date Selector */}
+            <div>
+              <label className="block text-[16px] font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                날짜 선택
+              </label>
+              {availableDateKeys.length === 0 ? (
+                <p className="text-[14px] text-gray-400 dark:text-gray-500">
+                  드랍 가능한 슬롯이 없거나 배차표를 불러올 수 없습니다.
+                </p>
+              ) : (
+                <div className="flex gap-2 overflow-x-auto pb-2">
+                  {availableDateKeys.map((dateKey) => {
+                    const d = parseSlotDate(dateKey);
+                    const isSelected = dateKey === effectiveDateKey;
+                    const isTodayChip = dateKey === format(today, 'yyyy-MM-dd');
+                    return (
+                      <button
+                        key={dateKey}
+                        onClick={() => {
+                          setSelectedDateKey(dateKey);
+                          setSelectedSlotId('');
+                        }}
+                        className={`shrink-0 px-4 py-2.5 rounded-xl border text-[15px] font-medium transition-colors min-h-[48px] ${
+                          isSelected
+                            ? 'border-red-500 bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-300 ring-2 ring-red-500/20'
+                            : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500'
+                        }`}
+                      >
+                        {format(d, 'M/d (EEE)', { locale: ko })}
+                        {isTodayChip && <span className="ml-1 text-[12px]">오늘</span>}
+                        <span className="ml-1.5 text-[12px] text-gray-400">{upcomingSlotsByDate.get(dateKey)?.length ?? 0}건</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             {/* Slot Selector */}
             <div>
               <label className="block text-[16px] font-semibold text-gray-700 dark:text-gray-300 mb-2">
@@ -474,15 +561,15 @@ export default function EmergencyPage() {
                 className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl text-[16px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white min-h-[48px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
               >
                 <option value="">-- 슬롯을 선택하세요 --</option>
-                {todaySlots.map((slot) => (
+                {slotsForSelectedDate.map((slot) => (
                   <option key={slot.id} value={slot.id}>
                     {slot.driver?.name} - {slot.route.routeNumber}번 {slot.route.name} ({SHIFT_LABELS[slot.shift] ?? slot.shift})
                   </option>
                 ))}
               </select>
-              {todaySlots.length === 0 && (
+              {effectiveDateKey && slotsForSelectedDate.length === 0 && (
                 <p className="text-[14px] text-gray-400 dark:text-gray-500 mt-2">
-                  오늘 배정된 슬롯이 없거나 배차표를 불러올 수 없습니다.
+                  선택한 날짜에 드랍 가능한 슬롯이 없습니다.
                 </p>
               )}
             </div>
@@ -647,20 +734,86 @@ export default function EmergencyPage() {
 }
 
 /* ────────────────────────────────────────────────
+   알림 발송 대상 기사 목록 — 드랍 상세(펼침)에서 표시
+   ──────────────────────────────────────────────── */
+
+interface NotifiedDriver {
+  id: number;
+  name: string;
+  employeeId: string;
+  driverType: 'MAIN' | 'SPARE' | null;
+  firstNotifiedAt: string;
+  count: number;
+}
+
+function NotifiedDriversList({ dropId }: { dropId: number }) {
+  const { data: notified = [], isLoading } = useQuery<NotifiedDriver[]>({
+    queryKey: ['emergency', 'notified-drivers', dropId],
+    queryFn: () => emergencyApi.notifiedDrivers(dropId).then((r) => r.data.data ?? []),
+  });
+
+  return (
+    <div className="mt-4">
+      <h4 className="text-[14px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
+        알림 발송 대상 ({notified.length}명)
+      </h4>
+      {isLoading ? (
+        <p className="text-[14px] text-gray-400">불러오는 중...</p>
+      ) : notified.length === 0 ? (
+        <p className="text-[14px] text-gray-400">
+          알림을 받은 기사가 없습니다. (해당 날짜에 쉬는 기사·예비 기사가 없었을 수 있습니다)
+        </p>
+      ) : (
+        <ul className="flex flex-wrap gap-2">
+          {notified.map((d) => (
+            <li
+              key={d.id}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-[13px]"
+              title={`최초 발송: ${format(new Date(d.firstNotifiedAt), 'M월 d일 HH:mm', { locale: ko })}${d.count > 1 ? ` · ${d.count}회 발송` : ''}`}
+            >
+              <span className="font-medium text-gray-800 dark:text-gray-200">{d.name}</span>
+              <span className="text-gray-400">{d.employeeId}</span>
+              {d.driverType === 'SPARE' && (
+                <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                  스페어
+                </span>
+              )}
+              {d.count > 1 && <span className="text-[11px] text-gray-400">×{d.count}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────
    AI 충원 상태 배지 — 에이전트 진행 가시화
    ──────────────────────────────────────────────── */
 
 function AgentStatusBadge({
+  agentEnabled,
   escalationLevel,
   lastEscalatedAt,
   createdAt,
 }: {
+  agentEnabled: boolean;
   escalationLevel: number;
   lastEscalatedAt: string | null;
   createdAt: string;
 }) {
   const lastTime = lastEscalatedAt ? new Date(lastEscalatedAt).getTime() : new Date(createdAt).getTime();
   const minutesSince = Math.floor((Date.now() - lastTime) / 60000);
+
+  // AI 에이전트 비활성 — 드랍 시점 1회 알림 후 기사 수락 대기 (진행형 AI 표시는 오해 유발)
+  if (!agentEnabled) {
+    return (
+      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-[14px] font-medium bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">
+        <span className="w-2 h-2 rounded-full bg-sky-500" />
+        알림 발송됨 — 기사 수락 대기 중 ({minutesSince < 1 ? '방금 발송' : `${minutesSince}분 경과`})
+      </div>
+    );
+  }
 
   // 상태 결정
   let state: 'starting' | 'running' | 'stalled' | 'failed';
@@ -729,9 +882,10 @@ function ManualFillModal({
   const [q, setQ] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
+  // 해당 날짜에 이미 근무가 있는 기사는 서버에서 제외된 가용 기사만 조회
   const { data: drivers = [], isLoading } = useQuery<DriverCandidate[]>({
-    queryKey: ['users', 'DRIVER'],
-    queryFn: () => usersApi.list({ role: 'DRIVER' }).then((r) => r.data.data),
+    queryKey: ['emergency', 'available-drivers', drop.id],
+    queryFn: () => emergencyApi.availableDrivers(drop.id).then((r) => r.data.data),
   });
 
   const filtered = useMemo(() => {
@@ -817,7 +971,11 @@ function ManualFillModal({
               <Loader2 size={22} className="animate-spin" />
             </div>
           ) : filtered.length === 0 ? (
-            <div className="py-10 text-center text-[14px] text-gray-400">기사 없음</div>
+            <div className="py-10 text-center text-[14px] text-gray-400">
+              해당 날짜에 배정 가능한 기사가 없습니다.
+              <br />
+              (이미 근무 중인 기사는 목록에서 제외됩니다)
+            </div>
           ) : (
             <ul className="space-y-1">
               {filtered.map((d) => {

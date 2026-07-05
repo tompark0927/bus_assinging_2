@@ -9,6 +9,7 @@ interface User {
   email: string;
   role: string;
   employeeId: string;
+  mustChangePassword?: boolean;
 }
 
 interface AuthState {
@@ -17,6 +18,8 @@ interface AuthState {
   refreshToken: string | null;
   setAuth: (user: User, token: string, refreshToken?: string) => void;
   setToken: (token: string) => void;
+  /** 최초 강제 비밀번호 변경 완료 후 플래그 해제 */
+  clearMustChangePassword: () => void;
   /** 서버에 refreshToken 폐기 요청 + 클라이언트 상태 정리 */
   logout: () => Promise<void>;
   /** 동기 로컬 정리만 — 401 인터셉터 등에서 호출 */
@@ -42,6 +45,11 @@ export const useAuthStore = create<AuthState>()(
 
       setToken: (token) => {
         set({ token });
+      },
+
+      clearMustChangePassword: () => {
+        const u = get().user;
+        if (u) set({ user: { ...u, mustChangePassword: false } });
       },
 
       logout: async () => {

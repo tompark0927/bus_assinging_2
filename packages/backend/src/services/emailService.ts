@@ -63,3 +63,19 @@ export function otpEmailHtml(otp: string): string {
     </div>
   `;
 }
+
+/** 회사 코드 안내 이메일 본문 — 회원가입 완료 시 발송 */
+export function companyCodeEmailHtml(companyName: string, companyCode: string): string {
+  return `
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111827">
+      <h2 style="margin:0 0 8px;font-size:20px">Busync 가입을 환영합니다</h2>
+      <p style="margin:0 0 20px;color:#6b7280;font-size:14px"><strong>${companyName}</strong>의 회사 코드가 발급되었습니다. 로그인 시 이 코드가 필요합니다.</p>
+      <div style="background:#f3f4f6;border-radius:12px;padding:20px;text-align:center;margin-bottom:20px">
+        <div style="font-size:13px;color:#6b7280;margin-bottom:6px">회사 코드</div>
+        <div style="font-size:32px;font-weight:700;letter-spacing:6px;color:#2563eb">${companyCode}</div>
+      </div>
+      <p style="margin:0 0 8px;color:#6b7280;font-size:14px">기사님들도 모바일 앱 로그인 시 이 회사 코드를 사용합니다. 소속 기사님들께 공유해주세요.</p>
+      <p style="margin:0;color:#9ca3af;font-size:13px">본인이 가입하지 않았다면 이 메일을 무시하세요.</p>
+    </div>
+  `;
+}

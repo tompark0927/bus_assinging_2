@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -13,10 +14,13 @@ import {
   Loader2,
   Search,
   KeyRound,
+  Upload,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { usersApi, busesApi, routesApi } from '../services/api';
 import PageHeader from '../components/PageHeader';
+import { basicDataHelp } from '../help/helpContent';
+import ExcelUploadModal from '../components/ExcelUploadModal';
 
 /* ────────────────────────────────────────────
    Types
@@ -44,7 +48,6 @@ interface Bus {
   plateNumber: string;
   model?: string | null;
   year?: number | null;
-  capacity: number;
   routeId: number | null;
   isActive: boolean;
 }
@@ -65,6 +68,7 @@ interface Route {
 export default function BasicDataPage() {
   // 탭을 URL ?tab= 으로 제어 → 회사 정보 등에서 특정 탭으로 바로 진입 가능
   const [searchParams, setSearchParams] = useSearchParams();
+  const [uploadOpen, setUploadOpen] = useState(false);
   const tabParam = searchParams.get('tab');
   const tab: Tab = tabParam === 'buses' || tabParam === 'routes' ? tabParam : 'drivers';
   const setTab = (t: Tab) => setSearchParams(t === 'drivers' ? {} : { tab: t }, { replace: true });
@@ -72,10 +76,22 @@ export default function BasicDataPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        help={basicDataHelp}
         icon={Database}
         title="기초 데이터"
         description="기사·버스·노선 등록 및 관리. AI 배차의 입력 데이터입니다."
+        actions={
+          <button
+            onClick={() => setUploadOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl border border-gray-200 dark:border-white/15 bg-white dark:bg-white/5 px-4 py-2.5 text-[15px] font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/10 transition-colors"
+          >
+            <Upload size={17} />
+            데이터 업로드
+          </button>
+        }
       />
+
+      <ExcelUploadModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
 
       {/* Tabs */}
       <div className="border-b border-gray-200 dark:border-white/10">
@@ -105,7 +121,17 @@ function DriversTab() {
 
   const { data: list = [], isLoading } = useQuery<Driver[]>({
     queryKey: ['users', 'DRIVER'],
-    queryFn: () => usersApi.list({ role: 'DRIVER' }).then((r) => r.data.data),
+    // 목록은 페이지당 최대 100건 → 기사가 100명을 넘어도 전부 나오도록 모든 페이지를 받아온다.
+    // 삭제(비활성 폴백) 기사는 목록에서 제외 — 관리자 계정 목록과 동일한 정책.
+    queryFn: async () => {
+      const all: Driver[] = [];
+      for (let page = 1; page <= 100; page++) {
+        const r = await usersApi.list({ role: 'DRIVER', page: String(page), limit: '100' });
+        all.push(...(r.data.data as Driver[]));
+        if (!r.data.pagination?.hasNext) break;
+      }
+      return all.filter((d) => d.isActive);
+    },
   });
 
   const filtered = useMemo(() => {
@@ -217,10 +243,11 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
   const isEdit = !!initial;
   const [name, setName] = useState(initial?.name || '');
   const [phone, setPhone] = useState(initial?.phone || '');
-  const [employeeId, setEmployeeId] = useState(initial?.employeeId || '');
+  const employeeId = initial?.employeeId || ''; // 표시용(수정 시 읽기 전용) — 생성 시 서버가 자동 발급(DRV###)
   const [driverType, setDriverType] = useState<'MAIN' | 'SPARE'>((initial?.driverType as 'MAIN' | 'SPARE') || 'MAIN');
   const [assignedBusNumber, setAssignedBusNumber] = useState(initial?.assignedBusNumber || '');
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
+  const [fieldErrors, setFieldErrors] = useState<{ phone?: string }>({});
   // 폼은 '잔여 휴가' 기준으로 입력받는다. 저장 시 보유 = 잔여 + 올해 사용분으로 환산
   // → 입력한 숫자가 그대로 목록의 '남은 휴가'로 표시된다.
   const vacationUsed = initial?.vacationUsed ?? 0;
@@ -233,30 +260,50 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
       const payload: Record<string, unknown> = {
         name: name.trim(),
         phone: phone.trim() || null,
-        employeeId: employeeId.trim(),
         role: 'DRIVER',
         driverType,
         assignedBusNumber: assignedBusNumber.trim() || null,
         isActive,
         vacationDays: Math.max(0, parseInt(vacationRemaining, 10) || 0) + vacationUsed,
       };
+      // 사번은 생성 시 서버 자동 발급(DRV###), 수정 시 변경 불가 → payload 에 미포함
       return isEdit ? usersApi.update(initial!.id, payload) : usersApi.create(payload);
     },
     onSuccess: () => { toast.success(isEdit ? '수정 완료' : '등록 완료'); onSaved(); },
-    onError: (e) => toast.error(extractError(e)),
+    onError: (e) => {
+      // 중복 전화번호 등은 입력칸 아래에 인라인으로 표시 (toast 대신)
+      const resp = (e as { response?: { data?: { message?: string; errors?: { field: string; message: string }[] } } })?.response?.data;
+      const fe: { phone?: string } = {};
+      if (Array.isArray(resp?.errors)) {
+        for (const it of resp!.errors) if (it.field === 'phone') fe.phone = it.message;
+      }
+      const msg = resp?.message || '오류가 발생했습니다.';
+      if (!fe.phone && msg.includes('전화번호')) fe.phone = msg;
+      if (fe.phone) setFieldErrors(fe);
+      else toast.error(msg);
+    },
   });
+
+  const handleSave = () => {
+    setFieldErrors({});
+    if (!name.trim()) { toast.error('이름을 입력해주세요.'); return; }
+    if (!phone.trim()) { setFieldErrors({ phone: '전화번호를 입력해주세요.' }); return; }
+    save.mutate();
+  };
 
   return (
     <FormModal title={isEdit ? '기사 수정' : '기사 추가'} onClose={onClose}>
       <FormField label="이름" required>
         <Input value={name} onChange={setName} placeholder="홍길동" />
       </FormField>
-      <FormField label="사번" required hint={isEdit ? '변경 시 비밀번호도 함께 갱신될 수 있습니다.' : '신규 기사 비밀번호 = 사번 (첫 로그인 시 변경 권장)'}>
-        <Input value={employeeId} onChange={setEmployeeId} placeholder="DRV001" disabled={isEdit} />
-      </FormField>
+      {isEdit && (
+        <FormField label="사번">
+          <Input value={employeeId} onChange={() => {}} disabled />
+        </FormField>
+      )}
       <div className="grid grid-cols-2 gap-3">
-        <FormField label="전화번호">
-          <Input value={phone} onChange={setPhone} placeholder="010-1234-5678" />
+        <FormField label="전화번호" required error={fieldErrors.phone}>
+          <Input value={phone} onChange={(v) => { setPhone(v); setFieldErrors((p) => ({ ...p, phone: undefined })); }} placeholder="010-1234-5678" />
         </FormField>
         <FormField label="구분">
           <select className={inputCls} value={driverType} onChange={(e) => setDriverType(e.target.value as 'MAIN' | 'SPARE')}>
@@ -282,8 +329,14 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
         <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
         활성 (배차 대상)
       </label>
+      {!isEdit && (
+        <p className="text-[13px] text-gray-500 dark:text-gray-400 leading-relaxed">
+          로그인 시 초기 비밀번호는 <b className="text-gray-700 dark:text-gray-200">이름(영문 자판) + 전화번호 뒤 4자리</b>입니다.
+          <br />기사님은 앱 첫 로그인 시 비밀번호를 반드시 변경해야 합니다.
+        </p>
+      )}
 
-      <ModalFooter onCancel={onClose} onSave={() => save.mutate()} saving={save.isPending} />
+      <ModalFooter onCancel={onClose} onSave={handleSave} saving={save.isPending} />
     </FormModal>
   );
 }
@@ -300,7 +353,16 @@ function BusesTab() {
 
   const { data: list = [], isLoading } = useQuery<Bus[]>({
     queryKey: ['buses'],
-    queryFn: () => busesApi.list().then((r) => r.data.data),
+    // 페이지당 최대 100건 → 버스가 100대를 넘어도 전부 나오도록 모든 페이지를 받아온다.
+    queryFn: async () => {
+      const all: Bus[] = [];
+      for (let page = 1; page <= 100; page++) {
+        const r = await busesApi.list({ page: String(page), limit: '100' });
+        all.push(...(r.data.data as Bus[]));
+        if (!r.data.pagination?.hasNext) break;
+      }
+      return all;
+    },
   });
 
   const filtered = useMemo(() => {
@@ -331,7 +393,6 @@ function BusesTab() {
                 <Th>번호판</Th>
                 <Th>차종</Th>
                 <Th>연식</Th>
-                <Th>정원</Th>
                 <Th>상태</Th>
                 <Th align="right">액션</Th>
               </tr>
@@ -343,7 +404,6 @@ function BusesTab() {
                   <Td className="font-mono text-gray-500">{b.plateNumber}</Td>
                   <Td>{b.model || '-'}</Td>
                   <Td>{b.year || '-'}</Td>
-                  <Td>{b.capacity}석</Td>
                   <Td><Badge color={b.isActive ? 'green' : 'gray'}>{b.isActive ? '운행' : '운휴'}</Badge></Td>
                   <Td align="right">
                     <div className="inline-flex gap-1">
@@ -377,7 +437,6 @@ function BusFormModal({ initial, onClose, onSaved }: { initial: Bus | null; onCl
   const [plateNumber, setPlateNumber] = useState(initial?.plateNumber || '');
   const [model, setModel] = useState(initial?.model || '');
   const [year, setYear] = useState<string>(initial?.year ? String(initial.year) : '');
-  const [capacity, setCapacity] = useState<string>(String(initial?.capacity || 40));
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
 
   const save = useMutation({
@@ -388,7 +447,6 @@ function BusFormModal({ initial, onClose, onSaved }: { initial: Bus | null; onCl
         plateNumber: plateNumber.trim(),
         model: model.trim() || null,
         year: year ? parseInt(year, 10) : null,
-        capacity: parseInt(capacity, 10) || 40,
         isActive,
       };
       return isEdit ? busesApi.update(initial!.id, payload) : busesApi.create(payload);
@@ -407,7 +465,6 @@ function BusFormModal({ initial, onClose, onSaved }: { initial: Bus | null; onCl
         <FormField label="차종"><Input value={model} onChange={setModel} placeholder="현대 슈퍼에어로시티" /></FormField>
         <FormField label="연식"><Input value={year} onChange={setYear} placeholder="2024" /></FormField>
       </div>
-      <FormField label="정원"><Input value={capacity} onChange={setCapacity} placeholder="40" /></FormField>
       <label className="flex items-center gap-2 text-[15px] text-gray-700 dark:text-gray-300">
         <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
         운행 중
@@ -430,7 +487,16 @@ function RoutesTab() {
 
   const { data: list = [], isLoading } = useQuery<Route[]>({
     queryKey: ['routes'],
-    queryFn: () => routesApi.list().then((r) => r.data.data),
+    // 페이지당 최대 100건 → 노선이 100개를 넘어도 전부 나오도록 모든 페이지를 받아온다.
+    queryFn: async () => {
+      const all: Route[] = [];
+      for (let page = 1; page <= 100; page++) {
+        const r = await routesApi.list({ page: String(page), limit: '100' });
+        all.push(...(r.data.data as Route[]));
+        if (!r.data.pagination?.hasNext) break;
+      }
+      return all;
+    },
   });
 
   const remove = useMutation({
@@ -630,27 +696,32 @@ function Loading() {
 }
 
 function FormModal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return (
+  // document.body 로 포탈 — <main> 의 overflow/backdrop-blur/sticky 영향을 받지 않고
+  // 오버레이가 뷰포트 최상단까지 완전히 덮이도록 한다.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
-      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto admin-scope" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-white/10">
           <h3 className="text-[19px] font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5"><X size={18} /></button>
         </div>
         <div className="p-6 space-y-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
-function FormField({ label, hint, required, children }: { label: string; hint?: string; required?: boolean; children: React.ReactNode }) {
+function FormField({ label, hint, required, error, children }: { label: string; hint?: string; required?: boolean; error?: string; children: React.ReactNode }) {
   return (
     <div>
       <label className="block text-[14px] font-medium text-gray-700 dark:text-gray-200 mb-1.5">
         {label}{required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
       {children}
-      {hint && <p className="text-[13px] text-gray-400 mt-1">{hint}</p>}
+      {error
+        ? <p className="text-red-500 text-[13px] mt-1">{error}</p>
+        : hint && <p className="text-[13px] text-gray-400 mt-1">{hint}</p>}
     </div>
   );
 }

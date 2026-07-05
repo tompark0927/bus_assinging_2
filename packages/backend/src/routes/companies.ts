@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   registerCompany,
   checkCompanyCode,
+  checkPhoneAvailable,
   getCompanyPolicy,
   updateCompanyPolicy,
   getCompanyInfo,
@@ -16,6 +17,7 @@ const router = Router();
 // Public routes - no auth required
 router.post('/register', registerLimiter, ...companyValidation.register, registerCompany);
 router.get('/check-code/:code', ...companyValidation.checkCode, checkCompanyCode);
+router.post('/check-phone', checkPhoneAvailable);
 
 // Authenticated routes - 회사 정보·정책
 router.get('/me', authenticate, getCompanyInfo);

@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { prisma } from '../utils/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { sendPushNotification, sendBulkPushNotifications, notifyAvailableDriversForEmergency, notifyAdminsUrgentEmergency, notifyAdminsNewDrop } from '../services/notificationService';
-import { dispatchImmediateEmergency } from '../services/emergencyAgentRunner';
+import { dispatchImmediateEmergency, isEmergencyAgentEnabled } from '../services/emergencyAgentRunner';
 import logger from '../utils/logger';
 import { parseIdParam } from '../utils/helpers';
 import { getPagination, paginatedResponse } from '../utils/pagination';
@@ -36,7 +36,12 @@ export const getEmergencyDrops = async (req: AuthRequest, res: Response) => {
       prisma.emergencyDrop.count({ where }),
     ]);
 
-    return res.json({ success: true, ...paginatedResponse(drops, total, pagination) });
+    // agentEnabled: AI 충원 에이전트 활성 여부 — 웹에서 상태 배지를 정확히 표시하기 위함
+    return res.json({
+      success: true,
+      agentEnabled: isEmergencyAgentEnabled(),
+      ...paginatedResponse(drops, total, pagination),
+    });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
@@ -270,6 +275,109 @@ export const acceptEmergencySlot = async (req: AuthRequest, res: Response) => {
  * 관리자가 OPEN 인 대타 슬롯에 직접 기사를 지정해 충원.
  * Body: { driverId }
  */
+// 이 드랍에 대해 대타 요청 알림을 받은 기사 목록 — Notification 기록 기반
+export const getNotifiedDrivers = async (req: AuthRequest, res: Response) => {
+  try {
+    const dropId = parseIdParam(req.params.id, res, '드랍 ID');
+    if (dropId === null) return;
+
+    const drop = await prisma.emergencyDrop.findUnique({
+      where: { id: dropId },
+      include: { driver: { select: { companyId: true } } },
+    });
+    if (!drop || drop.driver.companyId !== req.user!.companyId) {
+      return res.status(404).json({ success: false, message: '긴급 슬롯을 찾을 수 없습니다.' });
+    }
+
+    // 발송 시점에 data.emergencyDropId 로 기록된 알림을 역추적
+    const notifications = await prisma.notification.findMany({
+      where: {
+        type: 'EMERGENCY_SLOT',
+        data: { path: ['emergencyDropId'], equals: dropId },
+        user: { companyId: req.user!.companyId, role: 'DRIVER' },
+      },
+      select: {
+        userId: true,
+        createdAt: true,
+        user: { select: { name: true, employeeId: true, driverType: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // 같은 기사에게 여러 번 발송된 경우 최초 발송 1건만 (발송 횟수는 count 로 제공)
+    const byDriver = new Map<number, { id: number; name: string; employeeId: string; driverType: string | null; firstNotifiedAt: Date; count: number }>();
+    for (const n of notifications) {
+      const existing = byDriver.get(n.userId);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        byDriver.set(n.userId, {
+          id: n.userId,
+          name: n.user.name,
+          employeeId: n.user.employeeId,
+          driverType: n.user.driverType,
+          firstNotifiedAt: n.createdAt,
+          count: 1,
+        });
+      }
+    }
+
+    return res.json({ success: true, data: Array.from(byDriver.values()) });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+// 수동 충원 후보 기사 목록 — 해당 날짜에 이미 근무가 있는 기사는 제외
+export const getManualFillCandidates = async (req: AuthRequest, res: Response) => {
+  try {
+    const dropId = parseIdParam(req.params.id, res, '드랍 ID');
+    if (dropId === null) return;
+
+    const drop = await prisma.emergencyDrop.findUnique({
+      where: { id: dropId },
+      include: {
+        slot: { select: { id: true, date: true } },
+        driver: { select: { id: true, companyId: true } },
+      },
+    });
+    if (!drop || drop.driver.companyId !== req.user!.companyId) {
+      return res.status(404).json({ success: false, message: '긴급 슬롯을 찾을 수 없습니다.' });
+    }
+
+    // 같은 날짜에 이미 다른 슬롯에 배정된 기사 (manualFillEmergency 의 noSameDayDoubleAssign 과 동일 기준)
+    const busySlots = await prisma.scheduleSlot.findMany({
+      where: {
+        date: drop.slot.date,
+        isRestDay: false,
+        id: { not: drop.slotId },
+        status: { in: ['SCHEDULED', 'FILLED'] },
+        schedule: { companyId: req.user!.companyId },
+      },
+      select: { driverId: true },
+    });
+    const excludedIds = new Set<number>(busySlots.map((s) => s.driverId));
+    excludedIds.add(drop.driverId);
+
+    const drivers = await prisma.user.findMany({
+      where: {
+        companyId: req.user!.companyId,
+        role: 'DRIVER',
+        isActive: true,
+        id: { notIn: Array.from(excludedIds) },
+      },
+      select: { id: true, name: true, employeeId: true, driverType: true, isActive: true },
+      orderBy: { name: 'asc' },
+    });
+
+    return res.json({ success: true, data: drivers });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
 export const manualFillEmergency = async (req: AuthRequest, res: Response) => {
   try {
     const dropId = parseIdParam(req.params.id, res, '드랍 ID');

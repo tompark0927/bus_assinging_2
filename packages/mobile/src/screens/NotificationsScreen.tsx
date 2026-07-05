@@ -4,6 +4,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { notificationsApi } from '../services/api';
@@ -33,6 +34,16 @@ const TYPE_ICONS: Record<string, { name: keyof typeof Ionicons.glyphMap; color: 
 
 const DEFAULT_ICON = { name: 'notifications' as const, color: colors.textMuted, bg: colors.bgAlt };
 
+// 알림 유형 → 탭하면 이동할 화면 (Main 탭 이름). App.tsx 의 푸시 탭 라우팅과 동일한 매핑.
+const TYPE_TARGET: Record<string, string> = {
+  SCHEDULE_PUBLISHED: '배차표',
+  SCHEDULE_CHANGE: '배차표',
+  EMERGENCY_SLOT: '긴급/대타',
+  EMERGENCY_FILLED: '긴급/대타',
+  DAY_OFF_APPROVED: '휴무신청',
+  DAY_OFF_REJECTED: '휴무신청',
+};
+
 function groupByDate(
   notifications: NotificationItem[],
   todayLabel: string,
@@ -56,6 +67,7 @@ function groupByDate(
 
 export default function NotificationsScreen() {
   const queryClient = useQueryClient();
+  const navigation = useNavigation<any>();
   const { t } = useTranslation();
 
   const { data, refetch, isRefetching, isLoading } = useQuery({
@@ -118,11 +130,16 @@ export default function NotificationsScreen() {
               <Text style={styles.dateLabel}>{group.label}</Text>
               {group.items.map(notif => {
                 const iconInfo = TYPE_ICONS[notif.type] || DEFAULT_ICON;
+                const target = TYPE_TARGET[notif.type];
                 return (
                   <TouchableOpacity
                     key={notif.id}
                     style={[styles.notifCard, !notif.isRead && styles.unread]}
-                    onPress={() => !notif.isRead && markReadMutation.mutate(notif.id)}
+                    onPress={() => {
+                      if (!notif.isRead) markReadMutation.mutate(notif.id);
+                      // 관련 화면으로 이동 (예: 배차표 발행 → 내 배차)
+                      if (target) navigation.navigate('Main', { screen: target });
+                    }}
                     activeOpacity={0.7}
                   >
                     <View style={[styles.iconBox, { backgroundColor: iconInfo.bg }]}>
@@ -148,6 +165,14 @@ export default function NotificationsScreen() {
                         })}
                       </Text>
                     </View>
+                    {target && (
+                      <Ionicons
+                        name="chevron-forward"
+                        size={18}
+                        color={colors.textSubtle}
+                        style={{ alignSelf: 'center' }}
+                      />
+                    )}
                   </TouchableOpacity>
                 );
               })}

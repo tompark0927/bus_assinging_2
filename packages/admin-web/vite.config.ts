@@ -10,6 +10,12 @@ export default defineConfig({
         target: 'http://localhost:4000',
         changeOrigin: true,
       },
+      // Socket.IO — 실시간 알림(notification:new, emergency:* 등)이 dev 서버에서도 동작하려면 필수
+      '/socket.io': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
   build: {

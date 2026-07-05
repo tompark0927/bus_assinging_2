@@ -4,6 +4,7 @@ import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { getPagination, paginatedResponse } from '../utils/pagination';
 import { emitToUser } from '../services/socketService';
+import { sendPushNotification } from '../services/notificationService';
 
 // 대화 목록 (상대방별 최근 메시지)
 export const getConversations = async (req: AuthRequest, res: Response) => {
@@ -148,8 +149,14 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
       },
     });
 
-    // (제거됨) DM 알림(NEW_MESSAGE) — 알림함 기록/푸시 모두 발송하지 않음.
-    // 실시간 표시는 아래 Socket.IO(dm:new) 로만 처리한다.
+    // 수신자에게 알림함 기록 + 푸시 (fire-and-forget)
+    sendPushNotification(
+      Number(receiverId),
+      `💬 ${req.user!.name}님의 새 메시지`,
+      content.trim().slice(0, 80),
+      'NEW_MESSAGE',
+      { senderId: userId, messageId: message.id },
+    ).catch((e) => logger.error('[DM] 메시지 푸시 발송 실패:', e));
 
     // Socket.IO: 수신자에게 실시간 DM 알림
     emitToUser(Number(receiverId), 'dm:new', {

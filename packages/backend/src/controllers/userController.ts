@@ -117,6 +117,11 @@ export const createUser = async (req: AuthRequest, res: Response) => {
 
     const effectiveRole = role || 'DRIVER';
 
+    // 직원(관리자 등)은 이메일 필수, 기사는 전화번호 필수
+    if (effectiveRole !== 'DRIVER' && !email) {
+      return res.status(400).json({ success: false, message: '이메일은 필수입니다.' });
+    }
+
     // 기사는 전화번호 필수 (전화번호로 로그인 + 최초 비밀번호에 사용)
     if (effectiveRole === 'DRIVER') {
       const digits = String(phone ?? '').replace(/\D/g, '');
@@ -125,35 +130,50 @@ export const createUser = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // 사원번호 미입력 시 자동 생성 (DRV001, DRV002, ...) — 온보딩 수동 입력 등
+    // 사원번호 미입력 시 자동 생성 — 기사는 DRV###, 관리자/직원은 ADM###.
+    // 회사 내에서 비어 있는 가장 작은 번호를 골라 충돌을 원천 차단(가입 시 랜덤 ADM 사번 등과도 안 겹침).
     if (!employeeId) {
-      const last = await prisma.user.findFirst({
-        where: { companyId: req.user!.companyId, role: 'DRIVER' },
-        orderBy: { employeeId: 'desc' },
+      const prefix = effectiveRole === 'DRIVER' ? 'DRV' : 'ADM';
+      const existing = await prisma.user.findMany({
+        where: { companyId: req.user!.companyId, employeeId: { startsWith: prefix } },
         select: { employeeId: true },
       });
-      let next = 1;
-      if (last?.employeeId) {
-        const n = parseInt(last.employeeId.replace(/\D/g, ''), 10);
-        if (!isNaN(n)) next = n + 1;
+      const used = new Set(existing.map((e) => e.employeeId));
+      let n = 1;
+      while (used.has(`${prefix}${String(n).padStart(3, '0')}`)) n++;
+      employeeId = `${prefix}${String(n).padStart(3, '0')}`;
+    }
+
+    // 중복 검사 — 필드별로 분리해 프론트가 각 입력칸 아래에 표시할 수 있게 명확한 메시지 반환.
+    // (이메일 전역 유니크지만 테넌트 가드 때문에 회사 범위로 확인 + 아래 catch 의 P2002 로 전역 중복도 처리)
+    if (email) {
+      const dupEmail = await prisma.user.findFirst({ where: { companyId: req.user!.companyId, email } });
+      if (dupEmail) {
+        return res.status(409).json({ success: false, message: '이미 사용 중인 이메일입니다.' });
       }
-      employeeId = `DRV${String(next).padStart(3, '0')}`;
     }
-
-    const existingUser = await prisma.user.findFirst({
-      where: { companyId: req.user!.companyId, OR: [{ email }, { employeeId }] },
+    if (phone) {
+      // 전화번호는 회사 내 유니크(앱 로그인 ID) — 하이픈 유무 상관없이 확인
+      const dupPhone = await prisma.user.findFirst({
+        where: { companyId: req.user!.companyId, phone: { in: [phone, normalizePhone(phone)] } },
+      });
+      if (dupPhone) {
+        return res.status(409).json({ success: false, message: '이미 사용 중인 전화번호입니다.' });
+      }
+    }
+    const dupEmp = await prisma.user.findFirst({
+      where: { companyId: req.user!.companyId, employeeId },
     });
-
-    if (existingUser) {
-      return res.status(409).json({ success: false, message: '이미 존재하는 이메일 또는 사원번호입니다.' });
+    if (dupEmp) {
+      return res.status(409).json({ success: false, message: '이미 존재하는 사번입니다.' });
     }
 
-    // 기사 + 비밀번호 미지정 → 최초 비밀번호 = 이름(영문 키 입력)+전화번호 뒷4자리, 변경 강제
-    const isDriverAutoPw = effectiveRole === 'DRIVER' && !password;
-    const initialPlain = isDriverAutoPw
-      ? generateInitialPassword(name, phone)
-      : (password || employeeId);
+    // 비밀번호 미지정 시 최초 비밀번호 = 이름(영문 키 입력) + 전화번호 뒷4자리 (기사·관리자 공통)
+    const autoPw = !password;
+    const initialPlain = autoPw ? generateInitialPassword(name, phone) : password;
     const hashedPassword = await bcrypt.hash(initialPlain, 10);
+    // 자동 비밀번호로 생성된 계정은 기사·관리자 모두 첫 로그인 시 변경을 강제한다.
+    const isDriverAutoPw = autoPw;
 
     const user = await prisma.user.create({
       data: {
@@ -187,6 +207,15 @@ export const createUser = async (req: AuthRequest, res: Response) => {
 
     return res.status(201).json({ success: true, data: user });
   } catch (error) {
+    // DB 유니크 제약 위반(P2002) — 다른 회사와 전역 중복 등 → 해당 필드 메시지로 변환
+    const code = (error as { code?: string }).code;
+    if (code === 'P2002') {
+      const target = (error as { meta?: { target?: string[] | string } }).meta?.target;
+      const t = Array.isArray(target) ? target.join(',') : String(target ?? '');
+      if (t.includes('email')) return res.status(409).json({ success: false, message: '이미 사용 중인 이메일입니다.' });
+      if (t.includes('phone')) return res.status(409).json({ success: false, message: '이미 사용 중인 전화번호입니다.' });
+      return res.status(409).json({ success: false, message: '이미 사용 중인 값이 있습니다.' });
+    }
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
   }
@@ -210,7 +239,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
 
     const { name, phone, licenseNumber, driverType, isActive, role, email, vacationDays } = req.body;
 
-    const updateData: Record<string, unknown> = { name, phone, licenseNumber };
+    const updateData: Record<string, unknown> = { name, licenseNumber };
 
     // 이메일 변경 — 정규화 없이 입력 그대로 저장(로그인은 입력값 정확 매칭). 전역 unique 라 중복 체크.
     if (email !== undefined) {
@@ -225,13 +254,30 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       updateData.email = trimmed || null;
     }
 
+    // 전화번호 변경 — 회사 내 유니크(앱 로그인 ID). 기사·관리자 통합으로 중복 검사(본인 제외).
+    if (phone !== undefined) {
+      const p = phone ? normalizePhone(phone) : null;
+      if (p) {
+        const dup = await prisma.user.findFirst({
+          where: { companyId: req.user!.companyId, phone: { in: [phone, p] }, id: { not: id } },
+          select: { id: true },
+        });
+        if (dup) {
+          return res.status(409).json({ success: false, message: '이미 사용 중인 전화번호입니다.' });
+        }
+      }
+      updateData.phone = p;
+    }
+
     // 민감 필드(역할/활성 상태/기사 유형) 는 full-access 역할만 변경 가능
     if (isAdmin) {
       if (driverType !== undefined) updateData.driverType = driverType;
       if (isActive !== undefined) updateData.isActive = isActive;
       if (vacationDays !== undefined) updateData.vacationDays = vacationDays;
-      if (role !== undefined) {
-        // 권한 상승 방지: 자신의 role 은 변경 불가 (OWNER 가 자기 자신을 ADMIN 으로 강등 등은 별도 트랜잭션 필요)
+      // 역할은 "실제로 바뀔 때만" 처리한다. (수정 모달이 현재 역할을 그대로 담아 보내도,
+      //  값이 같으면 무시 → 본인이 전화번호 등만 바꿔도 '본인 역할 변경 불가' 오류가 나지 않음)
+      if (role !== undefined && role !== existingUser.role) {
+        // 권한 상승 방지: 자신의 role 은 변경 불가
         if (req.user!.id === id) {
           return res.status(400).json({ success: false, message: '본인의 역할은 변경할 수 없습니다.' });
         }
@@ -280,24 +326,46 @@ export const deleteUser = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ success: false, message: '사용자를 찾을 수 없습니다.' });
     }
 
-    // Soft delete
-    await prisma.user.update({
-      where: { id },
-      data: { isActive: false },
-    });
+    // 완전 삭제 시도 — 이 사용자가 소유한 종속 레코드를 트랜잭션으로 함께 제거.
+    // (스케줄 슬롯/휴무/배정 등 FK 가 RESTRICT 라 그냥 delete 하면 실패하므로 먼저 정리한다.)
+    // 결재/게시글/채팅 등 정리 대상 밖 참조가 남아 실패하면 catch 에서 비활성화로 폴백한다.
+    try {
+      await prisma.$transaction(async (tx) => {
+        // 이 사용자의 슬롯에 걸린 대타(EmergencyDrop) 먼저 (slotId FK)
+        await tx.emergencyDrop.deleteMany({ where: { OR: [{ driverId: id }, { filledBy: id }, { slot: { driverId: id } }] } });
+        await tx.scheduleSlot.deleteMany({ where: { driverId: id } });
+        await tx.routeAssignment.deleteMany({ where: { driverId: id } });
+        await tx.driverPreference.deleteMany({ where: { driverId: id } });
+        await tx.driverTag.deleteMany({ where: { OR: [{ driverId: id }, { targetDriverId: id }] } });
+        await tx.dayOffRequest.deleteMany({ where: { driverId: id } });
+        await tx.attendanceRecord.deleteMany({ where: { driverId: id } });
+        await tx.goldenTicket.deleteMany({ where: { driverId: id } });
+        await tx.payrollRecord.deleteMany({ where: { driverId: id } });
+        await tx.dailyInspection.deleteMany({ where: { driverId: id } });
+        await tx.incidentRecord.deleteMany({ where: { driverId: id } });
+        await tx.trainingRecord.deleteMany({ where: { driverId: id } });
+        await tx.notification.deleteMany({ where: { userId: id } });
+        await tx.postRead.deleteMany({ where: { userId: id } });
+        await tx.directMessage.deleteMany({ where: { OR: [{ senderId: id }, { receiverId: id }] } });
+        await tx.auditLog.deleteMany({ where: { userId: id } });
+        // RefreshToken 은 onDelete: Cascade, filledBy/overriddenById/readById 등은 SET NULL 로 DB 가 자동 처리
+        await tx.user.delete({ where: { id } });
+      });
+    } catch {
+      // 완전 삭제 불가(결재/게시글/채팅 등 보호 참조) → 비활성화로 폴백
+      await prisma.user.update({ where: { id }, data: { isActive: false } });
+      await createAuditLog({
+        req: req as any, action: 'DELETE', entityType: 'User', entityId: id,
+        changes: { isActive: { old: true, new: false }, note: { old: null, new: '보호된 참조가 있어 비활성화 처리' } },
+      });
+      return res.json({ success: true, deactivated: true, message: '관련 기록이 있어 완전 삭제 대신 비활성화 처리했습니다.' });
+    }
 
     await createAuditLog({
-      req: req as any,
-      action: 'DELETE',
-      entityType: 'User',
-      entityId: id,
-      changes: {
-        isActive: { old: true, new: false },
-        name: { old: existingUser.name, new: existingUser.name },
-      },
+      req: req as any, action: 'DELETE', entityType: 'User', entityId: id,
+      changes: { name: { old: existingUser.name, new: null } },
     });
-
-    return res.json({ success: true, message: '사용자가 비활성화되었습니다.' });
+    return res.json({ success: true, message: '삭제되었습니다.' });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
@@ -562,13 +630,29 @@ export const resetPassword = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ success: false, message: '사용자를 찾을 수 없습니다.' });
     }
 
-    const hashedPassword = await bcrypt.hash(newPassword || user.employeeId, 10);
+    // [옵션 2] 본인 계정은 이 기능으로 초기화 불가 — 로그인 후 '비밀번호 변경' 사용.
+    if (req.user!.id === id) {
+      return res.status(400).json({ success: false, message: '본인 비밀번호는 이 기능으로 초기화할 수 없습니다. 로그인 후 비밀번호 변경을 이용하세요.' });
+    }
+
+    // [옵션 1] 대상이 관리자(직원, full-access)면 대표(OWNER)/관리소장(DIRECTOR)만 초기화 가능.
+    //          일반 관리자(ADMIN)는 기사(DRIVER) 계정만 초기화할 수 있다.
+    const targetIsStaff = isFullAccess(user.role);
+    const requesterIsOwnerOrDirector = req.user!.role === 'OWNER' || req.user!.role === 'DIRECTOR';
+    if (targetIsStaff && !requesterIsOwnerOrDirector) {
+      return res.status(403).json({ success: false, message: '관리자 계정의 비밀번호는 대표(OWNER)만 초기화할 수 있습니다.' });
+    }
+
+    // 초기화 비밀번호 = 생성 흐름과 동일하게 "이름(영문 자판) + 전화번호 뒤 4자리".
+    // 전화번호가 없으면 사번으로 폴백. 관리자가 newPassword 를 명시하면 그 값 사용.
+    const plainPassword = newPassword || (user.phone ? generateInitialPassword(user.name, user.phone) : user.employeeId);
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
     // 비밀번호 변경 + 기존 세션(리프레시 토큰) 전부 삭제를 트랜잭션으로 처리
     await prisma.$transaction([
       prisma.user.update({
         where: { id },
-        data: { password: hashedPassword },
+        data: { password: hashedPassword, mustChangePassword: true },
       }),
       prisma.refreshToken.deleteMany({
         where: { userId: id },
@@ -577,7 +661,34 @@ export const resetPassword = async (req: AuthRequest, res: Response) => {
 
     // (\uC81C\uAC70\uB428) \uBE44\uBC00\uBC88\uD638 \uCD08\uAE30\uD654 \uD478\uC2DC \uC54C\uB9BC\uC740 \uBC1C\uC1A1\uD558\uC9C0 \uC54A\uC74C.
 
-    return res.json({ success: true, message: '비밀번호가 초기화되었습니다.' });
+    // [옵션 3] 대상에게 알림 + 명시적 감사 로그(누가 누구 것을 초기화했는지) 강화.
+    await prisma.notification.create({
+      data: {
+        userId: id,
+        companyId: req.user!.companyId,
+        type: 'GENERAL',
+        title: '비밀번호가 초기화되었습니다',
+        body: `${req.user!.name} 님이 회원님의 비밀번호를 초기화했습니다. 다음 로그인 시 임시 비밀번호로 로그인 후 새 비밀번호로 변경해주세요. 본인이 요청하지 않았다면 관리자에게 문의하세요.`,
+      },
+    });
+    await createAuditLog({
+      req: req as any,
+      action: 'UPDATE',
+      entityType: 'User',
+      entityId: id,
+      changes: {
+        passwordReset: { old: null, new: true },
+        resetBy: { old: null, new: `${req.user!.name}(id:${req.user!.id})` },
+        target: { old: null, new: `${user.name}(${user.role})` },
+      },
+    });
+
+    // 새 임시 비밀번호를 반환해 관리자 화면(toast)에 표시 → 당사자에게 안내 가능.
+    return res.json({
+      success: true,
+      message: '비밀번호가 초기화되었습니다.',
+      data: { newPassword: plainPassword },
+    });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });

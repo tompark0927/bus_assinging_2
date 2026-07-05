@@ -7,6 +7,8 @@ import { AuthRequest } from '../middleware/auth';
 import { issueTokenPair } from './authController';
 import { DEFAULT_POLICY, POLICY_PRESETS } from '../agents/_solvers/types';
 import { generateUniqueCompanyCode } from '../utils/companyCode';
+import { sendEmail, companyCodeEmailHtml } from '../services/emailService';
+import { normalizePhone } from '../utils/initialPassword';
 
 function generateEmployeeId(): string {
   return 'ADM' + Math.random().toString(36).substr(2, 6).toUpperCase();
@@ -42,6 +44,14 @@ export const registerCompany = async (req: Request, res: Response) => {
       return res.status(409).json({ success: false, message: '이미 사용 중인 이메일입니다.' });
     }
 
+    // 저장 형태(하이픈 유무)에 상관없이 매칭되도록 원본·정규화 둘 다 확인
+    const existingPhone = await prisma.user.findFirst({
+      where: { phone: { in: [adminPhone, normalizePhone(adminPhone)] } },
+    });
+    if (existingPhone) {
+      return res.status(409).json({ success: false, message: '이미 사용 중인 전화번호입니다.' });
+    }
+
     // 회사 코드는 회사명으로부터 자동 생성한다 (예: 진호버스 → JHBUS, 충돌 시 JHOBUS).
     const companyCode = await generateUniqueCompanyCode(
       companyName,
@@ -65,7 +75,8 @@ export const registerCompany = async (req: Request, res: Response) => {
           email: adminEmail,
           phone: adminPhone,
           password: hashedPassword,
-          role: 'ADMIN',
+          // 최초 가입자(회사 개설자)는 대표(OWNER) — 관리자↔관리자 비밀번호 초기화 등 상위 권한 보유
+          role: 'OWNER',
           employeeId,
         },
       });
@@ -79,6 +90,15 @@ export const registerCompany = async (req: Request, res: Response) => {
     //   - 2시간짜리 access token (validateEnv 가 검증한 JWT_SECRET 직접 사용 — fallback 없음)
     //   - DB 추적되는 30일 refresh token (회전 + 강제 로그아웃 가능)
     const tokens = await issueTokenPair(user);
+
+    // 회사 코드 안내 이메일 발송 (best-effort — 실패해도 가입은 성공 처리).
+    // OTP 이메일과 동일한 sendEmail 경로 사용 (EMAIL_DEV_MODE 시 콘솔 출력).
+    sendEmail(
+      adminEmail,
+      '[Busync] 회사 코드 안내',
+      companyCodeEmailHtml(companyName, companyCode),
+      `Busync 회사 코드: ${companyCode} (${companyName}) — 로그인 시 사용합니다.`,
+    ).catch((mailErr) => logger.error('[register] 회사 코드 이메일 발송 실패', mailErr));
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { password, ...safeUser } = user as Record<string, unknown>;
@@ -94,6 +114,22 @@ export const registerCompany = async (req: Request, res: Response) => {
       },
       message: `${companyName} 등록이 완료되었습니다.`,
     });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+// 전화번호 중복 여부 확인 (회원가입 2단계에서 '다음 단계' 진행 전 호출)
+export const checkPhoneAvailable = async (req: Request, res: Response) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ success: false, message: '전화번호를 입력해주세요.' });
+    const raw = String(phone).trim();
+    const existing = await prisma.user.findFirst({
+      where: { phone: { in: [raw, normalizePhone(raw)] } },
+    });
+    return res.json({ success: true, available: !existing });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });

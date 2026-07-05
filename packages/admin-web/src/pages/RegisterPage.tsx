@@ -66,6 +66,7 @@ export default function RegisterPage() {
   const [emailVerifyToken, setEmailVerifyToken] = useState('');
   const [sendingOtp, setSendingOtp] = useState(false);
   const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [checkingPhone, setCheckingPhone] = useState(false);
 
   const set = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -90,7 +91,11 @@ export default function RegisterPage() {
       setOtpSent(true);
       toast.success('인증번호를 이메일로 보냈습니다. 메일함을 확인해주세요.');
     } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || '인증번호 발송에 실패했습니다.');
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || '인증번호 발송에 실패했습니다.';
+      // 중복 이메일 등 실패 시 필드에도 표시하고 인증 단계로 넘어가지 않도록 유지
+      setErrors((p) => ({ ...p, adminEmail: msg }));
+      setOtpSent(false);
+      toast.error(msg);
     } finally {
       setSendingOtp(false);
     }
@@ -122,7 +127,7 @@ export default function RegisterPage() {
     setStep(2);
   };
 
-  const handleStep2Next = () => {
+  const handleStep2Next = async () => {
     const errs: typeof errors = {};
     if (!form.adminName.trim()) errs.adminName = '이름을 입력해주세요.';
     if (!form.adminEmail.trim()) errs.adminEmail = '이메일을 입력해주세요.';
@@ -133,6 +138,20 @@ export default function RegisterPage() {
     if (form.adminPassword !== form.adminPasswordConfirm) errs.adminPasswordConfirm = '비밀번호가 일치하지 않습니다.';
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
+
+    // 전화번호 중복 확인 후 다음 단계로 진행 (중복이면 여기서 차단)
+    setCheckingPhone(true);
+    try {
+      const res = await companyApi.checkPhone(form.adminPhone.trim());
+      if (!res.data.available) {
+        setErrors((p) => ({ ...p, adminPhone: '이미 사용 중인 전화번호입니다.' }));
+        return;
+      }
+    } catch {
+      // 확인 요청 실패(네트워크 등) 시엔 진행을 막지 않는다 — 최종 제출에서 재검증됨
+    } finally {
+      setCheckingPhone(false);
+    }
     setStep(3);
   };
 
@@ -157,6 +176,14 @@ export default function RegisterPage() {
       const msg =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
         '등록 중 오류가 발생했습니다.';
+      // 중복 전화번호/이메일이면 해당 필드에 표시하고 입력 단계(2)로 되돌린다.
+      if (msg.includes('전화번호')) {
+        setErrors((p) => ({ ...p, adminPhone: msg }));
+        setStep(2);
+      } else if (msg.includes('이메일')) {
+        setErrors((p) => ({ ...p, adminEmail: msg }));
+        setStep(2);
+      }
       toast.error(msg);
     } finally {
       setLoading(false);
@@ -446,9 +473,10 @@ export default function RegisterPage() {
                 </button>
                 <button
                   onClick={handleStep2Next}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-semibold transition-colors flex items-center justify-center gap-2 text-base"
+                  disabled={checkingPhone}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-4 rounded-xl font-semibold transition-colors flex items-center justify-center gap-2 text-base"
                 >
-                  다음 단계
+                  {checkingPhone ? '확인 중...' : '다음 단계'}
                 </button>
               </div>
             </div>

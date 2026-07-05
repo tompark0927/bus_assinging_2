@@ -4,6 +4,7 @@ import { AuthRequest, isFullAccess } from '../middleware/auth';
 import logger from '../utils/logger';
 import { parseIdParam } from '../utils/helpers';
 import { getPagination, paginatedResponse } from '../utils/pagination';
+import { sendBulkPushNotifications } from '../services/notificationService';
 
 // 게시글 목록 조회
 export const getPosts = async (req: AuthRequest, res: Response) => {
@@ -132,7 +133,21 @@ export const createPost = async (req: AuthRequest, res: Response) => {
       },
     });
 
-    // (제거됨) 공지사항 푸시 알림(NEW_POST / URGENT_POST) — 발송하지 않음.
+    // 공지/안전/노선 게시판 글은 기사 전원에게 푸시 (긴급 글은 URGENT_POST 로 강조)
+    if (adminOnlyBoards.includes(boardType)) {
+      const drivers = await prisma.user.findMany({
+        where: { companyId: req.user!.companyId, role: 'DRIVER', isActive: true },
+        select: { id: true },
+      });
+      const boardLabel = boardType === 'NOTICE' ? '공지사항' : boardType === 'SAFETY' ? '안전 게시판' : '노선 게시판';
+      sendBulkPushNotifications(
+        drivers.map((d) => d.id),
+        post.isUrgent ? `🚨 [긴급] ${boardLabel}` : `📢 새 ${boardLabel} 글`,
+        title,
+        post.isUrgent ? 'URGENT_POST' : 'NEW_POST',
+        { postId: post.id, boardType },
+      ).catch((e) => logger.error('[Post] 게시글 푸시 발송 실패:', e));
+    }
 
     return res.status(201).json({ success: true, data: post });
   } catch (error) {

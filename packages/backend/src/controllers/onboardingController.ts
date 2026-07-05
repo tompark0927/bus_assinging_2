@@ -1,4 +1,6 @@
 import { Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import * as XLSX from 'xlsx';
 import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '../utils/prisma';
@@ -117,6 +119,95 @@ function safeParseJson<T>(text: string, fallback: T): T {
     }
   }
   return fallback;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 표준 템플릿(고정 열) 결정론적 파싱 — AI 없이 정확히 읽는다.
+// 시트명에 "기사"/"노선"/"버스"가 포함되고 예상 머리글이 있으면 사용.
+// 실패(비표준 파일)하면 null 반환 → AI 폴백.
+// ─────────────────────────────────────────────────────────────────
+type TemplateParse = {
+  drivers: { name: string; phone: string; driverType: 'MAIN' | 'SPARE' }[];
+  routes: { routeNumber: string; name: string; startPoint: string; endPoint: string }[];
+  buses: { busNumber: string; plateNumber: string; model: string; year: number | null }[];
+};
+
+function parseTemplateSheets(buffer: Buffer): TemplateParse | null {
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  const findSheet = (kw: string): XLSX.WorkSheet | null => {
+    const nm = wb.SheetNames.find((n) => n.replace(/\s/g, '').includes(kw));
+    return nm ? wb.Sheets[nm] : null;
+  };
+  const driverWs = findSheet('기사');
+  const routeWs = findSheet('노선');
+  const busWs = findSheet('버스');
+  if (!driverWs || !routeWs || !busWs) return null;
+
+  const rowsOf = (ws: XLSX.WorkSheet): unknown[][] =>
+    XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: '' }) as unknown[][];
+  const colIndex = (header: unknown[], ...keywords: string[]): number => {
+    for (let i = 0; i < header.length; i++) {
+      const h = String(header[i] ?? '').replace(/\s/g, '');
+      if (keywords.some((k) => h.includes(k))) return i;
+    }
+    return -1;
+  };
+  const cell = (row: unknown[], idx: number): string => (idx >= 0 ? String(row[idx] ?? '').trim() : '');
+
+  // 기사 명단: 이름 / 전화번호 / 유형(정규/예비)
+  const dRows = rowsOf(driverWs);
+  const dh = dRows[0] || [];
+  const dNameI = colIndex(dh, '이름', '성명');
+  const dPhoneI = colIndex(dh, '전화', '휴대폰', '연락처');
+  const dTypeI = colIndex(dh, '유형', '구분');
+  if (dNameI < 0) return null; // 이름 열이 없으면 템플릿이 아님 → AI 폴백
+  const drivers = dRows.slice(1)
+    .filter((r) => cell(r, dNameI))
+    .map((r) => {
+      const typeStr = cell(r, dTypeI);
+      const driverType: 'MAIN' | 'SPARE' = /예비|스페어|SP|SPARE/i.test(typeStr) ? 'SPARE' : 'MAIN';
+      return { name: cell(r, dNameI), phone: cell(r, dPhoneI), driverType };
+    });
+
+  // 노선: 노선번호 / 노선명 / 출발지 / 도착지
+  const rRows = rowsOf(routeWs);
+  const rh = rRows[0] || [];
+  const rNumI = colIndex(rh, '노선번호', '번호');
+  const rNameI = colIndex(rh, '노선명', '노선이름');
+  const rStartI = colIndex(rh, '출발', '기점');
+  const rEndI = colIndex(rh, '도착', '종점');
+  const routes = rRows.slice(1)
+    .filter((r) => cell(r, rNumI) || cell(r, rNameI))
+    .map((r) => {
+      const num = cell(r, rNumI).replace(/번/g, '').trim();
+      return {
+        routeNumber: num,
+        name: cell(r, rNameI) || (num ? `${num}번` : ''),
+        startPoint: cell(r, rStartI),
+        endPoint: cell(r, rEndI),
+      };
+    });
+
+  // 버스: 버스번호 / 차량번호(번호판) / 차종 / 연식
+  const bRows = rowsOf(busWs);
+  const bh = bRows[0] || [];
+  const bNumI = colIndex(bh, '버스번호');
+  const bPlateI = colIndex(bh, '차량번호', '번호판');
+  const bModelI = colIndex(bh, '차종', '모델', '차량모델');
+  const bYearI = colIndex(bh, '연식');
+  const buses = bRows.slice(1)
+    .filter((r) => cell(r, bNumI) || cell(r, bPlateI))
+    .map((r) => {
+      const yr = parseInt(cell(r, bYearI).replace(/\D/g, ''), 10);
+      return {
+        busNumber: cell(r, bNumI),
+        plateNumber: cell(r, bPlateI),
+        model: cell(r, bModelI),
+        year: isNaN(yr) ? null : yr,
+      };
+    });
+
+  return { drivers, routes, buses };
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -277,58 +368,69 @@ export const analyzeExcel = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, message: '엑셀 파일에 내용이 없습니다.' });
     }
 
-    // ── STEP 2: Claude에게 전체 분석 요청 ────────────────────────
-    const result = await analyzeWithClaude(sheets);
+    // 노선번호 정규화: "16번"·" 16 " → "16".
+    const normRoute = (v: unknown): string => String(v ?? '').replace(/번/g, '').trim();
 
-    logger.info(`[onboarding] Claude 분석 결과: 기사 ${result.drivers.length}명, 노선 ${result.routes.length}개, 버스 ${result.buses.length}대`);
+    // ── STEP 2: 표준 템플릿이면 결정론적 파싱 (전화번호·기점/종점·번호판·차종·연식까지 정확히).
+    //            아니면 AI 로 폴백.
+    let drivers: {
+      name: string; employeeId: string; phone: string; driverType: 'MAIN' | 'SPARE';
+      routeNumber: string | null; shiftGroup: string | null; vehicleNumber: string | null;
+    }[];
+    let routes: { routeNumber: string; name: string; startPoint: string; endPoint: string }[];
+    let buses: { busNumber: string; plateNumber: string; model: string; year: number | null }[];
+    let companyName: string | null = null;
+
+    const tmpl = parseTemplateSheets(Buffer.from(req.file.buffer));
+    if (tmpl && (tmpl.drivers.length + tmpl.routes.length + tmpl.buses.length) > 0) {
+      logger.info(`[onboarding] 템플릿 파싱: 기사 ${tmpl.drivers.length}명, 노선 ${tmpl.routes.length}개, 버스 ${tmpl.buses.length}대`);
+      drivers = tmpl.drivers.map((d, i) => ({
+        name: d.name,
+        employeeId: `DRV${String(i + 1).padStart(3, '0')}`,
+        phone: d.phone || '',
+        driverType: d.driverType,
+        routeNumber: null, // 표준 템플릿엔 기사↔노선 매핑이 없음 → autoWire 가 배정
+        shiftGroup: null,
+        vehicleNumber: null,
+      }));
+      routes = tmpl.routes;
+      buses = tmpl.buses;
+    } else {
+      // 비표준 파일 → AI 분석 폴백
+      const result = await analyzeWithClaude(sheets);
+      logger.info(`[onboarding] Claude 분석 결과: 기사 ${result.drivers.length}명, 노선 ${result.routes.length}개, 버스 ${result.buses.length}대`);
+      companyName = result.companyName;
+      const busNumberSet = new Set(result.buses.map((b) => String(b.busNumber ?? '').trim()).filter(Boolean));
+      drivers = result.drivers.map((d, i) => {
+        const veh = String(d.vehicleNumber ?? '').trim();
+        return {
+          name: d.name,
+          employeeId: `DRV${String(i + 1).padStart(3, '0')}`,
+          phone: '',
+          driverType: d.driverType,
+          routeNumber: d.routeNumber ? normRoute(d.routeNumber) : null,
+          shiftGroup: d.shiftGroup ?? null,
+          vehicleNumber: veh && busNumberSet.has(veh) ? veh : null,
+        };
+      });
+      routes = result.routes.map((r) => {
+        const num = normRoute(r.routeNumber);
+        return { routeNumber: num, name: r.name || `${num}번`, startPoint: '', endPoint: '' };
+      });
+      buses = result.buses.map((b) => ({
+        busNumber: String(b.busNumber ?? '').trim(), plateNumber: '', model: '', year: null,
+      }));
+    }
 
     // ── STEP 3: 결과 정리 ─────────────────────────────────────────
     const warnings: string[] = [];
-    if (result.drivers.length === 0) warnings.push('기사 정보를 찾지 못했습니다. 수동으로 입력해주세요.');
-    if (result.routes.length === 0) warnings.push('노선 정보를 찾지 못했습니다. 수동으로 입력해주세요.');
-    if (result.buses.length === 0) warnings.push('차량 정보를 찾지 못했습니다. 수동으로 입력해주세요.');
+    if (drivers.length === 0) warnings.push('기사 정보를 찾지 못했습니다. 수동으로 입력해주세요.');
+    if (routes.length === 0) warnings.push('노선 정보를 찾지 못했습니다. 수동으로 입력해주세요.');
+    if (buses.length === 0) warnings.push('차량 정보를 찾지 못했습니다. 수동으로 입력해주세요.');
 
-    // 노선번호 정규화: "16번"·" 16 " → "16". 기사 routeNumber 와 노선 routeNumber 가
-    // 같은 형식이어야 confirmImport 에서 매칭됨.
-    const normRoute = (v: unknown): string => String(v ?? '').replace(/번/g, '').trim();
-
-    // 추출된 차량번호 집합 (기사 vehicleNumber 검증용)
-    const busNumberSet = new Set(result.buses.map(b => String(b.busNumber ?? '').trim()).filter(Boolean));
-
-    // 기사에 사원번호 부여 + 정규화 + 차량번호 검증
-    const drivers = result.drivers.map((d, i) => {
-      const veh = String(d.vehicleNumber ?? '').trim();
-      return {
-        name: d.name,
-        employeeId: `DRV${String(i + 1).padStart(3, '0')}`,
-        phone: '',
-        driverType: d.driverType,
-        routeNumber: d.routeNumber ? normRoute(d.routeNumber) : null,
-        shiftGroup: d.shiftGroup ?? null,
-        // 실제 버스 목록에 있는 차번만 인정 (오매칭 차번은 버려 autoWire 가 재배정하게 함)
-        vehicleNumber: veh && busNumberSet.has(veh) ? veh : null,
-      };
-    });
-
-    const routes = result.routes.map(r => {
-      const num = normRoute(r.routeNumber);
-      return {
-        routeNumber: num,
-        name: r.name || `${num}번`,
-        startPoint: '',
-        endPoint: '',
-      };
-    });
-
-    const buses = result.buses.map(b => ({
-      busNumber: String(b.busNumber ?? '').trim(),
-      plateNumber: '',
-      model: '',
-    }));
-
-    const { drivers: dc, routes: rc, buses: bc } = { drivers, routes, buses };
-    const summary = result.companyName
-      ? `${result.companyName} — 기사 ${dc.length}명, 노선 ${rc.length}개, 버스 ${bc.length}대 발견`
+    const dc = drivers, rc = routes, bc = buses;
+    const summary = companyName
+      ? `${companyName} — 기사 ${dc.length}명, 노선 ${rc.length}개, 버스 ${bc.length}대 발견`
       : `기사 ${dc.length}명, 노선 ${rc.length}개, 버스 ${bc.length}대 발견`;
 
     return res.json({
@@ -375,7 +477,7 @@ export const confirmImport = async (req: AuthRequest, res: Response) => {
     }
 
     // ── 버스: 기존 확인 후 신규만 일괄 삽입 ──────────────────────
-    const busList = (buses as { busNumber?: string; plateNumber?: string; model?: string }[])
+    const busList = (buses as { busNumber?: string; plateNumber?: string; model?: string; year?: number | null }[])
       .filter(b => b.busNumber || b.plateNumber)
       .map((b, i) => ({ ...b, busNumber: b.busNumber || b.plateNumber || `BUS${String(i + 1).padStart(3, '0')}` }));
     const existingBusNos = new Set(
@@ -387,7 +489,12 @@ export const confirmImport = async (req: AuthRequest, res: Response) => {
       await prisma.bus.createMany({
         data: newBuses.map(b => {
           const busNo = b.busNumber!;
-          return { companyId, busNumber: busNo, plateNumber: b.plateNumber || busNo, model: b.model || null };
+          return {
+            companyId, busNumber: busNo,
+            plateNumber: b.plateNumber || busNo,
+            model: b.model || null,
+            year: typeof b.year === 'number' ? b.year : null,
+          };
         }),
         skipDuplicates: true,
       });
@@ -412,16 +519,40 @@ export const confirmImport = async (req: AuthRequest, res: Response) => {
       if (!isNaN(num)) autoIdCounter = num + 1;
     }
 
-    // 이미 등록된 같은 이름의 기사는 제외 (재업로드 시 중복 생성 방지).
-    // 분석 단계에서 이미 이름 기준 중복 제거가 되므로 한 파일 내 동명이인 손실 위험은 없음.
-    const existingNames = new Set(
+    // 중복 제거 기준 = 전화번호(회사 내 앱 로그인 ID = 고유 식별자).
+    //   → 동명이인이라도 번호가 다르면 각각 등록되고, 같은 번호(동일인/재업로드)만 제외한다.
+    //   (이름으로 제거하면 동명이인이 통째로 누락되므로 사용하지 않는다)
+    const existingPhones = new Set(
+      (await prisma.user.findMany({ where: { companyId, phone: { not: null } }, select: { phone: true } }))
+        .map(u => normalizePhone(u.phone))
+        .filter(Boolean)
+    );
+    // 전화번호가 없는 기사만 이름으로 폴백 중복 제거(번호가 없으면 동명이인을 구분할 방법이 없어 최선).
+    const existingDriverNames = new Set(
       (await prisma.user.findMany({ where: { companyId, role: 'DRIVER' }, select: { name: true } }))
         .map(u => u.name)
     );
 
+    const seenPhones = new Set<string>();
+    const seenNames = new Set<string>();
+    const skippedDup: string[] = [];
+
     // 새 사번을 동기적으로 먼저 부여 (Promise.all 안에서 카운터를 증가시키면 경쟁상태 발생).
     const driverList = (drivers as DriverInput[])
-      .filter(d => d.name && !existingNames.has(d.name))
+      .filter(d => {
+        if (!d.name) return false;
+        const p = normalizePhone(d.phone);
+        if (p) {
+          // 전화번호가 있으면 전화번호로만 중복 판정 (동명이인 보존)
+          if (existingPhones.has(p) || seenPhones.has(p)) { skippedDup.push(d.name); return false; }
+          seenPhones.add(p);
+          return true;
+        }
+        // 전화번호 없는 기사: 이름으로 폴백 중복 제거
+        if (existingDriverNames.has(d.name) || seenNames.has(d.name)) { skippedDup.push(d.name); return false; }
+        seenNames.add(d.name);
+        return true;
+      })
       .map((d, i) => ({ ...d, employeeId: `DRV${String(autoIdCounter + i).padStart(3, '0')}` }));
 
     // 전화번호 없는 기사도 "스킵하지 않고" 모두 등록한다. (앱 로그인은 나중에 번호를 채워야 가능)
@@ -476,15 +607,20 @@ export const confirmImport = async (req: AuthRequest, res: Response) => {
     const today = new Date();
     const assignments: { driverId: number; routeId: number; startDate: Date }[] = [];
 
+    // 노선 정보가 없는 기사는 "첫 노선에 몰아주지 않고" 모든 노선에 라운드로빈으로 골고루 배정한다.
+    // (첫 노선에만 쌓이면 나머지 노선은 담당 기사=0 → 크루 없음 → 배차표에서 통째로 빠지는 문제 발생)
+    let fallbackRouteIdx = 0;
+
     for (const driver of allActiveDrivers) {
       if (assignedDriverIds.has(driver.id)) continue; // 이미 배정됨
 
       const routeNumber = routeNumberByEmpId.get(driver.employeeId);
       let targetRoute = routeNumber ? routeByNumber.get(routeNumber) : undefined;
 
-      // 엑셀에 노선 정보 없으면 첫 번째 노선으로 fallback (단, 노선이 존재할 때만)
+      // 엑셀에 노선 정보가 없으면 노선 순환 배정 (골고루 분산)
       if (!targetRoute && allRoutes.length > 0) {
-        targetRoute = allRoutes[0];
+        targetRoute = allRoutes[fallbackRouteIdx % allRoutes.length];
+        fallbackRouteIdx++;
       }
 
       if (targetRoute) {
@@ -511,11 +647,14 @@ export const confirmImport = async (req: AuthRequest, res: Response) => {
     const warnMsg = driversWithoutPhone.length > 0
       ? ` (참고: 전화번호가 없는 기사 ${driversWithoutPhone.length}명도 등록됐습니다. 기사 앱 로그인을 하려면 기초 데이터에서 전화번호를 채워주세요.)`
       : '';
+    const dupMsg = skippedDup.length > 0
+      ? ` (이미 등록된 기사와 전화번호가 중복되어 ${skippedDup.length}명은 제외했습니다: ${skippedDup.join(', ')})`
+      : '';
 
     return res.json({
       success: true,
-      data: { ...results, driversWithoutPhone },
-      message: baseMsg + warnMsg,
+      data: { ...results, driversWithoutPhone, skippedDup },
+      message: baseMsg + warnMsg + dupMsg,
     });
   } catch (error) {
     logger.error('[onboarding] confirmImport 오류', error);
@@ -528,135 +667,10 @@ export const confirmImport = async (req: AuthRequest, res: Response) => {
 // ─────────────────────────────────────────────────────────────────
 export const downloadTemplate = async (_req: AuthRequest, res: Response) => {
   try {
-    const wb = XLSX.utils.book_new();
-
-    /* ────────────────────────────────────────
-       시트 0: 안내 (Read me)
-       ──────────────────────────────────────── */
-    const guideData: (string | number)[][] = [
-      ['Busync 등록 양식'],
-      [],
-      ['이 파일을 채워서 업로드하시면 AI가 자동으로 데이터를 읽어 등록합니다.'],
-      ['빈 셀은 그대로 두셔도 됩니다 — 필수 항목만 채워주세요.'],
-      [],
-      ['시트 구성'],
-      ['1) 기사 명단 — 운행할 기사 정보'],
-      ['2) 노선 — 운행 노선 정보'],
-      ['3) 버스 — 보유 차량 정보'],
-      [],
-      ['필수 항목'],
-      ['• 기사: 이름, 전화번호 (전화번호 없으면 등록되지 않습니다)'],
-      ['• 노선: 노선번호, 노선명'],
-      ['• 버스: 버스번호'],
-      [],
-      ['형식 안내'],
-      ['• 전화번호: 010-1234-5678 (하이픈 권장) — 기사 앱 로그인 ID로 사용'],
-      ['• 기사 유형: "정규" 또는 "예비"'],
-      [],
-      ['기사 최초 비밀번호'],
-      ['• "이름을 영문 키보드로 친 글자 + 전화번호 뒷 4자리"'],
-      ['• 예) 최진호 / 010-1234-6788 → chlwlsgh6788'],
-      ['• 기사 앱 최초 로그인 시 비밀번호 변경이 강제됩니다 (보안)'],
-    ];
-    const wsGuide = XLSX.utils.aoa_to_sheet(guideData);
-    wsGuide['!cols'] = [{ wch: 90 }];
-    // 제목/섹션 셀 강조
-    const titleRows = [0, 5, 10, 15, 19];
-    titleRows.forEach((r) => {
-      const cell = wsGuide[XLSX.utils.encode_cell({ r, c: 0 })];
-      if (cell) {
-        cell.s = {
-          font: { bold: true, sz: r === 0 ? 14 : 12, color: { rgb: '1D4ED8' } },
-        };
-      }
-    });
-    XLSX.utils.book_append_sheet(wb, wsGuide, '안내');
-
-    /* ────────────────────────────────────────
-       시트 1: 기사 명단 (10개 예시)
-       ──────────────────────────────────────── */
-    const driversData = [
-      ['이름', '전화번호', '유형(정규/예비)'],
-      ['김민수', '010-1234-5678', '정규'],
-      ['이지훈', '010-2345-6789', '정규'],
-      ['박상철', '010-3456-7890', '정규'],
-      ['최영호', '010-4567-8901', '정규'],
-      ['정대현', '010-5678-9012', '정규'],
-      ['강병철', '010-6789-0123', '정규'],
-      ['윤성민', '010-7890-1234', '정규'],
-      ['장재호', '010-8901-2345', '예비'],
-      ['임동욱', '010-9012-3456', '예비'],
-      ['오현석', '010-0123-4567', '예비'],
-    ];
-    const wsDrivers = XLSX.utils.aoa_to_sheet(driversData);
-    wsDrivers['!cols'] = [
-      { wch: 10 },
-      { wch: 16 },
-      { wch: 16 },
-    ];
-    XLSX.utils.book_append_sheet(wb, wsDrivers, '기사 명단');
-
-    /* ────────────────────────────────────────
-       시트 2: 노선 (5개 예시)
-       ──────────────────────────────────────── */
-    const routesData = [
-      ['노선번호', '노선명', '출발지', '도착지'],
-      ['100', '인천 직행', '인천터미널', '부평역'],
-      ['200', '시내 순환', '부평역', '구월동'],
-      ['300', '서울 광역', '부평역', '서울역'],
-      ['400', '공항 셔틀', '인천터미널', '인천공항'],
-      ['500', '학교 지원', '구월동', '인하대학교'],
-    ];
-    const wsRoutes = XLSX.utils.aoa_to_sheet(routesData);
-    wsRoutes['!cols'] = [
-      { wch: 10 },
-      { wch: 16 },
-      { wch: 14 },
-      { wch: 14 },
-    ];
-    XLSX.utils.book_append_sheet(wb, wsRoutes, '노선');
-
-    /* ────────────────────────────────────────
-       시트 3: 버스 (5대 예시)
-       ──────────────────────────────────────── */
-    const busesData = [
-      ['버스번호', '차량번호(번호판)', '차종', '연식'],
-      ['B001', '인천 70 가 1234', '현대 유니버스', 2022],
-      ['B002', '인천 70 가 5678', '현대 유니버스', 2023],
-      ['B003', '인천 70 나 1111', '기아 그랜버드', 2021],
-      ['B004', '인천 70 나 2222', '기아 그랜버드', 2024],
-      ['B005', '인천 70 다 3333', '대우 BX212', 2020],
-    ];
-    const wsBuses = XLSX.utils.aoa_to_sheet(busesData);
-    wsBuses['!cols'] = [
-      { wch: 10 },
-      { wch: 20 },
-      { wch: 18 },
-      { wch: 8 },
-    ];
-    XLSX.utils.book_append_sheet(wb, wsBuses, '버스');
-
-    /* ── 헤더 행 강조 (모든 데이터 시트) ── */
-    const headerStyle = {
-      font: { bold: true, color: { rgb: 'FFFFFF' } },
-      fill: { patternType: 'solid', fgColor: { rgb: '2563EB' } },
-      alignment: { horizontal: 'center', vertical: 'center' },
-    };
-    [
-      { ws: wsDrivers, cols: 3 },
-      { ws: wsRoutes, cols: 4 },
-      { ws: wsBuses, cols: 4 },
-    ].forEach(({ ws, cols }) => {
-      for (let c = 0; c < cols; c++) {
-        const ref = XLSX.utils.encode_cell({ r: 0, c });
-        if (ws[ref]) ws[ref].s = headerStyle;
-      }
-      // 첫 행 약간 높게
-      if (!ws['!rows']) ws['!rows'] = [];
-      ws['!rows'][0] = { hpt: 22 };
-    });
-
-    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', cellStyles: true });
+    // 배포된 정적 양식 파일을 그대로 전송한다.
+    // assets/ 는 src/·dist/ 와 형제 디렉터리라 개발(src)·운영(dist) 양쪽에서 동일 경로로 해석된다.
+    const templatePath = path.resolve(__dirname, '../../assets/Busync_template.xlsx');
+    const buffer = await fs.promises.readFile(templatePath);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename=Busync_template.xlsx');
