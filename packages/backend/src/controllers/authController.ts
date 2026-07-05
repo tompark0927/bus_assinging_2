@@ -675,6 +675,12 @@ export const sendEmailOtp = async (req: Request, res: Response) => {
     if (!email) return res.status(400).json({ success: false, message: '이메일을 입력해주세요.' });
     const emailStr = String(email).trim().toLowerCase();
 
+    // 이미 가입된 이메일이면 인증번호를 보내지 않고 중복 안내 (가입 흐름 차단)
+    const existingEmail = await prisma.user.findFirst({ where: { email: emailStr } });
+    if (existingEmail) {
+      return res.status(409).json({ success: false, message: '이미 가입된 이메일입니다. 로그인 또는 비밀번호 찾기를 이용해주세요.' });
+    }
+
     // 직전 1분 내 발송 제한
     const recent = await prisma.otpVerification.findFirst({
       where: { email: emailStr, used: false, createdAt: { gte: new Date(Date.now() - 60_000) } },

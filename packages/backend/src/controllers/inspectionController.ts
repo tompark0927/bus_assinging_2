@@ -3,6 +3,7 @@ import { prisma } from '../utils/prisma';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { getPagination, paginatedResponse } from '../utils/pagination';
+import { sendBulkPushNotifications } from '../services/notificationService';
 
 // 표준 점검 항목 (도로교통법 기준)
 export const INSPECTION_TEMPLATE = [
@@ -98,7 +99,20 @@ export const submitInspection = async (req: AuthRequest, res: Response) => {
       },
     });
 
-    // (제거됨) 차량 점검 불합격 푸시 알림(INSPECTION_FAILED) — 발송하지 않음.
+    // 점검 불합격 시 관리자(기사 외 전 계정)에게 알림
+    if (hasFailed) {
+      const admins = await prisma.user.findMany({
+        where: { companyId, isActive: true, role: { not: 'DRIVER' } },
+        select: { id: true },
+      });
+      sendBulkPushNotifications(
+        admins.map((a) => a.id),
+        '⚠️ 차량 점검 불합격',
+        `${inspection.bus.busNumber}호 차량이 일일 점검에서 불합격했습니다. 확인이 필요합니다.`,
+        'INSPECTION_FAILED',
+        { inspectionId: inspection.id, busId: inspection.bus.id },
+      ).catch((e) => logger.error('[Inspection] 불합격 알림 발송 실패:', e));
+    }
 
     return res.json({ success: true, data: inspection });
   } catch (error) {

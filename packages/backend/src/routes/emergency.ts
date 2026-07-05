@@ -5,6 +5,8 @@ import {
   acceptEmergencySlot,
   cancelEmergencyDrop,
   manualFillEmergency,
+  getManualFillCandidates,
+  getNotifiedDrivers,
 } from '../controllers/emergencyController';
 import { authenticate, requireRole } from '../middleware/auth';
 import { emergencyValidation } from '../middleware/validate';
@@ -108,5 +110,9 @@ router.put('/:id/accept', ...emergencyValidation.accept, acceptEmergencySlot);
 router.put('/:id/cancel', requireRole('DISPATCH'), ...emergencyValidation.cancel, cancelEmergencyDrop);
 // 관리자 수동 충원 — 직접 기사 지정
 router.put('/:id/manual-fill', requireRole('DISPATCH'), manualFillEmergency);
+// 수동 충원 후보 조회 — 해당 날짜에 근무가 없는 가용 기사만 반환
+router.get('/:id/available-drivers', requireRole('DISPATCH'), getManualFillCandidates);
+// 이 드랍의 대타 요청 알림을 받은 기사 목록
+router.get('/:id/notified-drivers', requireRole('DISPATCH'), getNotifiedDrivers);
 
 export default router;

@@ -13,6 +13,7 @@ import {
 import { companyPolicyApi } from '../services/api';
 import toast from 'react-hot-toast';
 import PageHeader from '../components/PageHeader';
+import { dispatchSettingsHelp } from '../help/helpContent';
 import { useAuthStore } from '../store/authStore';
 
 /* ────────────────────────────────────────────
@@ -174,6 +175,7 @@ export default function DispatchSettingsPage() {
     <div className="space-y-8 pb-20">
       {/* Header */}
       <PageHeader
+        help={dispatchSettingsHelp}
         icon={Settings}
         title="배차 설정"
         description="회사 운영 정책. AI 배차표 생성 시 이 설정을 따릅니다."
@@ -588,7 +590,7 @@ const selectCls =
  *
  * 구조:
  *  - "이상적인 근무일": idealMin~idealMax — AI 가 우선 맞추려 시도
- *  - "괜찮은 근무일": allowMin~allowMax — 절대 벗어나지 않게 보장
+ *  - "최소/최대 근무일": allowMin~allowMax — 절대 벗어나지 않게 보장
  *  - 화면엔 "위반/페널티" 같은 단어를 노출하지 않음
  */
 function WorkdayBandSlider({
@@ -627,7 +629,7 @@ function WorkdayBandSlider({
       <div className="relative h-14 select-none">
         {/* 회색 배경 = 0~31 일 */}
         <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-3 rounded-full bg-gray-100 dark:bg-white/5" />
-        {/* 노란 띠 = 괜찮은 범위 */}
+        {/* 노란 띠 = 최소/최대 범위 */}
         <div
           className="absolute top-1/2 -translate-y-1/2 h-3 rounded-full bg-amber-200 dark:bg-amber-400/30"
           style={{ left: pct(allowMin), width: `calc(${pct(allowMax)} - ${pct(allowMin)})` }}
@@ -669,7 +671,7 @@ function WorkdayBandSlider({
         />
         <BandRow
           color="amber"
-          title="괜찮은 근무일"
+          title="최소/최대 근무일"
           desc="이 밖으로는 절대 나가지 않도록 자동으로 조정합니다."
           minValue={allowMin}
           maxValue={allowMax}
@@ -683,7 +685,7 @@ function WorkdayBandSlider({
       <div className="text-[13px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-white/[0.02] rounded-xl p-3 leading-relaxed">
         <span className="text-blue-600 dark:text-blue-400 font-medium">이상적인 근무일</span> 안에 못 들어가도 배차표는 만들어지지만 AI가 "더 균등하게 맞춰볼 수 있나" 한 번 더 시도합니다.
         <br />
-        <span className="text-amber-600 dark:text-amber-400 font-medium">괜찮은 근무일</span>은 절대 깨지지 않는 한계입니다 — 이 밖으로 나가는 기사는 자동으로 다른 기사와 자리를 바꿔 조정됩니다.
+        <span className="text-amber-600 dark:text-amber-400 font-medium">최소/최대 근무일</span>은 절대 깨지지 않는 한계입니다 — 이 밖으로 나가는 기사는 자동으로 다른 기사와 자리를 바꿔 조정됩니다.
       </div>
     </div>
   );

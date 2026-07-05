@@ -68,6 +68,7 @@ enum NotificationType {
   NEW_POST
   URGENT_POST
   NEW_MESSAGE
+  GENERAL
 }
 
 enum AttendanceStatus {
@@ -225,7 +226,6 @@ model Bus {
   plateNumber    String    // 회사별로 유일 (전역 X)
   model          String?
   year           Int?
-  capacity       Int       @default(40)
   isActive       Boolean   @default(true)
   routeId        Int?
   orderInGroup   Int? // 그룹 내 순번 (1~7, 순환 조율용)

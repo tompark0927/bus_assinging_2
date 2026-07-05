@@ -212,19 +212,21 @@ export const userValidation = {
 
   create: validate([
     requiredString('name', '이름', { min: 2, max: 50 }),
+    // 이메일은 기사(DRIVER)는 없을 수 있어 선택 항목. 형식만 검사하고, 직원 필수 여부는 컨트롤러에서 강제.
     body('email')
+      .optional({ nullable: true, checkFalsy: true })
       .trim()
-      .notEmpty().withMessage('이메일은 필수입니다.')
       .isEmail().withMessage('유효한 이메일 형식이어야 합니다.'),
     body('phone')
-      .optional()
+      .optional({ nullable: true, checkFalsy: true })
       .trim()
       .matches(/^01[016789]-?\d{3,4}-?\d{4}$/).withMessage('유효한 전화번호 형식이어야 합니다.'),
     body('role')
       .optional()
       .isIn(['ADMIN', 'DRIVER', 'DISPATCH', 'HR', 'ACCOUNTING', 'SAFETY_MGR'])
       .withMessage('유효한 역할이어야 합니다. (ADMIN, DRIVER, DISPATCH, HR, ACCOUNTING, SAFETY_MGR)'),
-    requiredString('employeeId', '사원번호', { min: 1, max: 20 }),
+    // 사원번호는 미입력 시 서버에서 자동 발급(ADM###/DRV###) — 선택 항목
+    optionalString('employeeId', '사원번호', { max: 20 }),
     optionalString('licenseNumber', '면허번호', { max: 30 }),
     body('driverType')
       .optional()
@@ -291,10 +293,6 @@ export const busValidation = {
       .optional()
       .isInt({ min: 1990, max: 2100 }).withMessage('연식은 1990~2100 범위여야 합니다.')
       .toInt(),
-    body('capacity')
-      .optional()
-      .isInt({ min: 1, max: 200 }).withMessage('수용 인원은 1~200 범위여야 합니다.')
-      .toInt(),
     optionalInt('routeId', '노선 ID'),
   ]),
 
@@ -306,10 +304,6 @@ export const busValidation = {
     body('year')
       .optional()
       .isInt({ min: 1990, max: 2100 }).withMessage('연식은 1990~2100 범위여야 합니다.')
-      .toInt(),
-    body('capacity')
-      .optional()
-      .isInt({ min: 1, max: 200 }).withMessage('수용 인원은 1~200 범위여야 합니다.')
       .toInt(),
     optionalInt('routeId', '노선 ID'),
     body('isActive')

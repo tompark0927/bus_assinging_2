@@ -1401,8 +1401,11 @@ function computeMetrics(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   restCycle: RestCyclePolicy,
 ): SolverMetrics {
-  const workDays = workloads.map((w) => w.workDays);
-  const weekendShifts = workloads.map((w) => w.weekendShifts);
+  // 균형·목표 지표는 면제 기사(신규·스페어 등)를 제외한 정규 풀 기준으로 계산.
+  // 스페어 기사는 정규 배차가 적은 것이 정상이라 포함하면 편차·충족률이 왜곡된다.
+  const regular = workloads.filter((w) => !w.workloadEval.exempted);
+  const workDays = regular.map((w) => w.workDays);
+  const weekendShifts = regular.map((w) => w.weekendShifts);
   const total = slots.length;
   const homeCount = slots.filter((s) => s.isHomeBus).length;
   const crossCount = slots.filter((s) => s.familiarity === 'CROSS_ROUTE').length;
@@ -1414,11 +1417,11 @@ function computeMetrics(
       : workDays.reduce((a, b) => a + b, 0) / workDays.length;
   const workDayStdev = stdev(workDays);
   const weekendStdev = stdev(weekendShifts);
-  const inTarget = workloads.filter((w) => w.withinTarget).length;
-  const withinTargetRate = workloads.length === 0 ? 0 : inTarget / workloads.length;
-  const inAcceptable = workloads.filter((w) => w.withinAcceptable).length;
+  const inTarget = regular.filter((w) => w.withinTarget).length;
+  const withinTargetRate = regular.length === 0 ? 0 : inTarget / regular.length;
+  const inAcceptable = regular.filter((w) => w.withinAcceptable).length;
   const withinAcceptableRate =
-    workloads.length === 0 ? 0 : inAcceptable / workloads.length;
+    regular.length === 0 ? 0 : inAcceptable / regular.length;
   const hardViolationCount = workloads.filter(
     (w) => w.workloadEval.hardViolation,
   ).length;

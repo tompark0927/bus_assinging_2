@@ -89,6 +89,18 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    // 로그인·회원가입·OTP·비밀번호 찾기 등 "인증 시도" 요청의 오류는 세션 만료가 아니라
+    // 자격 증명 오류다 → 토큰 갱신/리다이렉트(페이지 리로드) 하지 말고 호출자 catch 로 그대로 전달.
+    // (리다이렉트하면 페이지가 새로고침되어 로그인 실패 사유 메시지가 즉시 사라지는 문제가 있었음)
+    const AUTH_ATTEMPT_URLS = [
+      '/auth/login', '/auth/kakao', '/auth/phone/', '/auth/email/',
+      '/auth/forgot-password/', '/auth/find-company-code',
+      '/companies/register', '/companies/check-',
+    ];
+    if (AUTH_ATTEMPT_URLS.some((u) => originalRequest.url?.includes(u))) {
+      return Promise.reject(error);
+    }
+
     // 401이고 아직 재시도 안 한 요청이면 → 토큰 갱신 시도
     if (error.response?.status === 401 && !originalRequest._retry) {
       const { refreshToken } = readAuth();
@@ -157,6 +169,9 @@ export const authApi = {
   // 회원가입 이메일 인증
   sendEmailOtp: (email: string) => api.post('/auth/email/send-otp', { email }),
   verifyEmailOtp: (email: string, otp: string) => api.post('/auth/email/verify-otp', { email, otp }),
+  // 비밀번호 변경 (최초 강제 변경 시 currentPassword 생략 가능)
+  changePassword: (data: { currentPassword?: string; newPassword: string }) =>
+    api.put('/auth/password', data),
   /**
    * 서버에 refreshToken 폐기 요청. 클라이언트 저장소 정리는 호출자가 별도 수행.
    * Best-effort: 네트워크 오류로 실패해도 클라이언트는 여전히 로그아웃됨.
@@ -220,8 +235,13 @@ export const schedulesApi = {
   generate: (data: { year: number; month: number; workDays?: number; restDays?: number }) =>
     api.post('/schedules/generate', data),
   // v2: 정책 기반 솔버 (PAIR/SOLO + 1/2/3교대 + 헌법룰). overwriteDraft=true 면 기존 DRAFT 덮어씀.
-  generateV2: (data: { year: number; month: number; overwriteDraft?: boolean }) =>
-    api.post('/schedules/generate-v2', data),
+  generateV2: (data: {
+    year: number;
+    month: number;
+    overwriteDraft?: boolean;
+    newHireDriverIds?: number[];
+    blockedRoutes?: { routeId: number; driverIds: number[] }[];
+  }) => api.post('/schedules/generate-v2', data),
   updateSlot: (slotId: number, data: Record<string, unknown>) =>
     api.put(`/schedules/slots/${slotId}`, data),
   createSlot: (data: Record<string, unknown>) =>
@@ -254,6 +274,8 @@ export const emergencyApi = {
   accept: (id: number) => api.put(`/emergency/${id}/accept`),
   cancel: (id: number) => api.put(`/emergency/${id}/cancel`),
   manualFill: (id: number, driverId: number) => api.put(`/emergency/${id}/manual-fill`, { driverId }),
+  availableDrivers: (id: number) => api.get(`/emergency/${id}/available-drivers`),
+  notifiedDrivers: (id: number) => api.get(`/emergency/${id}/notified-drivers`),
 };
 
 // Notifications
@@ -307,6 +329,7 @@ export const companyApi = {
     emailVerifyToken: string;
   }) => api.post('/companies/register', data),
   checkCode: (code: string) => api.get(`/companies/check-code/${code}`),
+  checkPhone: (phone: string) => api.post<{ available: boolean }>('/companies/check-phone', { phone }),
 };
 
 // Attendance (근태)

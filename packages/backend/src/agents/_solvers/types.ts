@@ -48,7 +48,7 @@ export interface SolverDriver {
   qualificationExpiresAt?: Date;
   /** 직전 월 누적 fatigue 점수 (0~100, 높을수록 피로) */
   recentFatigueScore: number;
-  /** 입사 30일 이내 = 신규 (헌법 룰 10) */
+  /** 관리자가 배차 생성 시 신규로 지정 (헌법 룰 10) */
   isNewHire: boolean;
   /** 사고 이력이 있는 노선 IDs (헌법 룰 11) */
   blockedRouteIds?: number[];
@@ -391,6 +391,7 @@ export type WorkloadExemptionReason =
   | 'RETURNING' // 장기휴직 복귀
   | 'PARTIAL_MONTH' // 월중 퇴사·전배
   | 'MEDICAL_LEAVE' // 병가·산재
+  | 'SPARE_DRIVER' // 예비(스페어) 기사 — 대타 충원용이라 정규 배차 하한 미적용
   | 'OTHER'; // 기타 (note 권장)
 
 export type WorkloadTier =

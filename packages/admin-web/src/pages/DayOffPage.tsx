@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { dayOffApi } from '../services/api';
 import PageHeader from '../components/PageHeader';
+import { dayOffHelp } from '../help/helpContent';
 import {
   format,
   startOfMonth,
@@ -227,6 +228,7 @@ export default function DayOffPage() {
     <div className="space-y-6">
       {/* Header */}
       <PageHeader
+        help={dayOffHelp}
         icon={CalendarOff}
         title="휴무 관리"
         description="기사님들의 휴무 요청을 검토하고 승인 또는 반려하세요."

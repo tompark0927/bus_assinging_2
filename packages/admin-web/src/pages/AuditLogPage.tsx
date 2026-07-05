@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import { auditLogHelp } from '../help/helpContent';
 
 // ─────────────────────────────────────────
 // Types
@@ -254,6 +255,7 @@ function AuditLogContent() {
     <div className="max-w-full">
       {/* Header */}
       <PageHeader
+        help={auditLogHelp}
         icon={ScrollText}
         title="감사 로그"
         description="시스템 변경 이력을 조회합니다"

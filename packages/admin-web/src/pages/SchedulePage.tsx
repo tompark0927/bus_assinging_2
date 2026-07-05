@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -32,6 +32,7 @@ import { format, getDaysInMonth } from 'date-fns';
 import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
 import PageHeader from '../components/PageHeader';
+import { scheduleHelp } from '../help/helpContent';
 import { useAuthStore } from '../store/authStore';
 
 // ─────────────────────────────────────────
@@ -59,6 +60,7 @@ const SLOT_COLORS = {
   COMPLETED: { bg: 'bg-slate-100', text: 'text-slate-500', ring: 'ring-slate-300' },
   ABSENT: { bg: 'bg-orange-100', text: 'text-orange-700', ring: 'ring-orange-300' },
   REST: { bg: 'bg-gray-50', text: 'text-gray-400', ring: 'ring-gray-200' },
+  VACATION: { bg: 'bg-teal-50', text: 'text-teal-600', ring: 'ring-teal-200' },
 } as const;
 
 interface Slot {
@@ -99,6 +101,8 @@ interface Driver {
   name: string;
   driverType: string;
   employeeId: string;
+  licenseExpiresAt?: string | null;
+  qualificationExpiresAt?: string | null;
 }
 
 interface V2Result {
@@ -199,10 +203,13 @@ export default function SchedulePage() {
   }, [navigate]);
   const [workDays, setWorkDays] = useState(5);
   const [restDays, setRestDays] = useState(2);
-  const [aiNotes, setAiNotes] = useState('');
-  const [aiRecs, setAiRecs] = useState('');
+  // 생성 특이사항 입력: 신규 기사 / 노선별 사고(배차 금지) 기사
+  const [newHireIds, setNewHireIds] = useState<number[]>([]);
+  const [blockedByRoute, setBlockedByRoute] = useState<Record<number, number[]>>({});
 
   // v2 솔버 결과 (메트릭·미충족·하드룰 위반자)
+  // 새로고침·페이지 이동 후에도 유지되도록 localStorage 에 저장하고,
+  // 해당 월의 배차표(scheduleId)가 일치할 때만 복원한다.
   const [v2Result, setV2Result] = useState<V2Result | null>(null);
   const [showViolators, setShowViolators] = useState(false);
   const [showUnfilled, setShowUnfilled] = useState(false);
@@ -277,7 +284,16 @@ export default function SchedulePage() {
 
   const { data: allUsersList = [] } = useQuery<Driver[]>({
     queryKey: ['users-drivers'],
-    queryFn: () => usersApi.list({ role: 'DRIVER' }).then((r) => r.data.data),
+    // 전체 기사(페이지당 최대 100건) — 생성 모달의 신규/사고 기사 선택에 모두 필요
+    queryFn: async () => {
+      const all: Driver[] = [];
+      for (let page = 1; page <= 100; page++) {
+        const r = await usersApi.list({ role: 'DRIVER', page: String(page), limit: '100' });
+        all.push(...(r.data.data as Driver[]));
+        if (!r.data.pagination?.hasNext) break;
+      }
+      return all;
+    },
   });
 
   // 배차 품질 체크리스트용: 이번 달 회사 전체 휴가 신청
@@ -287,18 +303,71 @@ export default function SchedulePage() {
     queryFn: () => dayOffApi.list({ month: monthParam, limit: '100' }).then((r) => r.data.data ?? []),
   });
 
+  // 승인된 휴가 (기사ID|날짜) — 그리드에서 '휴가 반영' 휴무 표시용
+  const approvedDayoffKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of monthDayoffs) {
+      if (d.status === 'APPROVED') set.add(`${d.driver.id}|${d.date.slice(0, 10)}`);
+    }
+    return set;
+  }, [monthDayoffs]);
+
+  // 생성 모달 안내: 대상 월 말일까지 면허/자격이 만료되는(이미 만료 포함) 기사
+  const expiringLicenseDrivers = useMemo(() => {
+    const monthEnd = new Date(year, month, 0, 23, 59, 59);
+    return allUsersList
+      .map((d) => {
+        const items: string[] = [];
+        if (d.licenseExpiresAt && new Date(d.licenseExpiresAt) <= monthEnd) {
+          items.push(`운전면허 ${d.licenseExpiresAt.slice(0, 10)} 만료`);
+        }
+        if (d.qualificationExpiresAt && new Date(d.qualificationExpiresAt) <= monthEnd) {
+          items.push(`버스운전자격 ${d.qualificationExpiresAt.slice(0, 10)} 만료`);
+        }
+        return items.length ? { id: d.id, name: d.name, employeeId: d.employeeId, items } : null;
+      })
+      .filter((v): v is { id: number; name: string; employeeId: string; items: string[] } => v !== null);
+  }, [allUsersList, year, month]);
+
+  // ─── v2 결과 패널 복원/정리 ───
+  const v2StorageKey = `busync.v2Result.${companyId ?? 'unknown'}.${year}-${String(month).padStart(2, '0')}`;
+  useEffect(() => {
+    if (!schedule?.id) {
+      setV2Result(null);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(v2StorageKey);
+      if (!raw) {
+        setV2Result(null);
+        return;
+      }
+      const stored = JSON.parse(raw) as V2Result;
+      // 저장된 결과가 지금 보고 있는 배차표의 것일 때만 표시 (삭제·재생성 시 자동 무효화)
+      setV2Result(stored.scheduleId === schedule.id ? stored : null);
+    } catch {
+      setV2Result(null);
+    }
+  }, [v2StorageKey, schedule?.id]);
+
   // ─── 뮤테이션 ───
 
   const generateMutation = useMutation({
     // v2 솔버 사용 — 회사 정책(CITY_2SHIFT 등) 자동 적용 + PAIR + 헌법룰
-    mutationFn: () => schedulesApi.generateV2({ year, month, overwriteDraft: true }),
+    // 신규 기사(면제·단독배차 금지) / 노선별 사고 기사(해당 노선 배차 금지) 를 함께 전달.
+    mutationFn: () => schedulesApi.generateV2({
+      year, month, overwriteDraft: true,
+      newHireDriverIds: newHireIds.length ? newHireIds : undefined,
+      blockedRoutes: Object.entries(blockedByRoute)
+        .filter(([, ids]) => ids.length > 0)
+        .map(([routeId, driverIds]) => ({ routeId: Number(routeId), driverIds })),
+    }),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       const d = res.data as V2Result;
       setV2Result(d);
-      toast.success(
-        `배차표 생성 완료 — ${d.slotsCreated ?? 0}슬롯 (${d.policyUsed ?? '기본정책'}, ${(d.elapsedMs ?? 0) / 1000}초)`,
-      );
+      try { localStorage.setItem(v2StorageKey, JSON.stringify(d)); } catch { /* ignore */ }
+      toast.success(`${year}년 ${month}월 배차표 초안이 생성되었습니다. 아래에서 결과를 확인하세요.`);
       setShowGenerateModal(false);
       setShowOverwriteConfirm(false);
     },
@@ -343,19 +412,6 @@ export default function SchedulePage() {
       setShowDeleteConfirm(false);
     },
     onError: () => toast.error('삭제 중 오류가 발생했습니다.'),
-  });
-
-  const aiRecsMutation = useMutation({
-    mutationFn: () => schedulesApi.getAIRecommendations(year, month, aiNotes),
-    onSuccess: (res) => {
-      setAiRecs(res.data.data.recommendations);
-      if (res.data.data.parameters) {
-        setWorkDays(res.data.data.parameters.workDays || 5);
-        setRestDays(res.data.data.parameters.restDays || 2);
-      }
-      toast.success('AI 추천이 생성되었습니다.');
-    },
-    onError: () => toast.error('AI 추천 생성 중 오류가 발생했습니다.'),
   });
 
   const updateSlotMutation = useMutation({
@@ -735,11 +791,19 @@ export default function SchedulePage() {
 
   // ─── 셀 렌더링 헬퍼 ───
 
-  const getCellInfo = useCallback((slot: Slot | undefined) => {
+  const getCellInfo = useCallback((slot: Slot | undefined, isVacation = false) => {
     if (!slot) {
       return { label: '', sub: '', colors: null, isEmpty: true };
     }
     if (slot.isRestDay) {
+      if (isVacation) {
+        return {
+          label: '휴가',
+          sub: '반영',
+          colors: SLOT_COLORS.VACATION,
+          isEmpty: false,
+        };
+      }
       return {
         label: '휴',
         sub: '',
@@ -783,6 +847,7 @@ export default function SchedulePage() {
       {/* ─── 페이지 헤더 ─── */}
       <div data-print-section="header">
         <PageHeader
+          help={scheduleHelp}
           icon={Calendar}
           title="배차표 관리"
           actions={
@@ -886,7 +951,7 @@ export default function SchedulePage() {
               인쇄
             </button>
 
-            {schedule.status === 'DRAFT' && (
+            {(schedule.status === 'DRAFT' || schedule.status === 'PUBLISHED') && (
               <button
                 onClick={() => setShowDeleteConfirm(true)}
                 disabled={deleteMutation.isPending}
@@ -992,7 +1057,10 @@ export default function SchedulePage() {
           showUnfilled={showUnfilled}
           onToggleViolators={() => setShowViolators((p) => !p)}
           onToggleUnfilled={() => setShowUnfilled((p) => !p)}
-          onClose={() => setV2Result(null)}
+          onClose={() => {
+            setV2Result(null);
+            try { localStorage.removeItem(v2StorageKey); } catch { /* ignore */ }
+          }}
           onDriverClick={(driverId) => setSelectedDriverId(driverId)}
         />
       )}
@@ -1229,7 +1297,8 @@ export default function SchedulePage() {
                         const dateKey = format(date, 'yyyy-MM-dd');
                         const slot = slotMap.get(dateKey);
                         const dow = date.getDay();
-                        const { label, sub, colors, isEmpty } = getCellInfo(slot);
+                        const isVacation = !!slot?.isRestDay && approvedDayoffKeys.has(`${driver.id}|${dateKey}`);
+                        const { label, sub, colors, isEmpty } = getCellInfo(slot, isVacation);
                         const isDraft = schedule.status === 'DRAFT';
                         const isEditable = isDraft && !!slot;
                         const canAdd = isDraft && !slot;
@@ -1247,7 +1316,7 @@ export default function SchedulePage() {
                             } ${(isEditable || canAdd) ? 'cursor-pointer hover:ring-2 hover:ring-blue-400 hover:ring-inset' : ''}`}
                             title={
                               slot
-                                ? `${slot.driver.name} | ${slot.route?.routeNumber || '-'}번 ${slot.route?.name || ''} | ${slot.bus?.busNumber || '차량미배정'} | ${slot.status === 'DROPPED' ? '드랍' : slot.isRestDay ? '휴무' : SHIFT_LABELS[slot.shift] || slot.shift}${slot.notes ? ` | ${slot.notes}` : ''}${friendlyFairnessNote(slot.fairnessNote) ? ` | ${friendlyFairnessNote(slot.fairnessNote)}` : ''}${slot.isManualOverride ? ' | [수동변경]' : ''}`
+                                ? `${slot.driver.name} | ${slot.route?.routeNumber || '-'}번 ${slot.route?.name || ''} | ${slot.bus?.busNumber || '차량미배정'} | ${slot.status === 'DROPPED' ? '드랍' : slot.isRestDay ? (isVacation ? '휴무 (휴가 반영)' : '휴무') : SHIFT_LABELS[slot.shift] || slot.shift}${slot.notes ? ` | ${slot.notes}` : ''}${friendlyFairnessNote(slot.fairnessNote) ? ` | ${friendlyFairnessNote(slot.fairnessNote)}` : ''}${slot.isManualOverride ? ' | [수동변경]' : ''}`
                                 : canAdd
                                   ? '클릭하여 배차 추가'
                                   : ''
@@ -1337,6 +1406,7 @@ export default function SchedulePage() {
             <LegendItem color="bg-slate-100 border-slate-300" label="운행 완료" />
             <LegendItem color="bg-orange-100 border-orange-300" label="결근" />
             <LegendItem color="bg-gray-50 border-gray-200" label="휴무일" />
+            <LegendItem color="bg-teal-50 border-teal-200" label="휴가 반영 휴무" />
             <span className="ml-2 flex items-center gap-2">
               <span className="px-1.5 py-0 text-[10px] font-bold bg-orange-500 text-white rounded">수동</span>
               <span className="text-gray-600 dark:text-gray-400">수동 변경됨</span>
@@ -1840,7 +1910,8 @@ export default function SchedulePage() {
         <Modal
           onClose={() => {
             setShowGenerateModal(false);
-            setAiRecs('');
+            setNewHireIds([]);
+            setBlockedByRoute({});
           }}
           title={`${year}년 ${month}월 배차표 생성`}
           maxWidth="max-w-xl"
@@ -1876,31 +1947,55 @@ export default function SchedulePage() {
 
             <div>
               <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                AI 특이사항 (선택)
+                신규 기사 <span className="text-sm font-normal text-gray-400">(근무일 하한 면제 · 단독 배차 제한)</span>
               </label>
-              <textarea
-                className="input text-base py-3 resize-none"
-                rows={3}
-                placeholder="예: 이번 달은 추석 연휴가 있어서 공휴일 처리가 필요합니다..."
-                value={aiNotes}
-                onChange={(e) => setAiNotes(e.target.value)}
-              />
-              <button
-                onClick={() => aiRecsMutation.mutate()}
-                disabled={aiRecsMutation.isPending}
-                className="mt-3 inline-flex items-center gap-2 text-base px-5 py-3 min-h-[48px] bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium disabled:opacity-50"
-              >
-                <Sparkles size={18} />
-                {aiRecsMutation.isPending ? 'AI 분석 중...' : 'AI 추천 받기'}
-              </button>
+              <DriverMultiSelect drivers={allUsersList} selected={newHireIds} onChange={setNewHireIds} placeholder="신규 기사 이름 검색" />
             </div>
 
-            {aiRecs && (
-              <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded-xl p-5">
-                <h3 className="text-base font-bold text-purple-800 dark:text-purple-300 mb-2 flex items-center gap-2">
-                  <Sparkles size={18} /> AI 추천 사항
-                </h3>
-                <p className="text-base text-purple-700 dark:text-purple-300 whitespace-pre-wrap leading-relaxed">{aiRecs}</p>
+            <div>
+              <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                노선별 사고 기사 <span className="text-sm font-normal text-gray-400">(해당 노선 배차 금지)</span>
+              </label>
+              {routes.length === 0 ? (
+                <p className="text-sm text-gray-400">등록된 노선이 없습니다.</p>
+              ) : (
+                <div className="space-y-3">
+                  {routes.map((r) => (
+                    <div key={r.id}>
+                      <div className="text-sm font-medium text-gray-600 dark:text-gray-300 mb-1.5">{r.routeNumber}번 · {r.name}</div>
+                      <DriverMultiSelect
+                        drivers={allUsersList}
+                        selected={blockedByRoute[r.id] ?? []}
+                        onChange={(ids) => setBlockedByRoute((p) => ({ ...p, [r.id]: ids }))}
+                        placeholder="사고 기사 이름 검색"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {expiringLicenseDrivers.length > 0 && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl p-4">
+                <div className="flex items-start gap-3">
+                  <Shield size={22} className="text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-base font-semibold text-red-800 dark:text-red-300 mb-1">
+                      면허/자격 만료 기사가 있습니다
+                    </p>
+                    <ul className="text-sm text-red-700 dark:text-red-300 space-y-0.5">
+                      {expiringLicenseDrivers.map((d) => (
+                        <li key={d.id}>
+                          <span className="font-medium">{d.name}</span> ({d.employeeId}) — {d.items.join(' · ')}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-sm text-red-600/80 dark:text-red-400/80 mt-2">
+                      만료일 이후 날짜에는 해당 기사가 자동으로 배차에서 제외됩니다.
+                      갱신이 완료된 기사는 기본정보 관리에서 만료일을 먼저 수정해주세요.
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1909,7 +2004,7 @@ export default function SchedulePage() {
               <p className="text-base text-amber-800 dark:text-amber-300">
                 기존 초안 배차표가 있으면 삭제 후 새로 생성됩니다.
                 <br />
-                이미 발행된 배차표는 영향 받지 않습니다.
+                이미 발행된 배차표가 있으면 먼저 삭제한 후 다시 생성할 수 있습니다.
               </p>
             </div>
           </div>
@@ -1918,7 +2013,8 @@ export default function SchedulePage() {
             <button
               onClick={() => {
                 setShowGenerateModal(false);
-                setAiRecs('');
+                setNewHireIds([]);
+                setBlockedByRoute({});
               }}
               className="btn-secondary flex-1 text-base py-3 min-h-[52px]"
             >
@@ -1998,6 +2094,13 @@ export default function SchedulePage() {
             <p className="text-lg text-gray-700 dark:text-gray-300 mb-2">
               <strong>{year}년 {month}월</strong> 배차표를 삭제하시겠습니까?
             </p>
+            {schedule?.status === 'PUBLISHED' && (
+              <p className="text-base text-gray-600 dark:text-gray-300 mb-2">
+                발행된 배차표입니다. 삭제하면 기사 앱에서 더 이상 보이지 않으며,
+                <br />
+                삭제 후 새 배차표를 다시 생성·발행할 수 있습니다.
+              </p>
+            )}
             <p className="text-base text-red-500 dark:text-red-400 font-medium">이 작업은 되돌릴 수 없습니다.</p>
           </div>
           <div className="flex gap-3 mt-6">
@@ -2173,9 +2276,6 @@ function V2ResultPanel({
             <Sparkles size={18} className="text-blue-500" />
             AI 배차 결과
           </h2>
-          <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-0.5">
-            {result.policyUsed} 정책 · {result.slotsCreated.toLocaleString()}개 슬롯 · {((result.elapsedMs ?? 0) / 1000).toFixed(1)}초 소요
-          </p>
         </div>
         <button
           onClick={onClose}
@@ -2210,11 +2310,11 @@ function V2ResultPanel({
           hint={unfilled === 0 ? '모두 배정됨' : '본인 차량 외 충원 필요'}
         />
         <MetricCard
-          label="안전 룰 위반"
+          label="근무일 기준 위반"
           value={`${violators}`}
           unit="명"
           color={violators === 0 ? 'green' : violators < 10 ? 'amber' : 'red'}
-          hint={exempted > 0 ? `면제 ${exempted}명 제외` : ''}
+          hint={exempted > 0 ? `스페어 ${exempted}명 제외` : '월 근무일 허용범위 이탈'}
         />
       </div>
 
@@ -2236,14 +2336,22 @@ function V2ResultPanel({
             <div className="flex items-center gap-2">
               <AlertTriangle size={16} className="text-red-500" />
               <span className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">
-                안전 룰 위반자
+                근무일 기준 위반 기사
               </span>
-              <span className="text-[12px] text-gray-500">({result.hardViolators.length}명)</span>
+              <span className="text-[12px] text-gray-500">
+                ({result.hardViolators.length}명)
+              </span>
             </div>
             {showViolators ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
           </button>
           {showViolators && (
             <div className="overflow-x-auto border-t border-gray-100 dark:border-white/10 max-h-[300px]">
+              {result.hardViolators.some((v) => v.workloadEval?.tier === 'UNDER_MIN') && (
+                <p className="px-6 py-2.5 text-[12px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border-b border-amber-100 dark:border-amber-500/20">
+                  근무일 부족이 여러 명 발생하면 대부분 기사 수에 비해 운행 슬롯이 부족한 경우입니다.
+                  배차 정책 설정에서 월 근무일 하한을 낮추거나, 기사·차량·시프트 구성을 확인해보세요.
+                </p>
+              )}
               <table className="w-full text-[13px]">
                 <thead className="bg-gray-50 dark:bg-white/[0.02] sticky top-0">
                   <tr>
@@ -2255,7 +2363,6 @@ function V2ResultPanel({
                 <tbody className="divide-y divide-gray-100 dark:divide-white/10">
                   {result.hardViolators.map((v, i) => {
                     const tier = v.workloadEval?.tier;
-                    const range = v.workloadEval?.appliedSweetRange;
                     const reason = tier === 'UNDER_MIN' ? '근무일 부족' : tier === 'OVER_MAX' ? '근무일 초과' : tier || '범위 위반';
                     const clickable = v.driverId !== undefined;
                     return (
@@ -2278,7 +2385,6 @@ function V2ResultPanel({
                         </td>
                         <td className="px-4 py-2 text-gray-600 dark:text-gray-300">
                           {reason}
-                          {range && ` (허용 ${range.min}~${range.max}일)`}
                         </td>
                       </tr>
                     );
@@ -2450,10 +2556,8 @@ function DriverDetailModal({
   const violationLine = (() => {
     if (!violatorEntry) return null;
     const tier = violatorEntry.workloadEval?.tier;
-    const range = violatorEntry.workloadEval?.appliedSweetRange;
     if (!tier) return violatorEntry.detail || null;
-    const reason = tier === 'UNDER_MIN' ? '근무일 부족' : tier === 'OVER_MAX' ? '근무일 초과' : tier;
-    return `${reason}${range ? ` (허용 ${range.min}~${range.max}일)` : ''}`;
+    return tier === 'UNDER_MIN' ? '근무일 부족' : tier === 'OVER_MAX' ? '근무일 초과' : tier;
   })();
 
   return (
@@ -2484,7 +2588,7 @@ function DriverDetailModal({
           <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-xl p-3 flex items-start gap-2">
             <AlertTriangle size={16} className="text-red-500 mt-0.5 shrink-0" />
             <div className="text-[13px] text-red-700 dark:text-red-300">
-              <b>안전 룰 위반:</b> {violationLine}
+              <b>근무일 기준 위반:</b> {violationLine}
             </div>
           </div>
         )}
@@ -2734,6 +2838,82 @@ function DayCell({ day, dow, slot, requested }: { day: number; dow: number; slot
         </div>
         {shiftLabel && <div className="text-[9px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">{shiftLabel}</div>}
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// 기사 다중 선택 (배차표 생성 모달: 신규 기사 / 노선별 사고 기사)
+// 선택된 기사는 칩으로 표시, 검색 + 토글 칩으로 추가/제거.
+// ─────────────────────────────────────────────────────────────
+function DriverMultiSelect({
+  drivers,
+  selected,
+  onChange,
+  placeholder,
+}: {
+  drivers: { id: number; name: string }[];
+  selected: number[];
+  onChange: (ids: number[]) => void;
+  placeholder?: string;
+}) {
+  const [q, setQ] = useState('');
+  const toggle = (id: number) =>
+    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  const kw = q.trim().toLowerCase();
+  // 검색어가 있을 때만 후보를 보여준다 (전체 나열로 모듈이 복잡해지는 것 방지)
+  const filtered = kw ? drivers.filter((d) => d.name.toLowerCase().includes(kw)) : [];
+
+  return (
+    <div className="border border-gray-200 dark:border-white/10 rounded-xl p-3 bg-white dark:bg-white/5">
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {selected.map((id) => {
+            const d = drivers.find((x) => x.id === id);
+            return (
+              <span
+                key={id}
+                className="inline-flex items-center gap-1 bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 text-sm px-2 py-1 rounded-lg"
+              >
+                {d?.name ?? `#${id}`}
+                <button onClick={() => toggle(id)} className="hover:text-blue-900 dark:hover:text-blue-100" aria-label="제거">
+                  <X size={12} />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder={placeholder ?? '기사 이름 검색'}
+        className="input text-sm py-2"
+      />
+      {kw && (
+        <div className="max-h-40 overflow-y-auto flex flex-wrap gap-1.5 mt-2">
+          {filtered.length === 0 ? (
+            <span className="text-sm text-gray-400 px-1 py-1">검색 결과가 없습니다.</span>
+          ) : (
+            filtered.map((d) => {
+              const on = selected.includes(d.id);
+              return (
+                <button
+                  key={d.id}
+                  onClick={() => toggle(d.id)}
+                  className={`text-sm px-2.5 py-1 rounded-lg border transition-colors ${
+                    on
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'bg-white dark:bg-white/5 border-gray-200 dark:border-white/15 text-gray-700 dark:text-gray-200 hover:border-blue-400'
+                  }`}
+                >
+                  {d.name}
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 }

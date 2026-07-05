@@ -137,10 +137,12 @@ router.post(
       const { generateMonthlyScheduleV2 } = await import(
         '../services/solverDispatchService'
       );
-      const { year, month, overwriteDraft } = req.body as {
+      const { year, month, overwriteDraft, newHireDriverIds, blockedRoutes } = req.body as {
         year: number;
         month: number;
         overwriteDraft?: boolean;
+        newHireDriverIds?: number[];
+        blockedRoutes?: { routeId: number; driverIds: number[] }[];
       };
       if (!year || !month || month < 1 || month > 12) {
         return res
@@ -157,6 +159,8 @@ router.post(
         month,
         adminId: auth.id,
         overwriteDraft: overwriteDraft ?? false,
+        newHireDriverIds: Array.isArray(newHireDriverIds) ? newHireDriverIds : undefined,
+        blockedRoutes: Array.isArray(blockedRoutes) ? blockedRoutes : undefined,
       });
       return res.status(201).json({
         scheduleId: result.scheduleId,
@@ -175,13 +179,15 @@ router.post(
       });
     } catch (e) {
       const msg = (e as Error).message;
-      const statusCode = msg.includes('이미 발행')
+      const statusCode = msg.includes('이미 발행') || msg.includes('이미 있습니다')
         ? 409
-        : msg.includes('이 없습니다') || msg.includes('매핑이 없')
+        : msg.includes('없습니다')
         ? 422
         : 500;
+      // 내부 오류 문구(영문/기술 상세)는 사용자에게 그대로 노출하지 않음
+      const safeMsg = /[가-힣]/.test(msg) ? msg : '배차표 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
       return res.status(statusCode).json({
-        error: { code: 'GENERATE_V2_FAILED', message: msg },
+        error: { code: 'GENERATE_V2_FAILED', message: safeMsg },
       });
     }
   },

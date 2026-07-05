@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   UserCog,
@@ -14,6 +15,7 @@ import toast from 'react-hot-toast';
 import { usersApi } from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import PageHeader from '../components/PageHeader';
+import { accountsHelp } from '../help/helpContent';
 
 /* ────────────────────────────────────────────
    Types
@@ -59,6 +61,8 @@ const ROLE_COLORS: Record<Role, 'red' | 'purple' | 'blue' | 'emerald' | 'amber' 
 export default function AccountsPage() {
   const qc = useQueryClient();
   const me = useAuthStore((s) => s.user);
+  // 관리자(직원) 계정 비밀번호 초기화는 대표(OWNER)/관리소장(DIRECTOR)만 가능
+  const canResetStaff = me?.role === 'OWNER' || me?.role === 'DIRECTOR';
   const [q, setQ] = useState('');
   const [editing, setEditing] = useState<Account | null>(null);
   const [creating, setCreating] = useState(false);
@@ -106,6 +110,7 @@ export default function AccountsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        help={accountsHelp}
         icon={UserCog}
         title="계정 관리"
         description={<>관리자 직원 계정을 관리합니다. 기사 계정은 <a href="/dashboard/data" className="text-blue-600 dark:text-blue-400 hover:underline">기초 데이터</a>에서 관리하세요.</>}
@@ -170,9 +175,12 @@ export default function AccountsPage() {
                     <Td><Badge color={u.isActive ? 'green' : 'gray'}>{u.isActive ? '활성' : '비활성'}</Badge></Td>
                     <Td align="right">
                       <div className="inline-flex gap-1">
-                        <IconBtn title="비밀번호 초기화" onClick={() => { if (confirm(`${u.name} 계정 비밀번호를 초기화하시겠어요?`)) resetPwd.mutate(u.id); }}>
-                          <KeyRound size={16} />
-                        </IconBtn>
+                        {/* 관리자 계정의 비밀번호 초기화는 대표(OWNER)/관리소장(DIRECTOR)만, 본인 제외 */}
+                        {!isMe && canResetStaff && (
+                          <IconBtn title="비밀번호 초기화" onClick={() => { if (confirm(`${u.name} 계정 비밀번호를 초기화하시겠어요?`)) resetPwd.mutate(u.id); }}>
+                            <KeyRound size={16} />
+                          </IconBtn>
+                        )}
                         <IconBtn title="수정" onClick={() => setEditing(u)}>
                           <Pencil size={16} />
                         </IconBtn>
@@ -209,41 +217,62 @@ export default function AccountsPage() {
 function AccountFormModal({ initial, onClose, onSaved }: { initial: Account | null; onClose: () => void; onSaved: () => void }) {
   const isEdit = !!initial;
   const [name, setName] = useState(initial?.name || '');
-  const [employeeId, setEmployeeId] = useState(initial?.employeeId || '');
+  const employeeId = initial?.employeeId || ''; // 표시용(수정 시 읽기 전용) — 생성 시 서버가 자동 발급
   const [email, setEmail] = useState(initial?.email || '');
   const [phone, setPhone] = useState(initial?.phone || '');
   // 계정 추가 시 역할은 항상 관리자(ADMIN). 기존 계정 수정 시에는 현재 역할을 유지.
   const [role] = useState<Role>(initial?.role || 'ADMIN');
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; phone?: string }>({});
 
   const save = useMutation({
     mutationFn: () => {
       const payload: Record<string, unknown> = {
         name: name.trim(),
-        employeeId: employeeId.trim(),
         email: email.trim(),
         phone: phone.trim() || null,
         role,
         isActive,
       };
+      // 사번은 생성 시 서버에서 자동 발급(ADM###), 수정 시 변경 불가 → payload 에 포함하지 않음
       return isEdit ? usersApi.update(initial!.id, payload) : usersApi.create(payload);
     },
-    onSuccess: () => { toast.success(isEdit ? '수정 완료' : '계정 생성 완료. 초기 비밀번호 = 사번'); onSaved(); },
-    onError: (e) => toast.error(extractError(e)),
+    onSuccess: () => { toast.success(isEdit ? '수정 완료' : '계정 생성 완료. 초기 비밀번호 = 이름(영문)+전화번호 뒤 4자리'); onSaved(); },
+    onError: (e) => {
+      // 중복 이메일/전화번호 등은 각 입력칸 아래에 인라인으로 표시 (toast 대신)
+      const resp = (e as { response?: { data?: { message?: string; errors?: { field: string; message: string }[] } } })?.response?.data;
+      const fe: { email?: string; phone?: string } = {};
+      if (Array.isArray(resp?.errors)) {
+        for (const it of resp!.errors) {
+          if (it.field === 'email') fe.email = it.message;
+          if (it.field === 'phone') fe.phone = it.message;
+        }
+      }
+      const msg = resp?.message || '오류가 발생했습니다.';
+      if (!fe.email && !fe.phone) {
+        if (msg.includes('이메일')) fe.email = msg;
+        else if (msg.includes('전화번호')) fe.phone = msg;
+      }
+      if (fe.email || fe.phone) {
+        setFieldErrors(fe);
+      } else {
+        toast.error(msg);
+      }
+    },
   });
 
   // 관리자 계정은 이메일 필수 — 제출 전 검증
   const handleSave = () => {
+    setFieldErrors({});
     if (!name.trim()) { toast.error('이름을 입력해주세요.'); return; }
-    if (!employeeId.trim()) { toast.error('사번을 입력해주세요.'); return; }
-    if (!email.trim()) { toast.error('이메일을 입력해주세요.'); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { toast.error('유효한 이메일 형식이 아닙니다.'); return; }
+    if (!email.trim()) { setFieldErrors({ email: '이메일을 입력해주세요.' }); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setFieldErrors({ email: '유효한 이메일 형식이 아닙니다.' }); return; }
     save.mutate();
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
-      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto admin-scope" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-white/10">
           <h3 className="text-[19px] font-semibold text-gray-900 dark:text-gray-100">
             {isEdit ? '계정 수정' : '새 계정 추가'}
@@ -255,19 +284,32 @@ function AccountFormModal({ initial, onClose, onSaved }: { initial: Account | nu
             <label className={labelCls}>이름<span className="text-red-500 ml-0.5">*</span></label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="홍길동" className={inputCls} />
           </div>
-          <div>
-            <label className={labelCls}>사번<span className="text-red-500 ml-0.5">*</span></label>
-            <input value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} placeholder="ADM001" className={inputCls} disabled={isEdit} />
-            {!isEdit && <p className="text-[13px] text-gray-400 mt-1">초기 비밀번호 = 사번 (첫 로그인 시 변경 권장)</p>}
-          </div>
+          {isEdit && (
+            <div>
+              <label className={labelCls}>사번</label>
+              <input value={employeeId} className={inputCls} disabled />
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>이메일<span className="text-red-500 ml-0.5">*</span></label>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" className={inputCls} />
+              <input
+                value={email}
+                onChange={(e) => { setEmail(e.target.value); setFieldErrors((p) => ({ ...p, email: undefined })); }}
+                placeholder="name@company.com"
+                className={`${inputCls} ${fieldErrors.email ? 'border-red-400 dark:border-red-500' : ''}`}
+              />
+              {fieldErrors.email && <p className="text-red-500 text-[13px] mt-1">{fieldErrors.email}</p>}
             </div>
             <div>
               <label className={labelCls}>전화번호</label>
-              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="010-1234-5678" className={inputCls} />
+              <input
+                value={phone}
+                onChange={(e) => { setPhone(e.target.value); setFieldErrors((p) => ({ ...p, phone: undefined })); }}
+                placeholder="010-1234-5678"
+                className={`${inputCls} ${fieldErrors.phone ? 'border-red-400 dark:border-red-500' : ''}`}
+              />
+              {fieldErrors.phone && <p className="text-red-500 text-[13px] mt-1">{fieldErrors.phone}</p>}
             </div>
           </div>
           <div>
@@ -280,6 +322,12 @@ function AccountFormModal({ initial, onClose, onSaved }: { initial: Account | nu
             <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
             활성 (로그인 가능)
           </label>
+          {!isEdit && (
+            <p className="text-[13px] text-gray-500 dark:text-gray-400 leading-relaxed">
+              로그인 시 초기 비밀번호는 <b className="text-gray-700 dark:text-gray-200">이름(영문 자판) + 전화번호 뒤 4자리</b>입니다.
+              <br />예) 최진호 · 5288 → <span className="font-mono">chlwlsgh5288</span>. 로그인 후 변경 권장드립니다!
+            </p>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button onClick={onClose} className="px-4 py-2.5 rounded-xl border border-gray-300 dark:border-white/10 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 text-[15px]">
@@ -296,7 +344,8 @@ function AccountFormModal({ initial, onClose, onSaved }: { initial: Account | nu
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

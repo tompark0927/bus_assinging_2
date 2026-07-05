@@ -61,9 +61,9 @@ async function main() {
 
   // ─── 4. Demo – Buses ─────────────────────────────────────────────────
   const buses = await Promise.all([
-    prisma.bus.create({ data: { companyId: demo.id, busNumber: 'DEMO-001', plateNumber: '서울 00가0001', model: '현대 유니버스', year: 2023, capacity: 45, routeId: routes[0].id } }),
-    prisma.bus.create({ data: { companyId: demo.id, busNumber: 'DEMO-002', plateNumber: '서울 00나0002', model: '기아 그랜버드', year: 2022, capacity: 45, routeId: routes[0].id } }),
-    prisma.bus.create({ data: { companyId: demo.id, busNumber: 'DEMO-003', plateNumber: '서울 00다0003', model: '현대 뉴슈퍼에어로시티', year: 2023, capacity: 40, routeId: routes[1].id } }),
+    prisma.bus.create({ data: { companyId: demo.id, busNumber: 'DEMO-001', plateNumber: '서울 00가0001', model: '현대 유니버스', year: 2023, routeId: routes[0].id } }),
+    prisma.bus.create({ data: { companyId: demo.id, busNumber: 'DEMO-002', plateNumber: '서울 00나0002', model: '기아 그랜버드', year: 2022, routeId: routes[0].id } }),
+    prisma.bus.create({ data: { companyId: demo.id, busNumber: 'DEMO-003', plateNumber: '서울 00다0003', model: '현대 뉴슈퍼에어로시티', year: 2023, routeId: routes[1].id } }),
   ]);
   console.log(`✅ Demo buses: ${buses.map(b => b.busNumber).join(', ')}`);
 

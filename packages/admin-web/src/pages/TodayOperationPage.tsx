@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { schedulesApi, emergencyApi, routesApi } from '../services/api';
 import PageHeader from '../components/PageHeader';
+import { todayOperationHelp } from '../help/helpContent';
 
 /* ────────────────────────────────────────────
    Types
@@ -115,7 +116,7 @@ export default function TodayOperationPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <PageHeader icon={Bus} title="오늘 운행 현황" description={friendlyDate} />
+      <PageHeader icon={Bus} title="오늘 운행 현황" description={friendlyDate} help={todayOperationHelp} />
 
       {/* 요약 카드 */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

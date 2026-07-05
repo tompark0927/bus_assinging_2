@@ -16,6 +16,7 @@ import {
 import toast from 'react-hot-toast';
 import { companyInfoApi } from '../services/api';
 import PageHeader from '../components/PageHeader';
+import { companyInfoHelp } from '../help/helpContent';
 
 /* ────────────────────────────────────────────
    Types
@@ -80,7 +81,7 @@ export default function CompanyInfoPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <PageHeader icon={Building2} title="회사 정보" description="회사 기본 정보와 등록 현황입니다." />
+      <PageHeader icon={Building2} title="회사 정보" description="회사 기본 정보와 등록 현황입니다." help={companyInfoHelp} />
 
       {/* 기본 정보 카드 */}
       <section className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6">

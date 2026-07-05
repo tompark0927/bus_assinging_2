@@ -26,6 +26,7 @@
 
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../utils/prisma';
+import { sendBulkPushNotifications } from '../../services/notificationService';
 import type { AgentTool, ToolContext } from '../_core/types';
 
 // ─────────────────────────────────────────────
@@ -480,12 +481,15 @@ const sendTargetedPush: AgentTool<SendTargetedPushInput, unknown> = {
       throw new Error('대상 기사 중 회사 소속 활성 기사가 없습니다.');
     }
 
-    // (제거됨) 에이전트발 기사 대량 푸시 알림 — 발송하지 않음.
+    // 알림함 기록 + Socket.IO + Expo 푸시. data.emergencyDropId 로 발송 대상 추적 가능.
+    await sendBulkPushNotifications(validIds, input.title, input.body, 'EMERGENCY_SLOT', {
+      emergencyDropId: input.dropId,
+      kind: 'AGENT_TARGETED',
+    });
     return {
-      sent: 0,
+      sent: validIds.length,
       requested: input.driverIds.length,
       filtered: input.driverIds.length - validIds.length,
-      note: '기사 푸시 알림은 비활성화되었습니다.',
     };
   },
 };
@@ -805,13 +809,19 @@ const escalateToAdmin: AgentTool<EscalateToAdminInput, unknown> = {
 
     const requirePhone = input.requireManualPhoneCall ?? input.severity === 'CRITICAL';
 
-    // (제거됨) 에이전트발 관리자 경보 푸시 알림 — 발송하지 않음.
+    const dateLabel = `${drop.slot.date.getUTCMonth() + 1}월 ${drop.slot.date.getUTCDate()}일`;
+    await sendBulkPushNotifications(
+      admins.map((a) => a.id),
+      '🚨 대타 미충원 — 관리자 조치 필요',
+      `${dateLabel} ${drop.slot.route.routeNumber}번 노선 대타가 충원되지 않았습니다.${requirePhone ? ' 기사에게 직접 전화 등 즉시 조치가 필요합니다.' : ''}`,
+      'EMERGENCY_SLOT',
+      { dropId: input.dropId, kind: 'ADMIN_ESCALATION', severity: input.severity },
+    );
     return {
-      notified: 0,
+      notified: admins.length,
       adminIds: admins.map((a) => a.id),
       severity: input.severity,
       requireManualPhoneCall: requirePhone,
-      note: '관리자 푸시 알림은 비활성화되었습니다.',
     };
   },
 };
@@ -1011,13 +1021,18 @@ const requestSwap: AgentTool<RequestSwapInput, unknown> = {
       throw new Error('유효한 후보 기사가 없습니다.');
     }
 
-    // (제거됨) 에이전트발 자율 교대 협조 푸시 알림 — 발송하지 않음.
+    await sendBulkPushNotifications(
+      validIds,
+      '🔄 교대 협조 요청',
+      input.message,
+      'EMERGENCY_SLOT',
+      { emergencyDropId: input.dropId, kind: 'voluntary_swap' },
+    );
     return {
-      sent: 0,
+      sent: validIds.length,
       requested: input.candidateDriverIds.length,
       filtered: input.candidateDriverIds.length - validIds.length,
       kind: 'voluntary_swap',
-      note: '기사 푸시 알림은 비활성화되었습니다.',
     };
   },
 };

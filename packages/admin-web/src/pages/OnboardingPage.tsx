@@ -181,8 +181,7 @@ export default function OnboardingPage() {
                 <div className="text-center mb-8">
                   <h1 className="text-2xl font-bold text-gray-900 mb-2">반갑습니다!</h1>
                   <p className="text-gray-500 text-base leading-relaxed">
-                    지금 엑셀로 관리하시는 파일이 있으신가요?<br />
-                    있으시면 파일만 올려 주시면 AI가 자동으로 읽어서 등록해 드립니다.
+                    아래 양식으로 파일 올려 주시면 AI가 자동으로 읽어서 등록해 드립니다.
                   </p>
                 </div>
 

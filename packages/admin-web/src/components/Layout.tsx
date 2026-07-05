@@ -14,6 +14,7 @@ import { useSocket, disconnectSocket } from '../services/socket';
 import CommandPalette from './CommandPalette';
 import ShortcutHelp from './ShortcutHelp';
 import InboxDropdown from './InboxDropdown';
+import ForceChangePasswordModal from './ForceChangePasswordModal';
 
 // 헤더용 alias — InboxDropdown 자체가 header-friendly (compact bell + dropdown pops down)
 const HeaderInbox = InboxDropdown;
@@ -117,6 +118,11 @@ export default function Layout() {
     .map((g) => filterGroup(g, userRole))
     .filter((g): g is NavGroup => g !== null);
   const visibleOwnerGroup = filterGroup(ownerOnlyGroup, userRole);
+
+  // 최초 강제 비밀번호 변경 — 변경 전까지 대시보드 접근 차단
+  if (user?.mustChangePassword) {
+    return <ForceChangePasswordModal onLogout={handleLogout} />;
+  }
 
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
