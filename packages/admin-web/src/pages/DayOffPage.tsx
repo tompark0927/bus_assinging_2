@@ -332,7 +332,7 @@ export default function DayOffPage() {
         <div className="xl:col-span-2">
           <div className="card p-0 overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100">
-              <h2 className="text-[18px] font-bold text-gray-900">휴무 요청 목록</h2>
+              <h2 className="text-[18px] font-bold text-gray-900 dark:text-white">휴무 요청 목록</h2>
             </div>
 
             {isLoading ? (
@@ -480,7 +480,7 @@ export default function DayOffPage() {
         <div className="xl:col-span-1">
           <div className="card p-0 overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-100">
-              <h2 className="text-[18px] font-bold text-gray-900">승인된 휴무 현황</h2>
+              <h2 className="text-[18px] font-bold text-gray-900 dark:text-white">승인된 휴무 현황</h2>
               <p className="text-[14px] text-gray-400 mt-0.5">
                 {format(selectedMonth, 'yyyy년 MM월', { locale: ko })}
               </p>
@@ -614,7 +614,7 @@ export default function DayOffPage() {
                 )}
               </div>
               <div>
-                <h2 className="text-[20px] font-bold text-gray-900">
+                <h2 className="text-[18px] font-bold text-gray-900 dark:text-white">
                   {reviewModal.action === 'APPROVED' ? '휴무 승인' : '휴무 반려'}
                 </h2>
                 <p className="text-[14px] text-gray-500">

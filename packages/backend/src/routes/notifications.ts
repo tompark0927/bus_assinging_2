@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getNotifications, markAsRead, markAllAsRead } from '../controllers/notificationController';
+import { getNotifications, markAsRead, markAllAsRead, deleteNotification } from '../controllers/notificationController';
 import { authenticate } from '../middleware/auth';
 import { notificationValidation } from '../middleware/validate';
 
@@ -10,5 +10,6 @@ router.use(authenticate);
 router.get('/', getNotifications);
 router.put('/:id/read', ...notificationValidation.markAsRead, markAsRead);
 router.put('/read-all', markAllAsRead);
+router.delete('/:id', deleteNotification);
 
 export default router;

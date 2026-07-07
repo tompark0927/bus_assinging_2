@@ -12,6 +12,9 @@ import {
   getAIRecommendations,
   bisExport,
   getMyMonthlySummary,
+  listMonthSchedules,
+  duplicateSchedule,
+  renameSchedule,
 } from '../controllers/scheduleController';
 import { authenticate, requireRole } from '../middleware/auth';
 import { scheduleValidation } from '../middleware/validate';
@@ -74,6 +77,12 @@ router.get('/', getScheduleList);
  */
 router.get('/:year/:month', ...scheduleValidation.getSchedule, getSchedule);
 router.get('/:year/:month/summary', ...scheduleValidation.getSchedule, getMyMonthlySummary);
+// 멀티 초안: 해당 월의 모든 배차표(초안 프로필 + 발행본) 목록
+router.get('/:year/:month/drafts', requireRole('DISPATCH'), ...scheduleValidation.getSchedule, listMonthSchedules);
+// 멀티 초안: 배차표 복제 (새 초안 프로필로)
+router.post('/by-id/:id/duplicate', requireRole('DISPATCH'), duplicateSchedule);
+// 멀티 초안: 프로필 이름 변경
+router.put('/by-id/:id/rename', requireRole('DISPATCH'), renameSchedule);
 
 /**
  * @swagger
@@ -137,10 +146,14 @@ router.post(
       const { generateMonthlyScheduleV2 } = await import(
         '../services/solverDispatchService'
       );
-      const { year, month, overwriteDraft, newHireDriverIds, blockedRoutes } = req.body as {
+      const { year, month, name, workDays, restDays, newHireDriverIds, blockedRoutes } = req.body as {
         year: number;
         month: number;
-        overwriteDraft?: boolean;
+        /** 초안 프로필 이름 (선택) — 미지정 시 "초안 N" 자동 부여 */
+        name?: string;
+        /** 근무/휴무 사이클 (선택) — 회사 정책의 restCycle 을 오버라이드 */
+        workDays?: number;
+        restDays?: number;
         newHireDriverIds?: number[];
         blockedRoutes?: { routeId: number; driverIds: number[] }[];
       };
@@ -158,7 +171,13 @@ router.post(
         year,
         month,
         adminId: auth.id,
-        overwriteDraft: overwriteDraft ?? false,
+        name: typeof name === 'string' && name.trim() ? name.trim().slice(0, 50) : undefined,
+        restCycleOverride:
+          Number.isInteger(workDays) && Number.isInteger(restDays) &&
+          (workDays as number) >= 1 && (workDays as number) <= 7 &&
+          (restDays as number) >= 1 && (restDays as number) <= 7
+            ? { workDays: workDays as number, restDays: restDays as number }
+            : undefined,
         newHireDriverIds: Array.isArray(newHireDriverIds) ? newHireDriverIds : undefined,
         blockedRoutes: Array.isArray(blockedRoutes) ? blockedRoutes : undefined,
       });
@@ -179,7 +198,7 @@ router.post(
       });
     } catch (e) {
       const msg = (e as Error).message;
-      const statusCode = msg.includes('이미 발행') || msg.includes('이미 있습니다')
+      const statusCode = msg.includes('이미 발행') || msg.includes('이미 있습니다') || msg.includes('이미 5개')
         ? 409
         : msg.includes('없습니다')
         ? 422

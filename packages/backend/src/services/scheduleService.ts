@@ -214,17 +214,17 @@ export async function generateMonthlySchedule(
     warnings.push(`${d.name} 기사님은 배정 노선 없어 제외`);
   }
 
-  // ── 기존 초안 삭제 + 새 배차표 생성 ───────────────────
+  // ── 새 초안 생성 (멀티 초안 — 기존 초안은 유지, 월당 최대 5개) ───────
   const schedule = await prisma.$transaction(async (tx) => {
-    const existing = await tx.schedule.findUnique({
-      where: { companyId_year_month: { companyId, year, month } },
+    const draftCount = await tx.schedule.count({
+      where: { companyId, year, month, status: 'DRAFT' },
     });
-    if (existing) {
-      if (existing.status === 'PUBLISHED') throw new Error('이미 발행된 배차표가 있습니다.');
-      await tx.scheduleSlot.deleteMany({ where: { scheduleId: existing.id } });
-      await tx.schedule.delete({ where: { id: existing.id } });
+    if (draftCount >= 5) {
+      throw new Error('이 달의 초안이 이미 5개입니다. 사용하지 않는 초안을 삭제한 후 다시 생성해주세요.');
     }
-    return tx.schedule.create({ data: { companyId, year, month, status: 'DRAFT', createdBy: adminId } });
+    return tx.schedule.create({
+      data: { companyId, year, month, status: 'DRAFT', createdBy: adminId, name: `초안 ${draftCount + 1}` },
+    });
   });
 
   const daysInMonth = new Date(year, month, 0).getDate();
@@ -505,9 +505,76 @@ export interface FairnessReportEntry {
 // ─────────────────────────────────────────────────────
 // 배차표 조회
 // ─────────────────────────────────────────────────────
-export async function getScheduleWithSlots(companyId: number, year: number, month: number) {
-  return prisma.schedule.findUnique({
-    where: { companyId_year_month: { companyId, year, month } },
+
+/**
+ * 월 배차표 해석 — 멀티 초안(프로필) 지원.
+ *  - scheduleId 지정: 해당 배차표 (회사·연월 일치 검증)
+ *  - 미지정: PUBLISHED 우선, 없으면 가장 최근 수정된 초안
+ */
+export async function resolveMonthScheduleId(
+  companyId: number,
+  year: number,
+  month: number,
+  scheduleId?: number,
+): Promise<number | null> {
+  if (scheduleId) {
+    const s = await prisma.schedule.findFirst({
+      where: { id: scheduleId, companyId, year, month },
+      select: { id: true },
+    });
+    return s?.id ?? null;
+  }
+  const published = await prisma.schedule.findFirst({
+    where: { companyId, year, month, status: 'PUBLISHED' },
+    select: { id: true },
+  });
+  if (published) return published.id;
+  const latest = await prisma.schedule.findFirst({
+    where: { companyId, year, month },
+    orderBy: { updatedAt: 'desc' },
+    select: { id: true },
+  });
+  return latest?.id ?? null;
+}
+
+/**
+ * 같은 달 안에서 겹치지 않는 프로필 이름을 만든다.
+ *  - base 가 비어있지 않고 안 겹치면 그대로 반환
+ *  - 겹치면 "base (2)", "base (3)" ... 로 증가
+ * tx 가 주어지면 트랜잭션 클라이언트로 조회 (persist 중 원자성 유지)
+ */
+export async function uniqueScheduleName(
+  companyId: number,
+  year: number,
+  month: number,
+  base: string,
+  tx: { schedule: { findMany: typeof prisma.schedule.findMany } } = prisma,
+  excludeId?: number,
+): Promise<string> {
+  const rows = await tx.schedule.findMany({
+    where: { companyId, year, month, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    select: { name: true },
+  });
+  const taken = new Set(rows.map((r) => r.name));
+  const trimmed = base.trim() || '초안';
+  if (!taken.has(trimmed)) return trimmed;
+  for (let i = 2; i < 100; i++) {
+    const candidate = `${trimmed} (${i})`.slice(0, 50);
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${trimmed} (${Date.now() % 10000})`.slice(0, 50);
+}
+
+export async function getScheduleWithSlots(
+  companyId: number,
+  year: number,
+  month: number,
+  scheduleId?: number,
+) {
+  const id = await resolveMonthScheduleId(companyId, year, month, scheduleId);
+  if (id === null) return null;
+  return prisma.schedule.findFirst({
+    where: { id, companyId },
     include: {
       slots: {
         include: {

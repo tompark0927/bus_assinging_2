@@ -209,7 +209,7 @@ export default function DispatchSettingsPage() {
       </PageHeader>
 
       {/* Section: Preset */}
-      <Section icon={<Sparkles className="w-5 h-5 text-purple-500" />} title="빠른 프리셋" desc="회사 유형에 맞는 표준 설정을 한 번에 적용합니다.">
+      <Section icon={<Sparkles className="w-5 h-5 text-gray-900 dark:text-white" />} title="빠른 프리셋" desc="회사 유형에 맞는 표준 설정을 한 번에 적용합니다.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <PresetCard
             active={policy.preset === 'CITY_2SHIFT'}
@@ -328,7 +328,7 @@ export default function DispatchSettingsPage() {
 
       {/* Section: 안전·운영 룰 */}
       <Section
-        icon={<ShieldCheck className="w-5 h-5 text-green-500" />}
+        icon={<ShieldCheck className="w-5 h-5 text-gray-900 dark:text-white" />}
         title="안전·운영 룰"
         desc="회사 단협 또는 안전 정책으로 켜고 끌 수 있습니다. 일부는 법적 강제로 잠겨 있습니다."
       >
@@ -776,7 +776,7 @@ function Section({
   return (
     <section className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6">
       <div className="mb-5">
-        <h2 className="text-[20px] font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+        <h2 className="text-[18px] font-bold text-gray-900 dark:text-white flex items-center gap-2">
           {icon}
           {title}
         </h2>

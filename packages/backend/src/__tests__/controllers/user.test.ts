@@ -12,6 +12,7 @@ import {
 } from '../../controllers/userController';
 import { prisma } from '../../utils/prisma';
 import { AuthRequest } from '../../middleware/auth';
+import { generateInitialPassword } from '../../utils/initialPassword';
 
 jest.mock('../../utils/logger', () => ({
   __esModule: true,
@@ -61,13 +62,21 @@ describe('getUsers controller', () => {
 
     mockPrisma.user.findMany.mockResolvedValue(users);
     mockPrisma.user.count.mockResolvedValue(2);
+    // 기사별 올해 사용 휴가 수 집계 (잔여 휴가 계산용)
+    mockPrisma.dayOffRequest.groupBy.mockResolvedValue([
+      { driverId: 10, _count: { _all: 3 } },
+    ]);
 
     await getUsers(req, res);
 
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
         success: true,
-        data: users,
+        // 각 유저에 vacationUsed(올해 비반려 휴무요청 수)가 병합되어 반환
+        data: [
+          { ...users[0], vacationUsed: 3 },
+          { ...users[1], vacationUsed: 0 },
+        ],
         pagination: expect.objectContaining({ total: 2 }),
       }),
     );
@@ -175,9 +184,23 @@ describe('createUser controller', () => {
     );
   });
 
-  it('should use employeeId as default password when password not provided', async () => {
+  it('should return 400 when DRIVER has no phone (초기 비밀번호 생성에 필요)', async () => {
     const req = createAuthReq({
       body: { name: '최기사', email: 'choi@test.com', employeeId: 'DRV030' },
+    });
+    const res = createMockRes();
+
+    await createUser(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('전화번호가 필수') }),
+    );
+  });
+
+  it('should use "이름(영타)+전화번호 뒤4자리" as default password and force change', async () => {
+    const req = createAuthReq({
+      body: { name: '최기사', email: 'choi@test.com', phone: '010-1234-5678', employeeId: 'DRV030' },
     });
     const res = createMockRes();
 
@@ -186,15 +209,17 @@ describe('createUser controller', () => {
 
     await createUser(req, res);
 
-    // The hashed password should be verifiable with employeeId
+    // 초기 비밀번호 = generateInitialPassword(이름, 전화번호)
     const createdData = mockPrisma.user.create.mock.calls[0][0].data;
-    const isMatch = await bcrypt.compare('DRV030', createdData.password);
+    const isMatch = await bcrypt.compare(generateInitialPassword('최기사', '010-1234-5678'), createdData.password);
     expect(isMatch).toBe(true);
+    // 자동 생성 비밀번호 → 첫 로그인 시 변경 강제
+    expect(createdData.mustChangePassword).toBe(true);
   });
 
-  it('should return 409 for duplicate email or employeeId', async () => {
+  it('should return 409 for duplicate email', async () => {
     const req = createAuthReq({
-      body: { name: '김기사', email: 'kim@test.busync.kr', employeeId: 'DRV010' },
+      body: { name: '김기사', email: 'kim@test.busync.kr', phone: '010-1111-2222', employeeId: 'DRV010' },
     });
     const res = createMockRes();
 
@@ -204,13 +229,32 @@ describe('createUser controller', () => {
 
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining('이미 존재') }),
+      expect.objectContaining({ message: expect.stringContaining('이미 사용 중') }),
+    );
+  });
+
+  it('should return 409 for duplicate employeeId', async () => {
+    const req = createAuthReq({
+      body: { name: '김기사', phone: '010-1111-2222', employeeId: 'DRV010' },
+    });
+    const res = createMockRes();
+
+    // 전화번호 중복 없음 → 사번 중복 검출
+    mockPrisma.user.findFirst
+      .mockResolvedValueOnce(null) // phone dup check
+      .mockResolvedValueOnce({ id: 10 }); // employeeId dup check
+
+    await createUser(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('이미 존재하는 사번') }),
     );
   });
 
   it('should return 500 on error', async () => {
     const req = createAuthReq({
-      body: { name: '실패', email: 'fail@test.com', employeeId: 'X001' },
+      body: { name: '실패', email: 'fail@test.com', phone: '010-9999-8888', employeeId: 'X001' },
     });
     const res = createMockRes();
 
@@ -236,9 +280,12 @@ describe('updateUser controller', () => {
     });
     const res = createMockRes();
 
-    mockPrisma.user.findFirst.mockResolvedValue({
-      id: 10, name: '김기사', phone: '010-1111-1111', driverType: null, isActive: true,
-    });
+    mockPrisma.user.findFirst
+      .mockResolvedValueOnce({
+        id: 10, name: '김기사', phone: '010-1111-1111', driverType: null, isActive: true,
+      })
+      // 전화번호 변경 시 회사 내 중복 검사 (본인 제외) → 중복 없음
+      .mockResolvedValueOnce(null);
     mockPrisma.user.update.mockResolvedValue({
       id: 10, name: '김기사(수정)', phone: '010-0000-0000',
     });

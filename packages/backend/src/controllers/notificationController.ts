@@ -53,3 +53,20 @@ export const markAllAsRead = async (req: AuthRequest, res: Response) => {
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
   }
 };
+
+// 알림 삭제 (앱에서 스와이프로 없애기) — 본인 알림만
+export const deleteNotification = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ success: false, message: '유효하지 않은 알림 ID입니다.' });
+    }
+    await prisma.notification.deleteMany({
+      where: { id, userId: req.user!.id, companyId: req.user!.companyId },
+    });
+    return res.json({ success: true });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};

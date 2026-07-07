@@ -36,8 +36,8 @@ import { DispatchAgent } from '../../agents/dispatch.agent';
 import { DISPATCH_TOOLS_V1 } from '../../agents/_tools/dispatch-tools';
 
 describe('DispatchAgent', () => {
-  it('15개 도구가 모두 등록되어 있다', () => {
-    expect(DISPATCH_TOOLS_V1).toHaveLength(15);
+  it('16개 도구가 모두 등록되어 있다', () => {
+    expect(DISPATCH_TOOLS_V1).toHaveLength(16);
     const names = DISPATCH_TOOLS_V1.map((t) => t.name);
     expect(names).toEqual([
       'get_drivers',
@@ -48,6 +48,7 @@ describe('DispatchAgent', () => {
       'get_driver_history',
       'score_fairness',
       'draft_monthly_schedule',
+      'draft_schedule_v2',
       'modify_slot',
       'publish_schedule',
       'swap_drivers',
@@ -60,7 +61,7 @@ describe('DispatchAgent', () => {
 
   it('각 도구가 description + inputSchema 를 갖는다 (Anthropic API 요구사항)', () => {
     for (const tool of DISPATCH_TOOLS_V1) {
-      expect(tool.name).toMatch(/^[a-z_]+$/); // snake_case
+      expect(tool.name).toMatch(/^[a-z0-9_]+$/); // snake_case (숫자 허용 — draft_schedule_v2)
       expect(tool.description.length).toBeGreaterThan(20);
       expect(tool.inputSchema.type).toBe('object');
       expect(tool.inputSchema.properties).toBeDefined();
@@ -73,6 +74,7 @@ describe('DispatchAgent', () => {
     expect(blockedNames).toEqual(
       expect.arrayContaining([
         'draft_monthly_schedule',
+        'draft_schedule_v2',
         'modify_slot',
         'publish_schedule',
         'swap_drivers',
@@ -116,6 +118,7 @@ describe('DispatchAgent', () => {
       get_driver_history: ['driverId'],
       score_fairness: ['scheduleId'],
       draft_monthly_schedule: ['year', 'month'],
+      draft_schedule_v2: ['year', 'month'],
       modify_slot: ['slotId', 'reason'],
       publish_schedule: ['scheduleId', 'summary'],
       swap_drivers: ['slotAId', 'slotBId', 'reason'],

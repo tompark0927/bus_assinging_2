@@ -231,14 +231,23 @@ export const companyInfoApi = {
 // Schedules
 export const schedulesApi = {
   list: () => api.get('/schedules'),
-  get: (year: number, month: number) => api.get(`/schedules/${year}/${month}`),
+  get: (year: number, month: number, scheduleId?: number) =>
+    api.get(`/schedules/${year}/${month}`, { params: scheduleId ? { scheduleId } : undefined }),
+  // 멀티 초안: 해당 월의 모든 배차표(초안 프로필 + 발행본) 목록
+  listDrafts: (year: number, month: number) => api.get(`/schedules/${year}/${month}/drafts`),
+  // 멀티 초안: 배차표를 새 초안 프로필로 복제
+  duplicate: (scheduleId: number) => api.post(`/schedules/by-id/${scheduleId}/duplicate`),
+  // 멀티 초안: 프로필 이름 변경
+  rename: (scheduleId: number, name: string) => api.put(`/schedules/by-id/${scheduleId}/rename`, { name }),
   generate: (data: { year: number; month: number; workDays?: number; restDays?: number }) =>
     api.post('/schedules/generate', data),
-  // v2: 정책 기반 솔버 (PAIR/SOLO + 1/2/3교대 + 헌법룰). overwriteDraft=true 면 기존 DRAFT 덮어씀.
+  // v2: 정책 기반 솔버 (PAIR/SOLO + 1/2/3교대 + 헌법룰). 생성할 때마다 새 초안 프로필 추가 (월 최대 5개).
   generateV2: (data: {
     year: number;
     month: number;
-    overwriteDraft?: boolean;
+    name?: string;
+    workDays?: number;
+    restDays?: number;
     newHireDriverIds?: number[];
     blockedRoutes?: { routeId: number; driverIds: number[] }[];
   }) => api.post('/schedules/generate-v2', data),
@@ -248,12 +257,12 @@ export const schedulesApi = {
     api.post('/schedules/slots', data),
   overrideSlot: (slotId: number, data: Record<string, unknown>) =>
     api.put(`/schedules/slots/${slotId}/override`, data),
-  publish: (year: number, month: number) =>
-    api.put(`/schedules/${year}/${month}/publish`),
-  delete: (year: number, month: number) =>
-    api.delete(`/schedules/${year}/${month}`),
-  exportExcel: (year: number, month: number) =>
-    api.get(`/schedules/${year}/${month}/export`, { responseType: 'blob' }),
+  publish: (year: number, month: number, scheduleId?: number) =>
+    api.put(`/schedules/${year}/${month}/publish`, scheduleId ? { scheduleId } : undefined),
+  delete: (year: number, month: number, scheduleId?: number) =>
+    api.delete(`/schedules/${year}/${month}`, { params: scheduleId ? { scheduleId } : undefined }),
+  exportExcel: (year: number, month: number, scheduleId?: number) =>
+    api.get(`/schedules/${year}/${month}/export`, { responseType: 'blob', params: scheduleId ? { scheduleId } : undefined }),
   getAIRecommendations: (year: number, month: number, notes: string) =>
     api.post(`/schedules/${year}/${month}/ai-recommendations`, { notes }),
 };

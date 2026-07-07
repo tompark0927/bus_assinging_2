@@ -187,23 +187,40 @@ describe('updateRoute controller', () => {
 });
 
 // ─────────────────────────────────────────
-// deleteRoute (soft delete)
+// deleteRoute (hard delete — 종속 데이터 정리 후 노선 완전 삭제)
 // ─────────────────────────────────────────
 
 describe('deleteRoute controller', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('should soft-delete route', async () => {
+  it('should hard-delete route with dependent records cleaned up', async () => {
     const req = createAuthReq({ params: { id: '1' } });
     const res = createMockRes();
 
     mockPrisma.route.findFirst.mockResolvedValue({ id: 1 });
-    mockPrisma.route.update.mockResolvedValue({ id: 1, isActive: false });
+    mockPrisma.scheduleSlot.findMany.mockResolvedValue([{ id: 100 }, { id: 101 }]);
+    mockPrisma.emergencyDrop.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.scheduleSlot.deleteMany.mockResolvedValue({ count: 2 });
+    mockPrisma.routeAssignment.deleteMany.mockResolvedValue({ count: 1 });
+    mockPrisma.driverPreference.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.bus.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.post.updateMany.mockResolvedValue({ count: 0 });
+    mockPrisma.route.delete.mockResolvedValue({ id: 1 });
 
     await deleteRoute(req, res);
 
+    // 슬롯에 걸린 대타 → 슬롯 → 배정/선호 정리, 버스·게시글은 노선 연결만 해제
+    expect(mockPrisma.emergencyDrop.deleteMany).toHaveBeenCalledWith({
+      where: { slotId: { in: [100, 101] } },
+    });
+    expect(mockPrisma.scheduleSlot.deleteMany).toHaveBeenCalledWith({ where: { routeId: 1 } });
+    expect(mockPrisma.bus.updateMany).toHaveBeenCalledWith({
+      where: { routeId: 1 },
+      data: { routeId: null },
+    });
+    expect(mockPrisma.route.delete).toHaveBeenCalledWith({ where: { id: 1 } });
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: true, message: expect.stringContaining('비활성화') }),
+      expect.objectContaining({ success: true, message: expect.stringContaining('삭제') }),
     );
   });
 

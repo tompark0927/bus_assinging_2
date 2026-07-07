@@ -59,7 +59,8 @@ function determineNextEscalationLevel(
 
 describe('에스컬레이션 시작 레벨 결정', () => {
   const today = new Date('2026-03-13T08:00:00');
-  const tomorrow = new Date('2026-03-14');
+  // 'T00:00:00' 을 붙여 로컬 자정으로 생성 — 날짜만 쓰면 UTC 자정으로 파싱되어 TZ 에 따라 다른 날이 됨
+  const tomorrow = new Date('2026-03-14T00:00:00');
 
   it('미래 드랍 → 레벨 0 (여유 있음)', () => {
     expect(determineStartLevel(tomorrow, 'MORNING', today)).toBe(0);
@@ -68,35 +69,35 @@ describe('에스컬레이션 시작 레벨 결정', () => {
   it('당일이지만 출발 4시간 전 → 레벨 0', () => {
     // MORNING = 6am, now = 2am → 4h = 240min
     const now = new Date('2026-03-13T02:00:00');
-    const slotDate = new Date('2026-03-13');
+    const slotDate = new Date('2026-03-13T00:00:00');
     expect(determineStartLevel(slotDate, 'MORNING', now)).toBe(0);
   });
 
   it('당일 출발 1.5시간 전 → 레벨 2 (전체 기사)', () => {
     // MORNING = 6am, now = 4:30am → 90min
     const now = new Date('2026-03-13T04:30:00');
-    const slotDate = new Date('2026-03-13');
+    const slotDate = new Date('2026-03-13T00:00:00');
     expect(determineStartLevel(slotDate, 'MORNING', now)).toBe(2);
   });
 
   it('당일 출발 45분 전 → 레벨 3 (관리자 경보)', () => {
     // MORNING = 6am, now = 5:15am → 45min
     const now = new Date('2026-03-13T05:15:00');
-    const slotDate = new Date('2026-03-13');
+    const slotDate = new Date('2026-03-13T00:00:00');
     expect(determineStartLevel(slotDate, 'MORNING', now)).toBe(3);
   });
 
   it('오후 운행 (AFTERNOON = 14시), 13시 드랍 → 레벨 2', () => {
     // now = 13:00, departure = 14:00 → 60min
     const now = new Date('2026-03-13T13:00:00');
-    const slotDate = new Date('2026-03-13');
+    const slotDate = new Date('2026-03-13T00:00:00');
     // 60min ≤ 60 → level 3
     expect(determineStartLevel(slotDate, 'AFTERNOON', now)).toBe(3);
   });
 
   it('FULL_DAY는 MORNING과 동일 출발 시각', () => {
     const now = new Date('2026-03-13T04:30:00');
-    const slotDate = new Date('2026-03-13');
+    const slotDate = new Date('2026-03-13T00:00:00');
     expect(determineStartLevel(slotDate, 'FULL_DAY', now)).toBe(2);
   });
 });

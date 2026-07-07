@@ -190,8 +190,9 @@ export const reviewDayOffRequest = async (req: AuthRequest, res: Response) => {
         const year = updatedRequest.date.getFullYear();
         const month = updatedRequest.date.getMonth() + 1;
 
-        const schedule = await tx.schedule.findUnique({
-          where: { companyId_year_month: { companyId: req.user!.companyId, year, month } },
+        // 드랍/대타는 운영 중인(발행된) 배차표에만 적용 — 초안 프로필에는 만들지 않음
+        const schedule = await tx.schedule.findFirst({
+          where: { companyId: req.user!.companyId, year, month, status: 'PUBLISHED' },
         });
 
         if (schedule) {

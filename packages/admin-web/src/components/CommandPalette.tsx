@@ -56,7 +56,7 @@ const PAGE_ITEMS: SearchResult[] = [
   { id: 'page-emergency', category: '페이지', icon: AlertTriangle, title: '대타 관리', subtitle: '대타 요청 검토 및 충원', path: '/dashboard/emergency' },
   { id: 'page-dayoff', category: '페이지', icon: CalendarOff, title: '휴무 요청', subtitle: '기사 휴무 요청 승인/반려', path: '/dashboard/dayoff' },
   { id: 'page-today', category: '페이지', icon: Bus, title: '오늘 운행 현황', subtitle: '오늘 노선별 운행 상태', path: '/dashboard/today' },
-  { id: 'page-reports', category: '페이지', icon: FileText, title: '일일 보고서', subtitle: '매일 09시 자동 생성 운영 보고', path: '/dashboard/daily-reports' },
+  // 일일 보고서 — 정식 출시 전까지 숨김
   { id: 'page-data', category: '페이지', icon: Users, title: '기초 데이터', subtitle: '기사·버스·노선 관리', path: '/dashboard/data' },
   { id: 'page-settings', category: '페이지', icon: Settings, title: '배차 설정', subtitle: '회사 운영 정책 편집', path: '/dashboard/settings' },
   { id: 'page-accounts', category: '페이지', icon: UserCog, title: '계정 관리', subtitle: '직원 계정 추가·수정', path: '/dashboard/accounts' },

@@ -5,7 +5,7 @@ import { useAuthStore } from '../store/authStore';
 import { companyInfoApi } from '../services/api';
 import {
   LayoutDashboard, Calendar, AlertTriangle, Database, LogOut,
-  Settings, FileText,
+  Settings,
   CalendarOff, Bus, UserCog, Building2, ScrollText,
   PanelLeftClose, PanelLeft,
 } from 'lucide-react';
@@ -53,7 +53,8 @@ const navGroups: NavGroup[] = [
   {
     label: '데이터·정보',
     items: [
-      { to: '/dashboard/daily-reports', labelKey: '일일 보고서', icon: FileText, roles: ['DISPATCH'] },
+      // 일일 보고서 — 정식 출시 전까지 숨김 (라우트는 유지하되 네비게이션에서 제외)
+      // { to: '/dashboard/daily-reports', labelKey: '일일 보고서', icon: FileText, roles: ['DISPATCH'] },
       { to: '/dashboard/data', labelKey: '기초 데이터', icon: Database, roles: ['DISPATCH', 'HR'] },
     ],
   },

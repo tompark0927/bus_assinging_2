@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { prisma } from '../utils/prisma';
+import { resolveMonthScheduleId } from './scheduleService';
 
 const SHIFT_LABELS: Record<string, string> = {
   MORNING: '오전',
@@ -9,9 +10,16 @@ const SHIFT_LABELS: Record<string, string> = {
 
 const DAYS_KR = ['일', '월', '화', '수', '목', '금', '토'];
 
-export async function generateScheduleExcel(companyId: number, year: number, month: number): Promise<Buffer> {
-  const schedule = await prisma.schedule.findUnique({
-    where: { companyId_year_month: { companyId, year, month } },
+export async function generateScheduleExcel(
+  companyId: number,
+  year: number,
+  month: number,
+  scheduleId?: number,
+): Promise<Buffer> {
+  const resolvedId = await resolveMonthScheduleId(companyId, year, month, scheduleId);
+  if (resolvedId === null) throw new Error('배차표를 찾을 수 없습니다.');
+  const schedule = await prisma.schedule.findFirst({
+    where: { id: resolvedId, companyId },
     include: {
       slots: {
         include: {

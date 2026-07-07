@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   RefreshControl,
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -12,7 +13,7 @@ import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import EmptyState from '../components/EmptyState';
 import { CardSkeleton } from '../components/Skeleton';
-import { colors, radius, spacing, typography, weight, shadow } from '../theme';
+import { colors, radius, spacing, typography, weight } from '../theme';
 
 interface NotificationItem {
   id: number;
@@ -65,6 +66,95 @@ function groupByDate(
   return Array.from(groups.entries()).map(([label, items]) => ({ label, items }));
 }
 
+// 스와이프로 삭제 가능한 알림 카드 한 줄
+function NotificationRow({
+  notif,
+  iconInfo,
+  target,
+  onPress,
+  onDelete,
+}: {
+  notif: NotificationItem;
+  iconInfo: { name: keyof typeof Ionicons.glyphMap; color: string; bg: string };
+  target?: string;
+  onPress: () => void;
+  onDelete: () => void;
+}) {
+  const swipeRef = useRef<Swipeable>(null);
+
+  const renderRightActions = () => (
+    <TouchableOpacity
+      style={styles.deleteAction}
+      onPress={() => {
+        swipeRef.current?.close();
+        onDelete();
+      }}
+      activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel="알림 삭제"
+    >
+      <Ionicons name="trash-outline" size={22} color="#fff" />
+      <Text style={styles.deleteActionText}>삭제</Text>
+    </TouchableOpacity>
+  );
+
+  return (
+    <Swipeable
+      ref={swipeRef}
+      renderRightActions={renderRightActions}
+      overshootRight={false}
+      onSwipeableOpen={(direction) => {
+        // 끝까지 밀면 바로 삭제
+        if (direction === 'right') {
+          swipeRef.current?.close();
+          onDelete();
+        }
+      }}
+      rightThreshold={40}
+      friction={2}
+      containerStyle={styles.swipeContainer}
+    >
+      <TouchableOpacity
+        style={[styles.notifCard, !notif.isRead && styles.unread]}
+        onPress={onPress}
+        activeOpacity={0.7}
+      >
+        <View style={[styles.iconBox, { backgroundColor: iconInfo.bg }]}>
+          <Ionicons name={iconInfo.name} size={18} color={iconInfo.color} />
+        </View>
+        <View style={styles.notifContent}>
+          <View style={styles.notifTitleRow}>
+            <Text
+              style={[styles.notifTitle, !notif.isRead && styles.unreadTitle]}
+              numberOfLines={1}
+            >
+              {notif.title}
+            </Text>
+            {!notif.isRead && <View style={styles.unreadDot} />}
+          </View>
+          <Text style={styles.notifBody} numberOfLines={2}>
+            {notif.body}
+          </Text>
+          <Text style={styles.notifTime}>
+            {formatDistanceToNow(new Date(notif.createdAt), {
+              addSuffix: true,
+              locale: ko,
+            })}
+          </Text>
+        </View>
+        {target && (
+          <Ionicons
+            name="chevron-forward"
+            size={18}
+            color={colors.textSubtle}
+            style={{ alignSelf: 'center' }}
+          />
+        )}
+      </TouchableOpacity>
+    </Swipeable>
+  );
+}
+
 export default function NotificationsScreen() {
   const queryClient = useQueryClient();
   const navigation = useNavigation<any>();
@@ -88,6 +178,29 @@ export default function NotificationsScreen() {
   const markAllReadMutation = useMutation({
     mutationFn: () => notificationsApi.markAllRead(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+
+  // 스와이프로 알림 삭제 — 낙관적 업데이트로 즉시 사라지게 하고, 실패 시 롤백
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => notificationsApi.remove(id),
+    onMutate: async (id: number) => {
+      await queryClient.cancelQueries({ queryKey: ['notifications'] });
+      const prev = queryClient.getQueryData<{ data?: NotificationItem[]; unreadCount?: number }>(['notifications']);
+      queryClient.setQueryData(['notifications'], (old: any) => {
+        if (!old?.data) return old;
+        const removed = old.data.find((n: NotificationItem) => n.id === id);
+        return {
+          ...old,
+          data: old.data.filter((n: NotificationItem) => n.id !== id),
+          unreadCount: Math.max(0, (old.unreadCount ?? 0) - (removed && !removed.isRead ? 1 : 0)),
+        };
+      });
+      return { prev };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['notifications'], ctx.prev);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
   });
 
   return (
@@ -132,48 +245,18 @@ export default function NotificationsScreen() {
                 const iconInfo = TYPE_ICONS[notif.type] || DEFAULT_ICON;
                 const target = TYPE_TARGET[notif.type];
                 return (
-                  <TouchableOpacity
+                  <NotificationRow
                     key={notif.id}
-                    style={[styles.notifCard, !notif.isRead && styles.unread]}
+                    notif={notif}
+                    iconInfo={iconInfo}
+                    target={target}
                     onPress={() => {
                       if (!notif.isRead) markReadMutation.mutate(notif.id);
                       // 관련 화면으로 이동 (예: 배차표 발행 → 내 배차)
                       if (target) navigation.navigate('Main', { screen: target });
                     }}
-                    activeOpacity={0.7}
-                  >
-                    <View style={[styles.iconBox, { backgroundColor: iconInfo.bg }]}>
-                      <Ionicons name={iconInfo.name} size={18} color={iconInfo.color} />
-                    </View>
-                    <View style={styles.notifContent}>
-                      <View style={styles.notifTitleRow}>
-                        <Text
-                          style={[styles.notifTitle, !notif.isRead && styles.unreadTitle]}
-                          numberOfLines={1}
-                        >
-                          {notif.title}
-                        </Text>
-                        {!notif.isRead && <View style={styles.unreadDot} />}
-                      </View>
-                      <Text style={styles.notifBody} numberOfLines={2}>
-                        {notif.body}
-                      </Text>
-                      <Text style={styles.notifTime}>
-                        {formatDistanceToNow(new Date(notif.createdAt), {
-                          addSuffix: true,
-                          locale: ko,
-                        })}
-                      </Text>
-                    </View>
-                    {target && (
-                      <Ionicons
-                        name="chevron-forward"
-                        size={18}
-                        color={colors.textSubtle}
-                        style={{ alignSelf: 'center' }}
-                      />
-                    )}
-                  </TouchableOpacity>
+                    onDelete={() => deleteMutation.mutate(notif.id)}
+                  />
                 );
               })}
             </View>
@@ -215,22 +298,38 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
+  // 스와이프 컨테이너가 좌우/하단 여백을 가져가고, 카드는 여백 없이 꽉 채운다
+  swipeContainer: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    borderRadius: radius.xl,
+    overflow: 'hidden',
+  },
   notifCard: {
     backgroundColor: colors.white,
     flexDirection: 'row',
     alignItems: 'flex-start',
     padding: spacing.md,
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
     gap: spacing.md,
-    ...shadow.xs,
   },
   unread: {
     backgroundColor: colors.primaryGhost,
     borderColor: '#bfdbfe',
+  },
+  deleteAction: {
+    backgroundColor: colors.dangerDeep ?? '#dc2626',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 88,
+    gap: 4,
+  },
+  deleteActionText: {
+    color: '#fff',
+    fontSize: typography.sm,
+    fontWeight: weight.bold,
   },
   iconBox: {
     width: 36,

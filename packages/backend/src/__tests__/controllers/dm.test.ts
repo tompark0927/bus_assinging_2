@@ -196,6 +196,8 @@ describe('sendMessage controller', () => {
     mockPrisma.user.findFirst.mockResolvedValue({
       id: 20, name: '이기사', expoPushToken: null,
     });
+    // 알림 발송(fire-and-forget)에서 sendPushNotification 이 수신자를 조회
+    mockPrisma.user.findUnique.mockResolvedValue(null);
     mockPrisma.directMessage.create.mockResolvedValue({
       id: 3, senderId: 10, receiverId: 20, content: '근무 교대 부탁드립니다.',
       sender: { id: 10, name: '김기사' },
@@ -209,13 +211,15 @@ describe('sendMessage controller', () => {
     );
   });
 
-  it('should create notification when receiver has push token', async () => {
+  it('should create in-app notification for receiver (fire-and-forget push)', async () => {
     const req = createAuthReq({ body: { receiverId: 20, content: '확인 부탁합니다.' } });
     const res = createMockRes();
 
     mockPrisma.user.findFirst.mockResolvedValue({
-      id: 20, name: '이기사', expoPushToken: 'ExponentPushToken[xxx]',
+      id: 20, name: '이기사',
     });
+    // sendPushNotification: 수신자 companyId + 토큰 조회 → 알림함(companyId 포함) 기록
+    mockPrisma.user.findUnique.mockResolvedValue({ companyId: 1, expoPushToken: null });
     mockPrisma.directMessage.create.mockResolvedValue({
       id: 4, senderId: 10, receiverId: 20, content: '확인 부탁합니다.',
       sender: { id: 10, name: '김기사' },
@@ -224,8 +228,18 @@ describe('sendMessage controller', () => {
     mockPrisma.notification.create.mockResolvedValue({ id: 1 });
 
     await sendMessage(req, res);
+    // fire-and-forget 푸시 체인이 끝날 때까지 마이크로태스크 플러시
+    await new Promise((resolve) => setImmediate(resolve));
 
-    expect(mockPrisma.notification.create).toHaveBeenCalled();
+    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({
+      where: { id: 20 },
+      select: { companyId: true, expoPushToken: true },
+    });
+    expect(mockPrisma.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ userId: 20, companyId: 1, type: 'NEW_MESSAGE' }),
+      }),
+    );
   });
 
   it('should return 500 on error', async () => {
