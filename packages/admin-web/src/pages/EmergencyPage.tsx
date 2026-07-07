@@ -26,6 +26,7 @@ import { ko } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { parseSlotDate } from '../utils/date';
 import PageHeader from '../components/PageHeader';
+import SectionHeader from '../components/SectionHeader';
 import { emergencyHelp } from '../help/helpContent';
 
 /* ─────────────────────── Types ─────────────────────── */
@@ -233,7 +234,24 @@ export default function EmergencyPage() {
   };
 
   /* ── Render helpers ── */
-  const renderEscalationBadge = (level: number) => {
+  // 운행일까지 남은 일수(D-N). 2일 이내면 긴급으로 취급.
+  const daysUntilSlot = (slotDate: string): number => {
+    const d = parseSlotDate(slotDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((d.getTime() - today.getTime()) / 86400000);
+  };
+
+  const renderEscalationBadge = (level: number, urgent: boolean) => {
+    // D-2 이내 긴급건은 단계와 무관하게 빨간 "긴급" 뱃지로 표시
+    if (urgent) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[15px] font-bold bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300">
+          <Flame size={16} />
+          긴급
+        </span>
+      );
+    }
     const config = ESCALATION_CONFIG[level] ?? ESCALATION_CONFIG[0];
     const Icon = config.icon;
     return (
@@ -316,10 +334,7 @@ export default function EmergencyPage() {
 
       {/* ─── Section 1: Active Emergency Drops ─── */}
       <section>
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-          <Siren size={22} className="text-red-500" />
-          진행중인 대타 요청
-        </h2>
+        <SectionHeader icon={Siren} title="진행중인 대타 요청" className="mb-4" />
 
         {openLoading ? (
           <div className="card flex flex-col items-center justify-center py-16">
@@ -339,8 +354,9 @@ export default function EmergencyPage() {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {openDrops.map((drop) => {
+              const isUrgent = daysUntilSlot(drop.slot.date) <= 2;
               const escalation = ESCALATION_CONFIG[drop.escalationLevel] ?? ESCALATION_CONFIG[0];
-              const EscIcon = escalation.icon;
+              const EscIcon = isUrgent ? Flame : escalation.icon;
               const isExpanded = expandedId === drop.id;
 
               return (
@@ -363,7 +379,7 @@ export default function EmergencyPage() {
                         {drop.slot.route.name} / {SHIFT_LABELS[drop.slot.shift] ?? drop.slot.shift}
                       </p>
                     </div>
-                    {renderEscalationBadge(drop.escalationLevel)}
+                    {renderEscalationBadge(drop.escalationLevel, isUrgent)}
                   </div>
 
                   {/* Card Body */}
@@ -402,10 +418,10 @@ export default function EmergencyPage() {
                       <span className="text-[15px] text-gray-400 dark:text-gray-500 w-20 shrink-0">
                         단계 상세
                       </span>
-                      <div className={`flex items-center gap-1.5 ${escalation.color}`}>
+                      <div className={`flex items-center gap-1.5 ${isUrgent ? 'text-red-600 dark:text-red-400' : escalation.color}`}>
                         <EscIcon size={16} />
                         <span className="text-[16px] font-medium">
-                          {escalation.description}
+                          {isUrgent ? '긴급 — 즉시 충원 필요 (운행 2일 이내)' : escalation.description}
                         </span>
                       </div>
                     </div>
@@ -499,10 +515,7 @@ export default function EmergencyPage() {
 
       {/* ─── Section 2: Create New Drop ─── */}
       <section>
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-          <AlertTriangle size={22} className="text-orange-500" />
-          새 대타 요청
-        </h2>
+        <SectionHeader icon={AlertTriangle} title="새 대타 요청" className="mb-4" />
 
         <div className="card">
           <p className="text-[16px] text-gray-500 dark:text-gray-400 mb-5">
@@ -607,13 +620,7 @@ export default function EmergencyPage() {
 
       {/* ─── Section 3: Recently Resolved ─── */}
       <section>
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-          <Clock size={22} className="text-gray-400" />
-          최근 처리 내역
-          <span className="text-[14px] font-normal text-gray-400 dark:text-gray-500">
-            (최근 7일)
-          </span>
-        </h2>
+        <SectionHeader icon={Clock} title="최근 처리 내역" hint="(최근 7일)" className="mb-4" />
 
         {recentLoading ? (
           <div className="card flex flex-col items-center justify-center py-12">

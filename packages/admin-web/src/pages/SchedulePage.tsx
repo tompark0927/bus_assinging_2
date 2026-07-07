@@ -26,12 +26,15 @@ import {
   Printer,
   RotateCcw,
   Plus,
+  Layers,
+  Copy,
 } from 'lucide-react';
 import { schedulesApi, routesApi, busesApi, usersApi, dayOffApi } from '../services/api';
 import { format, getDaysInMonth } from 'date-fns';
 import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
 import PageHeader from '../components/PageHeader';
+import SectionHeader from '../components/SectionHeader';
 import { scheduleHelp } from '../help/helpContent';
 import { useAuthStore } from '../store/authStore';
 
@@ -53,12 +56,14 @@ const STATUS_CONFIG: Record<string, { label: string; bg: string; text: string; b
   ARCHIVED: { label: '보관', bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' },
 };
 
+// 색상은 4가지로 단순화: 근무(파랑) · 대타 충원(초록) · 공석(빨강) · 휴무(회색).
+//  COMPLETED(운행완료)→근무 파랑, ABSENT(결근)→공석 빨강 으로 통합. 휴가만 옅은 청록 유지.
 const SLOT_COLORS = {
   SCHEDULED: { bg: 'bg-blue-100', text: 'text-blue-800', ring: 'ring-blue-300' },
-  DROPPED: { bg: 'bg-red-100', text: 'text-red-700', ring: 'ring-red-300' },
+  COMPLETED: { bg: 'bg-blue-100', text: 'text-blue-800', ring: 'ring-blue-300' },
   FILLED: { bg: 'bg-emerald-100', text: 'text-emerald-700', ring: 'ring-emerald-300' },
-  COMPLETED: { bg: 'bg-slate-100', text: 'text-slate-500', ring: 'ring-slate-300' },
-  ABSENT: { bg: 'bg-orange-100', text: 'text-orange-700', ring: 'ring-orange-300' },
+  DROPPED: { bg: 'bg-red-100', text: 'text-red-700', ring: 'ring-red-300' },
+  ABSENT: { bg: 'bg-red-100', text: 'text-red-700', ring: 'ring-red-300' },
   REST: { bg: 'bg-gray-50', text: 'text-gray-400', ring: 'ring-gray-200' },
   VACATION: { bg: 'bg-teal-50', text: 'text-teal-600', ring: 'ring-teal-200' },
 } as const;
@@ -81,8 +86,20 @@ interface Schedule {
   id: number;
   year: number;
   month: number;
+  name?: string;
   status: string;
   slots: Slot[];
+}
+
+// 멀티 초안(프로필) 목록 항목 — GET /schedules/:year/:month/drafts
+interface DraftSummary {
+  id: number;
+  name: string;
+  status: string;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  slotCount: number;
 }
 
 interface Route {
@@ -176,6 +193,9 @@ export default function SchedulePage() {
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPrintOptions, setShowPrintOptions] = useState(false);
+  // 멀티 초안: 프로필 이름 변경 모달
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
   const navigate = useNavigate();
   const companyId = useAuthStore((s) => s.user?.companyId);
 
@@ -206,16 +226,15 @@ export default function SchedulePage() {
   // 생성 특이사항 입력: 신규 기사 / 노선별 사고(배차 금지) 기사
   const [newHireIds, setNewHireIds] = useState<number[]>([]);
   const [blockedByRoute, setBlockedByRoute] = useState<Record<number, number[]>>({});
+  // 멀티 초안(프로필): 선택된 배차표 ID (null = 발행본 우선 → 최근 초안)
+  const [selectedScheduleId, setSelectedScheduleId] = useState<number | null>(null);
+  const [newDraftName, setNewDraftName] = useState('');
 
   // v2 솔버 결과 (메트릭·미충족·하드룰 위반자)
   // 새로고침·페이지 이동 후에도 유지되도록 localStorage 에 저장하고,
   // 해당 월의 배차표(scheduleId)가 일치할 때만 복원한다.
   const [v2Result, setV2Result] = useState<V2Result | null>(null);
-  const [showViolators, setShowViolators] = useState(false);
-  const [showUnfilled, setShowUnfilled] = useState(false);
 
-  // DRAFT 덮어쓰기 확인
-  const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(false);
 
   // 기사 드릴다운 — 한 달 상세 모달
   const [selectedDriverId, setSelectedDriverId] = useState<number | null>(null);
@@ -261,14 +280,25 @@ export default function SchedulePage() {
 
   // ─── 데이터 조회 ───
 
+  // 월 이동 시 프로필 선택 초기화
+  useEffect(() => {
+    setSelectedScheduleId(null);
+  }, [year, month]);
+
+  // 이 달의 배차표 프로필 목록 (발행본 + 초안들)
+  const { data: draftList = [] } = useQuery<DraftSummary[]>({
+    queryKey: ['schedule-drafts', year, month],
+    queryFn: () => schedulesApi.listDrafts(year, month).then((r) => r.data.data ?? []),
+  });
+
   const {
     data: schedule,
     isLoading,
     isError,
     error,
   } = useQuery<Schedule>({
-    queryKey: ['schedule', year, month],
-    queryFn: () => schedulesApi.get(year, month).then((r) => r.data.data),
+    queryKey: ['schedule', year, month, selectedScheduleId],
+    queryFn: () => schedulesApi.get(year, month, selectedScheduleId ?? undefined).then((r) => r.data.data),
     retry: 1,
   });
 
@@ -330,33 +360,40 @@ export default function SchedulePage() {
   }, [allUsersList, year, month]);
 
   // ─── v2 결과 패널 복원/정리 ───
-  const v2StorageKey = `busync.v2Result.${companyId ?? 'unknown'}.${year}-${String(month).padStart(2, '0')}`;
+  // 배차표(프로필)별로 저장 — 프로필을 전환하면 각자의 생성 결과가 복원된다
+  const v2KeyFor = useCallback(
+    (scheduleId: number) => `busync.v2Result.${companyId ?? 'unknown'}.s${scheduleId}`,
+    [companyId],
+  );
   useEffect(() => {
     if (!schedule?.id) {
       setV2Result(null);
       return;
     }
     try {
-      const raw = localStorage.getItem(v2StorageKey);
+      const raw = localStorage.getItem(v2KeyFor(schedule.id));
       if (!raw) {
         setV2Result(null);
         return;
       }
       const stored = JSON.parse(raw) as V2Result;
-      // 저장된 결과가 지금 보고 있는 배차표의 것일 때만 표시 (삭제·재생성 시 자동 무효화)
       setV2Result(stored.scheduleId === schedule.id ? stored : null);
     } catch {
       setV2Result(null);
     }
-  }, [v2StorageKey, schedule?.id]);
+  }, [v2KeyFor, schedule?.id]);
 
   // ─── 뮤테이션 ───
 
   const generateMutation = useMutation({
     // v2 솔버 사용 — 회사 정책(CITY_2SHIFT 등) 자동 적용 + PAIR + 헌법룰
     // 신규 기사(면제·단독배차 금지) / 노선별 사고 기사(해당 노선 배차 금지) 를 함께 전달.
+    // 멀티 초안: 생성할 때마다 새 초안 프로필이 추가된다 (월 최대 5개).
     mutationFn: () => schedulesApi.generateV2({
-      year, month, overwriteDraft: true,
+      year, month,
+      name: newDraftName.trim() || undefined,
+      workDays,
+      restDays,
       newHireDriverIds: newHireIds.length ? newHireIds : undefined,
       blockedRoutes: Object.entries(blockedByRoute)
         .filter(([, ids]) => ids.length > 0)
@@ -364,12 +401,14 @@ export default function SchedulePage() {
     }),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
       const d = res.data as V2Result;
       setV2Result(d);
-      try { localStorage.setItem(v2StorageKey, JSON.stringify(d)); } catch { /* ignore */ }
+      setSelectedScheduleId(d.scheduleId);
+      try { localStorage.setItem(v2KeyFor(d.scheduleId), JSON.stringify(d)); } catch { /* ignore */ }
       toast.success(`${year}년 ${month}월 배차표 초안이 생성되었습니다. 아래에서 결과를 확인하세요.`);
       setShowGenerateModal(false);
-      setShowOverwriteConfirm(false);
+      setNewDraftName('');
     },
     onError: (err: unknown) => {
       const msg =
@@ -380,38 +419,75 @@ export default function SchedulePage() {
     },
   });
 
-  // 수동 편집된 슬롯 수 (덮어쓰기 경고용)
-  const manualOverrideCount = useMemo(() => {
-    return (schedule?.slots ?? []).filter((s) => s.isManualOverride).length;
-  }, [schedule]);
-
-  // "AI 자동 생성" 클릭 — DRAFT 가 있고 수동 편집이 있으면 경고 모달
+  // "AI 자동 생성" 클릭 — 멀티 초안이라 기존 초안은 보존되고 항상 새 초안이 추가된다
   const handleGenerateClick = () => {
-    if (schedule?.status === 'DRAFT' && manualOverrideCount > 0) {
-      setShowOverwriteConfirm(true);
-    } else {
-      generateMutation.mutate();
-    }
+    generateMutation.mutate();
   };
 
   const publishMutation = useMutation({
-    mutationFn: () => schedulesApi.publish(year, month),
+    mutationFn: () => schedulesApi.publish(year, month, schedule?.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
       toast.success('배차표가 발행되었습니다. 모든 기사님께 알림이 발송됩니다.');
       setShowPublishConfirm(false);
     },
-    onError: () => toast.error('발행 중 오류가 발생했습니다.'),
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || '발행 중 오류가 발생했습니다.';
+      toast.error(msg);
+    },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => schedulesApi.delete(year, month),
+    mutationFn: () => schedulesApi.delete(year, month, schedule?.id),
     onSuccess: () => {
+      // 삭제된 프로필의 생성 결과 저장본도 함께 정리
+      if (schedule?.id) {
+        try { localStorage.removeItem(v2KeyFor(schedule.id)); } catch { /* ignore */ }
+      }
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
+      setSelectedScheduleId(null);
       toast.success('배차표가 삭제되었습니다.');
       setShowDeleteConfirm(false);
     },
     onError: () => toast.error('삭제 중 오류가 발생했습니다.'),
+  });
+
+  // 멀티 초안: 프로필 이름 변경
+  const renameMutation = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) => schedulesApi.rename(id, name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
+      toast.success('이름이 변경되었습니다.');
+      setShowRenameModal(false);
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || '이름 변경 중 오류가 발생했습니다.';
+      toast.error(msg);
+    },
+  });
+
+  // 멀티 초안: 현재 보고 있는 배차표를 새 초안 프로필로 복제
+  const duplicateMutation = useMutation({
+    mutationFn: () => {
+      if (!schedule?.id) throw new Error('NO_SCHEDULE');
+      return schedulesApi.duplicate(schedule.id);
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
+      const copy = (res.data as { data?: { id?: number } })?.data;
+      if (copy?.id) setSelectedScheduleId(copy.id);
+      toast.success('초안이 복제되었습니다. 복제본을 자유롭게 수정하세요.');
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || '복제 중 오류가 발생했습니다.';
+      toast.error(msg);
+    },
   });
 
   const updateSlotMutation = useMutation({
@@ -589,7 +665,7 @@ export default function SchedulePage() {
 
   const handleExport = useCallback(async () => {
     try {
-      const res = await schedulesApi.exportExcel(year, month);
+      const res = await schedulesApi.exportExcel(year, month, schedule?.id);
       const blob = new Blob([res.data], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       });
@@ -603,7 +679,7 @@ export default function SchedulePage() {
     } catch {
       toast.error('엑셀 다운로드에 실패했습니다.');
     }
-  }, [year, month]);
+  }, [year, month, schedule?.id]);
 
   // 슬롯 클릭 핸들러 - DRAFT일 때 오버라이드 모달 열기
   const openSlotForEdit = useCallback(
@@ -979,9 +1055,9 @@ export default function SchedulePage() {
         </div>
       </div>
 
-      {/* ─── 필터 패널 ─── */}
+      {/* ─── 필터 패널 (필터 버튼 바로 아래에 붙어서 펼쳐짐) ─── */}
       {showFilters && (
-        <div className="card flex flex-wrap items-end gap-6">
+        <div className="card flex flex-wrap items-end gap-6" data-print-hide>
           <div>
             <label className="block text-base font-medium text-gray-700 dark:text-gray-300 mb-2">기사 구분</label>
             <div className="flex gap-2">
@@ -1029,6 +1105,83 @@ export default function SchedulePage() {
         </div>
       )}
 
+      {/* ─── 배차표 프로필 (멀티 초안) ─── */}
+      {draftList.length > 0 && (
+        <div className="card py-4 px-5 dark:bg-gray-800" data-print-hide>
+          <SectionHeader
+            icon={Layers}
+            title="배차표 프로필"
+            hint="초안을 여러 개 만들어 비교·수정한 뒤 하나를 골라 발행하세요 (초안 최대 5개)"
+            className="mb-3"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            {draftList.map((d) => {
+              const isSelected = schedule?.id === d.id;
+              const isPublished = d.status === 'PUBLISHED';
+              return (
+                <button
+                  key={d.id}
+                  onClick={() => setSelectedScheduleId(d.id)}
+                  className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border text-[15px] transition-colors min-h-[48px] ${
+                    isSelected
+                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10 ring-2 ring-blue-500/20'
+                      : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-500'
+                  }`}
+                  title={`${d.slotCount}개 슬롯 · ${format(new Date(d.updatedAt), 'M/d HH:mm')} 수정`}
+                >
+                  <span className={`font-semibold ${isSelected ? 'text-blue-700 dark:text-blue-300' : 'text-gray-800 dark:text-gray-200'}`}>
+                    {d.name}
+                  </span>
+                  <span
+                    className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
+                      isPublished
+                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                        : 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'
+                    }`}
+                  >
+                    {isPublished ? '발행됨' : '초안'}
+                  </span>
+                </button>
+              );
+            })}
+            {schedule && (
+              <>
+                <button
+                  onClick={() => duplicateMutation.mutate()}
+                  disabled={duplicateMutation.isPending}
+                  className="btn-secondary inline-flex items-center gap-2 text-[15px] px-4 py-2.5 min-h-[48px] disabled:opacity-50"
+                  title="현재 보고 있는 배차표를 새 초안으로 복제합니다"
+                >
+                  {duplicateMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Copy size={16} />}
+                  복제
+                </button>
+                <button
+                  onClick={() => {
+                    setRenameValue(schedule.name ?? '');
+                    setShowRenameModal(true);
+                  }}
+                  className="btn-secondary inline-flex items-center gap-2 text-[15px] px-4 py-2.5 min-h-[48px]"
+                  title="현재 프로필의 이름을 변경합니다"
+                >
+                  <Edit3 size={16} />
+                  이름 변경
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── 배차 품질 (라이브 체크리스트 + AI 생성 지표 통합) ─── */}
+      {schedule && quality && (
+        <ScheduleQualityPanel
+          quality={quality}
+          filledRate={filledRate}
+          result={v2Result}
+          onDriverClick={(driverId) => setSelectedDriverId(driverId)}
+        />
+      )}
+
       {/* ─── 통계 요약 ─── */}
       {schedule && (
         <div data-print-section="summary" className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -1042,27 +1195,6 @@ export default function SchedulePage() {
             color="purple"
           />
         </div>
-      )}
-
-      {/* ─── AI 배차 품질 체크리스트 ─── */}
-      {schedule && quality && (
-        <QualityChecklist quality={quality} filledRate={filledRate} />
-      )}
-
-      {/* ─── v2 솔버 결과 패널 ─── */}
-      {v2Result && (
-        <V2ResultPanel
-          result={v2Result}
-          showViolators={showViolators}
-          showUnfilled={showUnfilled}
-          onToggleViolators={() => setShowViolators((p) => !p)}
-          onToggleUnfilled={() => setShowUnfilled((p) => !p)}
-          onClose={() => {
-            setV2Result(null);
-            try { localStorage.removeItem(v2StorageKey); } catch { /* ignore */ }
-          }}
-          onDriverClick={(driverId) => setSelectedDriverId(driverId)}
-        />
       )}
 
       {/* ─── 로딩 상태 ─── */}
@@ -1395,22 +1527,13 @@ export default function SchedulePage() {
       {/* ─── 범례 (Legend) ─── */}
       {schedule && (
         <div data-print-section="legend" className="card py-4 px-5 dark:bg-gray-800">
-          <div className="flex items-center gap-2 mb-3 text-base font-semibold text-gray-700 dark:text-gray-300">
-            <Info size={18} />
-            범례 (색상 안내)
-          </div>
+          <SectionHeader icon={Info} title="범례 (색상 안내)" className="mb-3" />
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-base">
-            <LegendItem color="bg-blue-100 border-blue-300" label="배차됨 (예정)" />
-            <LegendItem color="bg-red-100 border-red-300" label="드랍 (긴급 공석)" />
-            <LegendItem color="bg-emerald-100 border-emerald-300" label="대체 배차 완료" />
-            <LegendItem color="bg-slate-100 border-slate-300" label="운행 완료" />
-            <LegendItem color="bg-orange-100 border-orange-300" label="결근" />
-            <LegendItem color="bg-gray-50 border-gray-200" label="휴무일" />
-            <LegendItem color="bg-teal-50 border-teal-200" label="휴가 반영 휴무" />
-            <span className="ml-2 flex items-center gap-2">
-              <span className="px-1.5 py-0 text-[10px] font-bold bg-orange-500 text-white rounded">수동</span>
-              <span className="text-gray-600 dark:text-gray-400">수동 변경됨</span>
-            </span>
+            <LegendItem color="bg-blue-100 border-blue-300" label="근무" />
+            <LegendItem color="bg-emerald-100 border-emerald-300" label="대타 충원" />
+            <LegendItem color="bg-red-100 border-red-300" label="공석 (드랍·결근)" />
+            <LegendItem color="bg-gray-50 border-gray-200" label="휴무" />
+            <LegendItem color="bg-teal-50 border-teal-200" label="휴가" />
             <span className="ml-4 border-l border-gray-200 dark:border-gray-600 pl-4 flex items-center gap-3 text-gray-500 dark:text-gray-400">
               <span className="font-bold text-blue-800 dark:text-blue-400">조</span> 오전
               <span className="font-bold text-blue-800 dark:text-blue-400">석</span> 오후
@@ -1469,10 +1592,6 @@ export default function SchedulePage() {
               </>
             )}
 
-            <div>
-              <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">메모 (선택)</label>
-              <input className="input text-base py-3 min-h-[48px]" value={addForm.notes} onChange={(e) => setAddForm((p) => ({ ...p, notes: e.target.value }))} placeholder="비고" />
-            </div>
           </div>
 
           <div className="flex justify-end gap-3 mt-6">
@@ -1582,17 +1701,6 @@ export default function SchedulePage() {
                   </option>
                 ))}
               </select>
-            </div>
-
-            {/* 메모 */}
-            <div>
-              <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">메모 (선택)</label>
-              <input
-                className="input text-base py-3 min-h-[48px]"
-                placeholder="예: 기사 교체, 노선 변경..."
-                value={overrideForm.notes}
-                onChange={(e) => setOverrideForm((p) => ({ ...p, notes: e.target.value }))}
-              />
             </div>
 
             {/* 휴식시간 위반 경고 */}
@@ -1783,16 +1891,6 @@ export default function SchedulePage() {
               </div>
             )}
 
-            {/* 메모 */}
-            <div>
-              <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">메모 (선택)</label>
-              <input
-                className="input text-base py-3 min-h-[48px]"
-                placeholder="예: 병가, 출장, 대체 근무..."
-                value={editForm.notes}
-                onChange={(e) => setEditForm((p) => ({ ...p, notes: e.target.value }))}
-              />
-            </div>
           </div>
 
           <div className="flex gap-3 mt-7">
@@ -1830,46 +1928,6 @@ export default function SchedulePage() {
           violatorEntry={v2Result?.hardViolators?.find((v) => v.driverId === selectedDriverId)}
           onClose={() => setSelectedDriverId(null)}
         />
-      )}
-
-      {/* DRAFT 덮어쓰기 확인 — 수동 편집된 슬롯이 있을 때만 */}
-      {showOverwriteConfirm && (
-        <Modal
-          onClose={() => setShowOverwriteConfirm(false)}
-          title="기존 초안을 덮어쓸까요?"
-          maxWidth="max-w-md"
-          icon={<AlertTriangle size={22} className="text-amber-500" />}
-        >
-          <div className="space-y-4">
-            <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-xl p-4">
-              <div className="text-[14px] font-semibold text-amber-800 dark:text-amber-200 mb-1">
-                수동 편집한 슬롯 {manualOverrideCount}건이 사라집니다
-              </div>
-              <p className="text-[13px] text-amber-700 dark:text-amber-300 leading-relaxed">
-                현재 초안에 직접 수정한 배차가 있어요. AI가 새로 생성하면 이 수정 사항은 모두 덮어쓰여 복구할 수 없습니다.
-              </p>
-            </div>
-            <p className="text-[13px] text-gray-500 dark:text-gray-400">
-              이미 발행된 배차표(PUBLISHED)는 영향 받지 않습니다.
-            </p>
-            <div className="flex flex-col-reverse sm:flex-row gap-2 pt-2">
-              <button
-                onClick={() => setShowOverwriteConfirm(false)}
-                className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-white/10 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 text-[14px]"
-              >
-                취소
-              </button>
-              <button
-                onClick={() => generateMutation.mutate()}
-                disabled={generateMutation.isPending}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white inline-flex items-center justify-center gap-2 text-[14px] font-medium"
-              >
-                {generateMutation.isPending && <Loader2 size={16} className="animate-spin" />}
-                덮어쓰기 진행
-              </button>
-            </div>
-          </div>
-        </Modal>
       )}
 
       {/* 첫 배차 — 배차 설정 안내 nudge */}
@@ -1918,6 +1976,20 @@ export default function SchedulePage() {
           icon={<Sparkles size={24} className="text-blue-600" />}
         >
           <div className="space-y-5">
+            <div>
+              <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                초안 이름 <span className="text-sm font-normal text-gray-400">(선택 — 비우면 "초안 N" 자동 부여)</span>
+              </label>
+              <input
+                type="text"
+                maxLength={50}
+                className="input text-base py-3 min-h-[48px]"
+                placeholder="예: 신규기사 반영안, 사고기사 제외안"
+                value={newDraftName}
+                onChange={(e) => setNewDraftName(e.target.value)}
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">근무 일수</label>
@@ -1999,12 +2071,12 @@ export default function SchedulePage() {
               </div>
             )}
 
-            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-4 flex items-start gap-3">
-              <AlertTriangle size={22} className="text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
-              <p className="text-base text-amber-800 dark:text-amber-300">
-                기존 초안 배차표가 있으면 삭제 후 새로 생성됩니다.
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-xl p-4 flex items-start gap-3">
+              <Info size={22} className="text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+              <p className="text-base text-blue-800 dark:text-blue-300">
+                생성할 때마다 새 초안 프로필이 추가됩니다 (월 최대 5개).
                 <br />
-                이미 발행된 배차표가 있으면 먼저 삭제한 후 다시 생성할 수 있습니다.
+                기존 초안과 발행된 배차표는 영향받지 않습니다.
               </p>
             </div>
           </div>
@@ -2052,7 +2124,9 @@ export default function SchedulePage() {
           <div className="text-center py-4">
             <Send size={48} className="mx-auto text-emerald-500 mb-4" />
             <p className="text-lg text-gray-700 dark:text-gray-300 mb-2">
-              <strong>{year}년 {month}월</strong> 배차표를 발행하시겠습니까?
+              <strong>{year}년 {month}월</strong> 배차표
+              {schedule?.name ? <> (<strong>{schedule.name}</strong>)</> : null}
+              를 발행하시겠습니까?
             </p>
             <p className="text-base text-gray-500 dark:text-gray-400">
               발행 시 모든 기사님께 푸시 알림이 발송됩니다.
@@ -2092,7 +2166,9 @@ export default function SchedulePage() {
           <div className="text-center py-4">
             <Trash2 size={48} className="mx-auto text-red-500 mb-4" />
             <p className="text-lg text-gray-700 dark:text-gray-300 mb-2">
-              <strong>{year}년 {month}월</strong> 배차표를 삭제하시겠습니까?
+              <strong>{year}년 {month}월</strong> 배차표
+              {schedule?.name ? <> (<strong>{schedule.name}</strong> 프로필)</> : null}
+              를 삭제하시겠습니까?
             </p>
             {schedule?.status === 'PUBLISHED' && (
               <p className="text-base text-gray-600 dark:text-gray-300 mb-2">
@@ -2125,6 +2201,51 @@ export default function SchedulePage() {
                 </>
               )}
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 프로필 이름 변경 모달 */}
+      {showRenameModal && schedule && (
+        <Modal
+          onClose={() => setShowRenameModal(false)}
+          title="프로필 이름 변경"
+          maxWidth="max-w-md"
+          icon={<Edit3 size={22} className="text-blue-600" />}
+        >
+          <div className="space-y-4">
+            <div>
+              <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">이름</label>
+              <input
+                type="text"
+                maxLength={50}
+                autoFocus
+                className="input text-base py-3 min-h-[48px]"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && renameValue.trim()) {
+                    renameMutation.mutate({ id: schedule.id, name: renameValue.trim() });
+                  }
+                }}
+              />
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowRenameModal(false)}
+                className="btn-secondary flex-1 text-base py-3 min-h-[48px]"
+              >
+                취소
+              </button>
+              <button
+                onClick={() => renameMutation.mutate({ id: schedule.id, name: renameValue.trim() })}
+                disabled={!renameValue.trim() || renameMutation.isPending}
+                className="btn-primary flex-1 text-base py-3 min-h-[48px] inline-flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {renameMutation.isPending && <Loader2 size={18} className="animate-spin" />}
+                저장
+              </button>
+            </div>
           </div>
         </Modal>
       )}
@@ -2238,116 +2359,167 @@ function ToggleButton({
 }
 
 /* ────────────────────────────────────────────────
-   V2 솔버 결과 패널 — 메트릭·미충족·하드룰 위반자
+   배차 품질 패널 — 라이브 체크리스트 + AI 생성 지표(있을 때)를 하나로 통합
    ──────────────────────────────────────────────── */
 
-function V2ResultPanel({
+function ScheduleQualityPanel({
+  quality: q,
+  filledRate,
   result,
-  showViolators,
-  showUnfilled,
-  onToggleViolators,
-  onToggleUnfilled,
-  onClose,
   onDriverClick,
 }: {
-  result: V2Result;
-  showViolators: boolean;
-  showUnfilled: boolean;
-  onToggleViolators: () => void;
-  onToggleUnfilled: () => void;
-  onClose: () => void;
+  quality: QualityData;
+  filledRate: number;
+  result: V2Result | null;
   onDriverClick: (driverId: number) => void;
 }) {
-  const m = result.metrics ?? {};
-  const fairness = Math.round(m.fairnessScore ?? 0);
-  const fairnessColor = fairness >= 85 ? 'green' : fairness >= 60 ? 'amber' : 'red';
-  const unfilled = m.unfilledCount ?? 0;
-  const violators = m.hardViolationCount ?? 0;
-  const exempted = m.exemptedCount ?? 0;
-  const homeBusPct = Math.round((m.homeBusRate ?? 0) * 100);
+  // 카드 접기/펴기 — 화살표 버튼으로 토글
+  const [collapsed, setCollapsed] = useState(false);
+  const m = result?.metrics ?? {};
+  const fairness = result ? Math.round(m.fairnessScore ?? 0) : null;
   const targetPct = Math.round((m.withinTargetRate ?? 0) * 100);
+  const violatorCount = m.hardViolationCount ?? 0;
+  const exempted = m.exemptedCount ?? 0;
+  const workMean = m.workDayMean ?? 0;
+
+  // 라이브 체크 상태
+  const checks = [filledRate === 100, q.noBusCount === 0, q.approvedCount === 0 || q.unreflected.length === 0];
+  const passCount = checks.filter(Boolean).length;
+  const warnCount = checks.filter((c) => !c).length;
+
+  const violators = result?.hardViolators ?? [];
+  const unfilled = result?.unfilled ?? [];
+
+  const fairnessColor =
+    fairness == null ? '' :
+    fairness >= 85 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300' :
+    fairness >= 60 ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300' :
+    'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300';
+
+  // 근무일 균형 행 — AI 결과가 있으면 목표충족·위반 기준, 없으면 편차 기준
+  const balanceStatus: 'pass' | 'warn' | 'info' = result
+    ? (violatorCount > 0 ? 'warn' : 'pass')
+    : (q.spread <= 2 ? 'pass' : 'info');
+  const balanceSummary = result
+    ? `목표 근무일 충족 ${targetPct}%, 평균 ${workMean.toFixed(1)}일${violatorCount > 0 ? `, 기준 위반 ${violatorCount}명` : ', 위반 없음'}${exempted > 0 ? ` (스페어 ${exempted}명 제외)` : ''}`
+    : `기사별 근무 ${q.minWork}~${q.maxWork}일 (편차 ${q.spread}일)`;
 
   return (
-    <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl overflow-hidden">
-      {/* 헤더 */}
-      <div className="px-6 py-4 border-b border-gray-200 dark:border-white/10 flex items-center justify-between">
-        <div>
-          <h2 className="text-[16px] font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <Sparkles size={18} className="text-blue-500" />
-            AI 배차 결과
-          </h2>
+    <div data-print-hide className="card dark:bg-gray-800 p-0 overflow-hidden">
+      {/* 헤더 — 클릭 시 카드 접기/펴기 토글 */}
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        className="w-full flex items-center gap-2 px-5 py-3.5 border-b border-gray-100 dark:border-gray-700 text-left hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors"
+      >
+        <Shield size={20} className="text-gray-900 dark:text-white shrink-0" />
+        <h3 className="text-[18px] font-bold text-gray-900 dark:text-white">배차 품질</h3>
+        {fairness != null && (
+          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[13px] font-bold ${fairnessColor}`}>
+            <Sparkles size={13} /> 공정성 {fairness}
+          </span>
+        )}
+        <span className="ml-auto text-sm text-gray-500 dark:text-gray-400">통과 {passCount} · 주의 {warnCount}</span>
+        {collapsed
+          ? <ChevronDown size={20} className="text-gray-400" />
+          : <ChevronUp size={20} className="text-gray-400" />}
+      </button>
+
+      {!collapsed && (
+      <>
+      {/* AI 생성 지표 스트립 (생성 결과가 있을 때만) */}
+      {result && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-gray-100 dark:divide-gray-700 border-b border-gray-100 dark:border-gray-700">
+          <MiniStat label="목표 근무일 충족" value={`${targetPct}%`} />
+          <MiniStat label="본인 차량 배정" value={`${Math.round((m.homeBusRate ?? 0) * 100)}%`} />
+          <MiniStat label="휴무 사이클 준수" value={`${Math.round((m.restCycleCompliance ?? 0) * 100)}%`} />
+          <MiniStat label="승인 휴무 반영" value={`${Math.round((m.dayOffSatisfactionRate ?? 0) * 100)}%`} />
         </div>
-        <button
-          onClick={onClose}
-          className="p-2 rounded-lg text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/5"
-          aria-label="결과 닫기"
+      )}
+
+      {/* 체크리스트 (현재 배차표 실시간 상태) */}
+      <div className="divide-y divide-gray-100 dark:divide-gray-700">
+        <ChecklistRow
+          status={filledRate === 100 ? 'pass' : 'warn'}
+          title="배차 완료율"
+          summary={filledRate === 100 ? '모든 근무 슬롯이 배차되었습니다' : `미충원 ${q.unfilledCount}건 (배차율 ${filledRate}%)`}
         >
-          <X size={18} />
-        </button>
-      </div>
-
-      {/* 메트릭 카드 */}
-      <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MetricCard
-          label="공정성 점수"
-          value={`${fairness}`}
-          unit="/100"
-          color={fairnessColor}
-          hint={fairness >= 85 ? '목표 달성' : fairness >= 60 ? '개선 여지' : '재생성 권장'}
-        />
-        <MetricCard
-          label="목표 근무일 충족"
-          value={`${targetPct}`}
-          unit="%"
-          color={targetPct >= 80 ? 'green' : targetPct >= 60 ? 'amber' : 'red'}
-          hint={`평균 ${(m.workDayMean ?? 0).toFixed(1)}일`}
-        />
-        <MetricCard
-          label="미배정 슬롯"
-          value={`${unfilled}`}
-          unit="개"
-          color={unfilled === 0 ? 'green' : unfilled < 50 ? 'amber' : 'red'}
-          hint={unfilled === 0 ? '모두 배정됨' : '본인 차량 외 충원 필요'}
-        />
-        <MetricCard
-          label="근무일 기준 위반"
-          value={`${violators}`}
-          unit="명"
-          color={violators === 0 ? 'green' : violators < 10 ? 'amber' : 'red'}
-          hint={exempted > 0 ? `스페어 ${exempted}명 제외` : '월 근무일 허용범위 이탈'}
-        />
-      </div>
-
-      {/* 보조 지표 (작은 텍스트 줄) */}
-      <div className="px-6 pb-4 -mt-1 flex flex-wrap gap-x-5 gap-y-1 text-[12px] text-gray-500 dark:text-gray-400">
-        <span>본인 차량 배정률 <b className="text-gray-700 dark:text-gray-200">{homeBusPct}%</b></span>
-        <span>휴무 사이클 준수 <b className="text-gray-700 dark:text-gray-200">{Math.round((m.restCycleCompliance ?? 0) * 100)}%</b></span>
-        <span>주간 시프트 일관성 <b className="text-gray-700 dark:text-gray-200">{Math.round((m.weeklyShiftConsistencyRate ?? 0) * 100)}%</b></span>
-        <span>승인 휴무 반영 <b className="text-gray-700 dark:text-gray-200">{Math.round((m.dayOffSatisfactionRate ?? 0) * 100)}%</b></span>
-      </div>
-
-      {/* 펼치기: 하드룰 위반자 */}
-      {result.hardViolators && result.hardViolators.length > 0 && (
-        <div className="border-t border-gray-200 dark:border-white/10">
-          <button
-            onClick={onToggleViolators}
-            className="w-full flex items-center justify-between px-6 py-3 text-left hover:bg-gray-50 dark:hover:bg-white/[0.02] transition"
-          >
-            <div className="flex items-center gap-2">
-              <AlertTriangle size={16} className="text-red-500" />
-              <span className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">
-                근무일 기준 위반 기사
-              </span>
-              <span className="text-[12px] text-gray-500">
-                ({result.hardViolators.length}명)
-              </span>
+          {unfilled.length > 0 && (
+            <div className="overflow-x-auto max-h-[280px] rounded-lg border border-gray-100 dark:border-white/10">
+              <table className="w-full text-[13px]">
+                <thead className="bg-gray-50 dark:bg-white/[0.02] sticky top-0">
+                  <tr>
+                    <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">날짜</th>
+                    <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">시프트</th>
+                    <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">버스</th>
+                    <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">사유</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-white/10">
+                  {unfilled.map((u, i) => {
+                    const shift = u.shift === 'AM' || u.shift === 'MORNING' ? '오전'
+                      : u.shift === 'PM' || u.shift === 'AFTERNOON' ? '오후'
+                      : u.shift === 'FULL_DAY' ? '종일'
+                      : u.shift || '-';
+                    return (
+                      <tr key={i} className="hover:bg-gray-50 dark:hover:bg-white/[0.02]">
+                        <td className="px-4 py-2 text-gray-900 dark:text-gray-100 font-mono">{u.date.slice(0, 10)}</td>
+                        <td className="px-4 py-2 text-gray-700 dark:text-gray-200">{shift}</td>
+                        <td className="px-4 py-2 text-gray-700 dark:text-gray-200 font-mono">{u.busId ? `#${u.busId}` : '-'}</td>
+                        <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{u.reason || '대체 인력 없음'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-            {showViolators ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-          </button>
-          {showViolators && (
-            <div className="overflow-x-auto border-t border-gray-100 dark:border-white/10 max-h-[300px]">
-              {result.hardViolators.some((v) => v.workloadEval?.tier === 'UNDER_MIN') && (
-                <p className="px-6 py-2.5 text-[12px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border-b border-amber-100 dark:border-amber-500/20">
+          )}
+        </ChecklistRow>
+
+        <ChecklistRow
+          status={q.noBusCount === 0 ? 'pass' : 'warn'}
+          title="차량 배정"
+          summary={q.noBusCount === 0 ? '모든 근무에 차량이 배정되었습니다' : `차량 미배정 ${q.noBusCount}건 — 노선별 확인`}
+        >
+          {q.noBusCount > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {q.noBusByRoute.map(([rn, c]) => (
+                <span key={rn} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 text-[12px]">
+                  {rn}번 <b>{c}건</b>
+                </span>
+              ))}
+            </div>
+          )}
+        </ChecklistRow>
+
+        <ChecklistRow
+          status={q.approvedCount === 0 ? 'info' : q.unreflected.length === 0 ? 'pass' : 'warn'}
+          title="휴가 반영"
+          summary={
+            q.approvedCount === 0
+              ? `승인된 휴가 없음${q.pendingCount > 0 ? `, 미결재 ${q.pendingCount}건` : ''}`
+              : q.unreflected.length === 0
+                ? `승인 휴가 ${q.approvedCount}건 모두 반영됨${q.pendingCount > 0 ? `, 미결재 ${q.pendingCount}건` : ''}`
+                : `승인 휴가 ${q.approvedCount}건 중 ${q.unreflected.length}건 미반영${q.pendingCount > 0 ? `, 미결재 ${q.pendingCount}건` : ''}`
+          }
+        >
+          {q.unreflected.length > 0 && (
+            <ul className="space-y-1">
+              {q.unreflected.map((u, i) => (
+                <li key={i} className="text-[12px] text-gray-600 dark:text-gray-300">
+                  <b>{u.name}</b> ({u.employeeId}) — {u.date} 휴가 신청했으나 근무 배정되었습니다
+                </li>
+              ))}
+            </ul>
+          )}
+        </ChecklistRow>
+
+        <ChecklistRow status={balanceStatus} title="근무일 균형" summary={balanceSummary}>
+          {violators.length > 0 && (
+            <div className="overflow-x-auto max-h-[280px] rounded-lg border border-gray-100 dark:border-white/10">
+              {violators.some((v) => v.workloadEval?.tier === 'UNDER_MIN') && (
+                <p className="px-4 py-2.5 text-[12px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border-b border-amber-100 dark:border-amber-500/20">
                   근무일 부족이 여러 명 발생하면 대부분 기사 수에 비해 운행 슬롯이 부족한 경우입니다.
                   배차 정책 설정에서 월 근무일 하한을 낮추거나, 기사·차량·시프트 구성을 확인해보세요.
                 </p>
@@ -2355,13 +2527,13 @@ function V2ResultPanel({
               <table className="w-full text-[13px]">
                 <thead className="bg-gray-50 dark:bg-white/[0.02] sticky top-0">
                   <tr>
-                    <th className="text-left px-5 py-2 font-semibold text-gray-600 dark:text-gray-300">기사</th>
+                    <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">기사</th>
                     <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">근무일</th>
                     <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">사유</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-white/10">
-                  {result.hardViolators.map((v, i) => {
+                  {violators.map((v, i) => {
                     const tier = v.workloadEval?.tier;
                     const reason = tier === 'UNDER_MIN' ? '근무일 부족' : tier === 'OVER_MAX' ? '근무일 초과' : tier || '범위 위반';
                     const clickable = v.driverId !== undefined;
@@ -2371,7 +2543,7 @@ function V2ResultPanel({
                         onClick={() => clickable && onDriverClick(v.driverId!)}
                         className={`hover:bg-gray-50 dark:hover:bg-white/[0.02] ${clickable ? 'cursor-pointer' : ''}`}
                       >
-                        <td className="px-5 py-2 font-medium text-gray-900 dark:text-gray-100">
+                        <td className="px-4 py-2 font-medium text-gray-900 dark:text-gray-100">
                           {clickable ? (
                             <span className="text-blue-700 dark:text-blue-300 hover:underline">
                               {v.driverName || v.name || `#${v.driverId}`}
@@ -2380,12 +2552,8 @@ function V2ResultPanel({
                             v.driverName || v.name || `#${v.driverId}`
                           )}
                         </td>
-                        <td className="px-4 py-2 text-gray-700 dark:text-gray-200">
-                          {v.workDays ?? '-'}일
-                        </td>
-                        <td className="px-4 py-2 text-gray-600 dark:text-gray-300">
-                          {reason}
-                        </td>
+                        <td className="px-4 py-2 text-gray-700 dark:text-gray-200">{v.workDays ?? '-'}일</td>
+                        <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{reason}</td>
                       </tr>
                     );
                   })}
@@ -2393,90 +2561,19 @@ function V2ResultPanel({
               </table>
             </div>
           )}
-        </div>
-      )}
-
-      {/* 펼치기: 미배정 슬롯 */}
-      {result.unfilled && result.unfilled.length > 0 && (
-        <div className="border-t border-gray-200 dark:border-white/10">
-          <button
-            onClick={onToggleUnfilled}
-            className="w-full flex items-center justify-between px-6 py-3 text-left hover:bg-gray-50 dark:hover:bg-white/[0.02] transition"
-          >
-            <div className="flex items-center gap-2">
-              <AlertTriangle size={16} className="text-amber-500" />
-              <span className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">
-                미배정 슬롯
-              </span>
-              <span className="text-[12px] text-gray-500">
-                ({m.unfilledCount ?? result.unfilled.length}개{result.unfilled.length < (m.unfilledCount ?? 0) ? ` 중 ${result.unfilled.length}개 표시` : ''})
-              </span>
-            </div>
-            {showUnfilled ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-          </button>
-          {showUnfilled && (
-            <div className="overflow-x-auto border-t border-gray-100 dark:border-white/10 max-h-[300px]">
-              <table className="w-full text-[13px]">
-                <thead className="bg-gray-50 dark:bg-white/[0.02] sticky top-0">
-                  <tr>
-                    <th className="text-left px-5 py-2 font-semibold text-gray-600 dark:text-gray-300">날짜</th>
-                    <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">시프트</th>
-                    <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">버스</th>
-                    <th className="text-left px-4 py-2 font-semibold text-gray-600 dark:text-gray-300">사유</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-white/10">
-                  {result.unfilled.map((u, i) => {
-                    const shift = u.shift === 'AM' || u.shift === 'MORNING' ? '오전'
-                      : u.shift === 'PM' || u.shift === 'AFTERNOON' ? '오후'
-                      : u.shift === 'FULL_DAY' ? '종일'
-                      : u.shift || '-';
-                    return (
-                      <tr key={i} className="hover:bg-gray-50 dark:hover:bg-white/[0.02]">
-                        <td className="px-5 py-2 text-gray-900 dark:text-gray-100 font-mono">{u.date.slice(0, 10)}</td>
-                        <td className="px-4 py-2 text-gray-700 dark:text-gray-200">{shift}</td>
-                        <td className="px-4 py-2 text-gray-700 dark:text-gray-200 font-mono">
-                          {u.busId ? `#${u.busId}` : '-'}
-                        </td>
-                        <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{u.reason || '대체 인력 없음'}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        </ChecklistRow>
+      </div>
+      </>
       )}
     </div>
   );
 }
 
-function MetricCard({ label, value, unit, color, hint }: {
-  label: string;
-  value: string;
-  unit: string;
-  color: 'green' | 'amber' | 'red';
-  hint?: string;
-}) {
-  const cls = {
-    green: 'border-green-200 dark:border-green-500/30 bg-green-50 dark:bg-green-500/5',
-    amber: 'border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/5',
-    red: 'border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/5',
-  }[color];
-  const textCls = {
-    green: 'text-green-700 dark:text-green-300',
-    amber: 'text-amber-700 dark:text-amber-300',
-    red: 'text-red-700 dark:text-red-300',
-  }[color];
+function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className={`border-2 rounded-xl p-4 ${cls}`}>
-      <div className="text-[12px] text-gray-600 dark:text-gray-300">{label}</div>
-      <div className={`text-[26px] font-bold mt-1 ${textCls}`}>
-        {value}
-        <span className="text-[13px] font-normal opacity-80 ml-0.5">{unit}</span>
-      </div>
-      {hint && <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 truncate">{hint}</div>}
+    <div className="px-5 py-3">
+      <div className="text-[12px] text-gray-500 dark:text-gray-400">{label}</div>
+      <div className="text-[20px] font-bold text-gray-900 dark:text-gray-100 mt-0.5">{value}</div>
     </div>
   );
 }
@@ -2689,69 +2786,6 @@ type QualityData = {
   maxWork: number;
   spread: number;
 };
-
-function QualityChecklist({ quality: q, filledRate }: { quality: QualityData; filledRate: number }) {
-  const checks: boolean[] = [filledRate === 100, q.noBusCount === 0, q.approvedCount === 0 || q.unreflected.length === 0];
-  const passCount = checks.filter(Boolean).length;
-  const warnCount = checks.filter((c) => !c).length;
-  return (
-    <div data-print-hide className="card dark:bg-gray-800 p-0 overflow-hidden">
-      <div className="flex items-center gap-2 px-5 py-3 border-b border-gray-100 dark:border-gray-700">
-        <Shield size={18} className="text-blue-600" />
-        <h3 className="text-base font-bold text-gray-900 dark:text-white">AI 배차 품질 체크리스트</h3>
-        <span className="ml-auto text-sm text-gray-500 dark:text-gray-400">통과 {passCount} · 주의 {warnCount}</span>
-      </div>
-      <div className="divide-y divide-gray-100 dark:divide-gray-700">
-        <ChecklistRow
-          status={filledRate === 100 ? 'pass' : 'warn'}
-          title="배차 완료율"
-          summary={filledRate === 100 ? '모든 근무 슬롯이 배차되었습니다' : `미충원 ${q.unfilledCount}건 (배차율 ${filledRate}%)`}
-        />
-        <ChecklistRow
-          status={q.noBusCount === 0 ? 'pass' : 'warn'}
-          title="차량 배정"
-          summary={q.noBusCount === 0 ? '모든 근무에 차량이 배정되었습니다' : `차량 미배정 ${q.noBusCount}건 — 노선별 확인`}
-        >
-          {q.noBusCount > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {q.noBusByRoute.map(([rn, c]) => (
-                <span key={rn} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 text-[12px]">
-                  {rn}번 <b>{c}건</b>
-                </span>
-              ))}
-            </div>
-          )}
-        </ChecklistRow>
-        <ChecklistRow
-          status={q.approvedCount === 0 ? 'info' : q.unreflected.length === 0 ? 'pass' : 'warn'}
-          title="휴가 반영"
-          summary={
-            q.approvedCount === 0
-              ? `승인된 휴가 없음${q.pendingCount > 0 ? ` · 미결재 ${q.pendingCount}건` : ''}`
-              : q.unreflected.length === 0
-                ? `승인 휴가 ${q.approvedCount}건 모두 반영됨${q.pendingCount > 0 ? ` · 미결재 ${q.pendingCount}건` : ''}`
-                : `승인 휴가 ${q.approvedCount}건 중 ${q.unreflected.length}건 미반영${q.pendingCount > 0 ? ` · 미결재 ${q.pendingCount}건` : ''}`
-          }
-        >
-          {q.unreflected.length > 0 && (
-            <ul className="space-y-1">
-              {q.unreflected.map((u, i) => (
-                <li key={i} className="text-[12px] text-gray-600 dark:text-gray-300">
-                  <b>{u.name}</b> ({u.employeeId}) — {u.date} 휴가 신청했으나 근무 배정됨
-                </li>
-              ))}
-            </ul>
-          )}
-        </ChecklistRow>
-        <ChecklistRow
-          status={q.spread <= 2 ? 'pass' : 'info'}
-          title="근무일 균형"
-          summary={`기사별 근무 ${q.minWork}~${q.maxWork}일 (편차 ${q.spread}일)`}
-        />
-      </div>
-    </div>
-  );
-}
 
 function ChecklistRow({ status, title, summary, children }: { status: 'pass' | 'warn' | 'info'; title: string; summary: string; children?: React.ReactNode }) {
   const [open, setOpen] = useState(false);

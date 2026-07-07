@@ -92,8 +92,8 @@ export default function DashboardKPI() {
   return (
     <section className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-5">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-[18px] font-semibold text-gray-900 dark:text-gray-100 inline-flex items-center gap-2">
-          <BarChart3 className="w-5 h-5 text-purple-500" />
+        <h2 className="text-[18px] font-bold text-gray-900 dark:text-white inline-flex items-center gap-2">
+          <BarChart3 className="w-5 h-5 text-gray-900 dark:text-white" />
           이번 달 운영 KPI
         </h2>
         <span className="text-[12px] text-gray-400">

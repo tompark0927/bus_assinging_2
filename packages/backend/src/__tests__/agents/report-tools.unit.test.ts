@@ -9,7 +9,7 @@ const mockEmergencyDropFindMany = jest.fn();
 const mockDayOffRequestFindMany = jest.fn();
 const mockDayOffRequestCount = jest.fn();
 const mockScheduleSlotCount = jest.fn();
-const mockScheduleFindUnique = jest.fn();
+const mockScheduleFindFirst = jest.fn();
 const mockUserFindMany = jest.fn();
 const mockAgentDecisionFindMany = jest.fn();
 const mockAgentDecisionAggregate = jest.fn();
@@ -23,7 +23,7 @@ jest.mock('../../utils/prisma', () => ({
       count: (...a: unknown[]) => mockDayOffRequestCount(...a),
     },
     scheduleSlot: { count: (...a: unknown[]) => mockScheduleSlotCount(...a) },
-    schedule: { findUnique: (...a: unknown[]) => mockScheduleFindUnique(...a) },
+    schedule: { findFirst: (...a: unknown[]) => mockScheduleFindFirst(...a) },
     user: { findMany: (...a: unknown[]) => mockUserFindMany(...a) },
     agentDecision: {
       findMany: (...a: unknown[]) => mockAgentDecisionFindMany(...a),
@@ -243,7 +243,8 @@ describe('get_fairness_drift', () => {
       status: 'SCHEDULED',
     }));
 
-    mockScheduleFindUnique
+    // 멀티 초안: 월별로 PUBLISHED findFirst 가 먼저 — 발행본이 있으면 fallback findFirst 는 호출되지 않음
+    mockScheduleFindFirst
       .mockResolvedValueOnce(mockSchedule(currentSlots))
       .mockResolvedValueOnce(mockSchedule(previousSlots));
 
@@ -259,8 +260,8 @@ describe('get_fairness_drift', () => {
     expect(result.drift).toBeDefined();
   });
 
-  it('현재 월 없음 → exists=false', async () => {
-    mockScheduleFindUnique.mockResolvedValue(null);
+  it('현재 월 없음 → exists=false (PUBLISHED → 최근 초안 fallback 2단계 조회)', async () => {
+    mockScheduleFindFirst.mockResolvedValue(null);
 
     const result = (await tool().handler({ year: 2026, month: 4 }, ctx)) as {
       currentMonth: { exists: boolean };
@@ -271,6 +272,11 @@ describe('get_fairness_drift', () => {
     expect(result.currentMonth.exists).toBe(false);
     expect(result.drift).toBeNull();
     expect(result.driftSignal).toBe('NORMAL');
+
+    // 두 달 × (발행본 조회 → 최근 초안 fallback) = 4회 호출
+    expect(mockScheduleFindFirst).toHaveBeenCalledTimes(4);
+    expect(mockScheduleFindFirst.mock.calls[0][0].where.status).toBe('PUBLISHED');
+    expect(mockScheduleFindFirst.mock.calls[1][0].orderBy).toEqual({ updatedAt: 'desc' });
   });
 });
 

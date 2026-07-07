@@ -401,6 +401,8 @@ model Schedule {
   companyId Int            @default(1)
   year      Int
   month     Int
+  /// 초안 프로필 이름 — 같은 달에 여러 초안을 만들어 비교할 수 있다
+  name      String         @default("기본 초안")
   status    ScheduleStatus @default(DRAFT)
   notes     String?
   createdBy Int
@@ -410,7 +412,10 @@ model Schedule {
   company Company        @relation(fields: [companyId], references: [id])
   slots   ScheduleSlot[]
 
-  @@unique([companyId, year, month])
+  // 월당 DRAFT 는 여러 개 허용 (멀티 초안 프로필).
+  // PUBLISHED 는 월당 1개만 — DB 부분 unique 인덱스로 강제
+  // (Prisma 로 표현 불가, 마이그레이션 SQL 의 Schedule_one_published_per_month 참조)
+  @@index([companyId, year, month])
   @@index([companyId])
   @@index([status])
   @@index([companyId, status])

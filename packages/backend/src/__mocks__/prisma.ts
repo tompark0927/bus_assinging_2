@@ -54,6 +54,8 @@ export const prisma: MockPrisma = {
   approval: createMockModel(),
   approvalStep: createMockModel(),
   routeAssignment: createMockModel(),
+  driverPreference: createMockModel(),
+  post: createMockModel(),
   $transaction: jest.fn((cb: unknown): any => {
     if (typeof cb === 'function') return Promise.resolve(cb(prisma));
     return Promise.all(cb as Promise<unknown>[]);

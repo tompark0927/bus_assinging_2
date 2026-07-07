@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { prisma } from '../utils/prisma';
 import { AuthRequest } from '../middleware/auth';
-import { generateMonthlySchedule, getScheduleWithSlots, updateSlot, validateRestTime } from '../services/scheduleService';
+import { generateMonthlySchedule, getScheduleWithSlots, resolveMonthScheduleId, uniqueScheduleName, updateSlot, validateRestTime } from '../services/scheduleService';
 import { generateScheduleExcel } from '../services/excelService';
 import { sendBulkPushNotifications } from '../services/notificationService';
 import { generateScheduleWithAI } from '../services/aiService';
@@ -44,8 +44,9 @@ export const getSchedule = async (req: AuthRequest, res: Response) => {
     // (DRIVER 가 아닌 계정으로 기사 앱에 로그인해도 회사 전체 배차표가 노출되지 않도록 방어)
     const mineOnly = req.query.mine === '1' || req.user!.role === 'DRIVER';
     if (mineOnly) {
-      const schedule = await prisma.schedule.findUnique({
-        where: { companyId_year_month: { companyId: req.user!.companyId, year, month } },
+      // 기사에게는 발행된 배차표만 노출 (초안 프로필은 관리자 전용)
+      const schedule = await prisma.schedule.findFirst({
+        where: { companyId: req.user!.companyId, year, month, status: 'PUBLISHED' },
         include: {
           slots: {
             where: { driverId: req.user!.id },
@@ -54,14 +55,17 @@ export const getSchedule = async (req: AuthRequest, res: Response) => {
           },
         },
       });
-      // 발행 전(DRAFT) 배차표는 기사에게 노출하지 않음
-      if (schedule && schedule.status === 'DRAFT') {
-        return res.json({ success: true, data: null });
-      }
       return res.json({ success: true, data: schedule });
     }
 
-    const schedule = await getScheduleWithSlots(req.user!.companyId, year, month);
+    // 관리자: ?scheduleId= 로 특정 초안 프로필 선택. 미지정 시 발행본 우선 → 최근 초안.
+    const scheduleIdParam = parseInt(String(req.query.scheduleId ?? ''), 10);
+    const schedule = await getScheduleWithSlots(
+      req.user!.companyId,
+      year,
+      month,
+      Number.isFinite(scheduleIdParam) && scheduleIdParam > 0 ? scheduleIdParam : undefined,
+    );
     return res.json({ success: true, data: schedule });
   } catch (error) {
     logger.error(error);
@@ -77,9 +81,9 @@ export const getMyMonthlySummary = async (req: AuthRequest, res: Response) => {
     const year = parseInt(req.params.year);
     const month = parseInt(req.params.month);
 
-    // 본인 슬롯만 조회 (status/isRestDay 만 필요)
-    const schedule = await prisma.schedule.findUnique({
-      where: { companyId_year_month: { companyId: req.user!.companyId, year, month } },
+    // 본인 슬롯만 조회 (status/isRestDay 만 필요) — 발행된 배차표 기준
+    const schedule = await prisma.schedule.findFirst({
+      where: { companyId: req.user!.companyId, year, month, status: 'PUBLISHED' },
       include: {
         slots: {
           where: { driverId: req.user!.id },
@@ -89,8 +93,7 @@ export const getMyMonthlySummary = async (req: AuthRequest, res: Response) => {
     });
 
     // 내 배차 화면과 동일한 병합 규칙: 드랍은 휴무로 집계
-    // 발행 전(DRAFT) 배차표는 요약에도 포함하지 않음
-    const slots = schedule && schedule.status !== 'DRAFT' ? schedule.slots : [];
+    const slots = schedule?.slots ?? [];
     const isRest = (s: { isRestDay: boolean; status: string }) =>
       s.isRestDay || s.status === 'DROPPED';
     const workDays = slots.filter((s) => !isRest(s)).length;
@@ -389,10 +392,16 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
     const year = parseInt(req.params.year);
     const month = parseInt(req.params.month);
 
-    // 먼저 배차표 존재 여부 + 현재 상태 확인
-    const existing = await prisma.schedule.findUnique({
-      where: { companyId_year_month: { companyId: req.user!.companyId, year, month } },
-    });
+    // 멀티 초안: body.scheduleId 로 발행할 초안 프로필을 지정. 미지정 시 최근 초안.
+    const bodyScheduleId = Number((req.body as { scheduleId?: number } | undefined)?.scheduleId);
+    const existing = bodyScheduleId > 0
+      ? await prisma.schedule.findFirst({
+          where: { id: bodyScheduleId, companyId: req.user!.companyId, year, month },
+        })
+      : await prisma.schedule.findFirst({
+          where: { companyId: req.user!.companyId, year, month, status: 'DRAFT' },
+          orderBy: { updatedAt: 'desc' },
+        });
     if (!existing) {
       return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
     }
@@ -400,8 +409,20 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, message: '이미 발행된 배차표입니다.' });
     }
 
+    // 발행본은 월당 1개만 — 다른 초안이 이미 발행되어 있으면 차단
+    const alreadyPublished = await prisma.schedule.findFirst({
+      where: { companyId: req.user!.companyId, year, month, status: 'PUBLISHED' },
+      select: { id: true, name: true },
+    });
+    if (alreadyPublished) {
+      return res.status(400).json({
+        success: false,
+        message: `이미 발행된 ${year}년 ${month}월 배차표가 있습니다. 기존 발행본을 삭제한 후 발행해주세요.`,
+      });
+    }
+
     const schedule = await prisma.schedule.update({
-      where: { companyId_year_month: { companyId: req.user!.companyId, year, month } },
+      where: { id: existing.id },
       data: { status: 'PUBLISHED' },
     });
 
@@ -454,9 +475,17 @@ export const deleteSchedule = async (req: AuthRequest, res: Response) => {
     const year = parseInt(req.params.year);
     const month = parseInt(req.params.month);
 
-    const schedule = await prisma.schedule.findUnique({
-      where: { companyId_year_month: { companyId: req.user!.companyId, year, month } },
-    });
+    // 멀티 초안: ?scheduleId= 로 삭제할 배차표(초안/발행본)를 지정. 미지정 시 발행본 우선 → 최근 초안.
+    const scheduleIdParam = parseInt(String(req.query.scheduleId ?? ''), 10);
+    const resolvedId = await resolveMonthScheduleId(
+      req.user!.companyId,
+      year,
+      month,
+      Number.isFinite(scheduleIdParam) && scheduleIdParam > 0 ? scheduleIdParam : undefined,
+    );
+    const schedule = resolvedId
+      ? await prisma.schedule.findFirst({ where: { id: resolvedId, companyId: req.user!.companyId } })
+      : null;
 
     if (!schedule) {
       return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
@@ -492,12 +521,202 @@ export const deleteSchedule = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// 월의 모든 배차표(초안 프로필 + 발행본) 목록 — 발행본 먼저, 이후 최근 수정순
+export const listMonthSchedules = async (req: AuthRequest, res: Response) => {
+  try {
+    const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
+
+    const schedules = await prisma.schedule.findMany({
+      where: { companyId: req.user!.companyId, year, month },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        notes: true,
+        createdAt: true,
+        updatedAt: true,
+        _count: { select: { slots: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const sorted = [
+      ...schedules.filter((s) => s.status === 'PUBLISHED'),
+      ...schedules.filter((s) => s.status !== 'PUBLISHED'),
+    ];
+
+    return res.json({
+      success: true,
+      data: sorted.map((s) => ({
+        id: s.id,
+        name: s.name,
+        status: s.status,
+        notes: s.notes,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        slotCount: s._count.slots,
+      })),
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+// 배차표 프로필 이름 변경
+export const renameSchedule = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = parseIdParam(req.params.id, res, '배차표 ID');
+    if (id === null) return;
+
+    const name = String((req.body as { name?: string } | undefined)?.name ?? '').trim();
+    if (!name) {
+      return res.status(400).json({ success: false, message: '이름을 입력해주세요.' });
+    }
+
+    const existing = await prisma.schedule.findFirst({
+      where: { id, companyId: req.user!.companyId },
+      select: { id: true, name: true, year: true, month: true },
+    });
+    if (!existing) {
+      return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
+    }
+
+    // 같은 달 안에서 이름 중복 방지
+    const dup = await prisma.schedule.findFirst({
+      where: {
+        companyId: req.user!.companyId,
+        year: existing.year,
+        month: existing.month,
+        name: name.slice(0, 50),
+        id: { not: existing.id },
+      },
+      select: { id: true },
+    });
+    if (dup) {
+      return res.status(409).json({ success: false, message: '같은 달에 이미 같은 이름의 배차표가 있습니다. 다른 이름을 사용해주세요.' });
+    }
+
+    const updated = await prisma.schedule.update({
+      where: { id: existing.id },
+      data: { name: name.slice(0, 50) },
+    });
+
+    await createAuditLog({
+      req: req as any,
+      action: 'UPDATE',
+      entityType: 'Schedule',
+      entityId: existing.id,
+      changes: { name: { old: existing.name, new: updated.name } },
+    });
+
+    return res.json({ success: true, data: updated, message: '이름이 변경되었습니다.' });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+// 배차표 복제 — 초안 프로필 사본 생성 (슬롯 포함, 상태는 SCHEDULED 로 초기화)
+export const duplicateSchedule = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = parseIdParam(req.params.id, res, '배차표 ID');
+    if (id === null) return;
+
+    const src = await prisma.schedule.findFirst({
+      where: { id, companyId: req.user!.companyId },
+      include: { slots: true },
+    });
+    if (!src) {
+      return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
+    }
+
+    const draftCount = await prisma.schedule.count({
+      where: { companyId: req.user!.companyId, year: src.year, month: src.month, status: 'DRAFT' },
+    });
+    if (draftCount >= 5) {
+      return res.status(400).json({
+        success: false,
+        message: '이 달의 초안이 이미 5개입니다. 사용하지 않는 초안을 삭제한 후 복제해주세요.',
+      });
+    }
+
+    const copy = await prisma.$transaction(async (tx) => {
+      const name = await uniqueScheduleName(
+        req.user!.companyId,
+        src.year,
+        src.month,
+        `${src.name} (사본)`,
+        tx,
+      );
+      const created = await tx.schedule.create({
+        data: {
+          companyId: req.user!.companyId,
+          year: src.year,
+          month: src.month,
+          name,
+          status: 'DRAFT',
+          createdBy: req.user!.id,
+          notes: src.notes,
+        },
+      });
+      if (src.slots.length > 0) {
+        await tx.scheduleSlot.createMany({
+          data: src.slots.map((s) => ({
+            scheduleId: created.id,
+            driverId: s.driverId,
+            routeId: s.routeId,
+            busId: s.busId,
+            date: s.date,
+            shift: s.shift,
+            // 운영 상태(드랍/충원/완료)는 원본 슬롯의 이력이므로 사본은 예정 상태로 초기화
+            status: 'SCHEDULED' as const,
+            isRestDay: s.isRestDay,
+            isManualOverride: s.isManualOverride,
+            overrideReason: s.overrideReason,
+            overrideBy: s.overrideBy,
+            fairnessNote: s.fairnessNote,
+            notes: s.notes,
+          })),
+        });
+      }
+      return created;
+    });
+
+    await createAuditLog({
+      req: req as any,
+      action: 'CREATE',
+      entityType: 'Schedule',
+      entityId: copy.id,
+      changes: {
+        duplicatedFrom: { old: null, new: src.id },
+        name: { old: null, new: copy.name },
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: copy,
+      message: `'${src.name}' 초안이 복제되었습니다.`,
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
 export const exportScheduleExcel = async (req: AuthRequest, res: Response) => {
   try {
     const year = parseInt(req.params.year);
     const month = parseInt(req.params.month);
 
-    const buffer = await generateScheduleExcel(req.user!.companyId, year, month);
+    const scheduleIdParam = parseInt(String(req.query.scheduleId ?? ''), 10);
+    const buffer = await generateScheduleExcel(
+      req.user!.companyId,
+      year,
+      month,
+      Number.isFinite(scheduleIdParam) && scheduleIdParam > 0 ? scheduleIdParam : undefined,
+    );
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     const company = await prisma.company.findUnique({ where: { id: req.user!.companyId }, select: { code: true } });
@@ -540,20 +759,24 @@ export const bisExport = async (req: AuthRequest, res: Response) => {
     const year = parseInt(req.params.year);
     const month = parseInt(req.params.month);
 
-    const schedule = await prisma.schedule.findUnique({
-      where: { companyId_year_month: { companyId: req.user!.companyId, year, month } },
-      include: {
-        slots: {
-          where: { isRestDay: false },
+    // 발행본 우선 → 최근 초안 (멀티 초안 지원)
+    const resolvedId = await resolveMonthScheduleId(req.user!.companyId, year, month);
+    const schedule = resolvedId
+      ? await prisma.schedule.findFirst({
+          where: { id: resolvedId, companyId: req.user!.companyId },
           include: {
-            driver: { select: { id: true, employeeId: true, name: true, licenseNumber: true } },
-            route: { select: { routeNumber: true, name: true, startPoint: true, endPoint: true } },
-            bus: { select: { busNumber: true, plateNumber: true } },
+            slots: {
+              where: { isRestDay: false },
+              include: {
+                driver: { select: { id: true, employeeId: true, name: true, licenseNumber: true } },
+                route: { select: { routeNumber: true, name: true, startPoint: true, endPoint: true } },
+                bus: { select: { busNumber: true, plateNumber: true } },
+              },
+              orderBy: [{ date: 'asc' }, { route: { routeNumber: 'asc' } }],
+            },
           },
-          orderBy: [{ date: 'asc' }, { route: { routeNumber: 'asc' } }],
-        },
-      },
-    });
+        })
+      : null;
 
     if (!schedule) {
       return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });

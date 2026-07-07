@@ -32,6 +32,7 @@ import {
   type SolverOutput,
   type WorkdayBandsPolicy,
 } from '../agents/_solvers/types';
+import { uniqueScheduleName } from './scheduleService';
 
 // ─────────────────────────────────────────────
 // 순수 헬퍼 — 선호 노선 정렬
@@ -624,7 +625,9 @@ interface PersistArgs {
   adminId: number;
   policy: CompanyPolicy;
   output: SolverOutput;
-  /** 기존 DRAFT 가 있으면 덮어쓰기 (true) 또는 에러 (false) */
+  /** 초안 프로필 이름 — 미지정 시 "초안 N" 자동 부여 */
+  name?: string;
+  /** @deprecated 멀티 초안 도입으로 항상 새 초안을 생성한다 (무시됨) */
   overwriteDraft?: boolean;
 }
 
@@ -632,37 +635,34 @@ export async function persistSolverOutput(args: PersistArgs): Promise<{
   scheduleId: number;
   slotsCreated: number;
 }> {
-  const { companyId, year, month, adminId, policy, output, overwriteDraft = false } =
-    args;
+  const { companyId, year, month, adminId, policy, output } = args;
 
-  // ── 트랜잭션: 기존 DRAFT 정리 → Schedule 생성 → Slots bulk insert ───
+  // ── 트랜잭션: 새 초안 생성 → Slots bulk insert ───
+  // 멀티 초안: 기존 초안·발행본은 건드리지 않고 항상 새 DRAFT 를 추가한다 (월당 최대 5개).
   return await prisma.$transaction(
     async (tx) => {
-      const existing = await tx.schedule.findUnique({
-        where: { companyId_year_month: { companyId, year, month } },
+      const draftCount = await tx.schedule.count({
+        where: { companyId, year, month, status: 'DRAFT' },
       });
-
-      if (existing) {
-        if (existing.status === 'PUBLISHED' || existing.status === 'ARCHIVED') {
-          throw new Error(
-            `이미 발행된 ${year}년 ${month}월 배차표가 있습니다. 기존 배차표를 삭제한 후 다시 생성해주세요.`,
-          );
-        }
-        if (!overwriteDraft) {
-          throw new Error(
-            `${year}년 ${month}월 배차표 초안이 이미 있습니다. 초안을 삭제하거나 덮어쓰기를 선택해주세요.`,
-          );
-        }
-        // 기존 DRAFT 슬롯 모두 삭제
-        await tx.scheduleSlot.deleteMany({ where: { scheduleId: existing.id } });
-        await tx.schedule.delete({ where: { id: existing.id } });
+      if (draftCount >= 5) {
+        throw new Error(
+          `${year}년 ${month}월 초안이 이미 5개입니다. 사용하지 않는 초안을 삭제한 후 다시 생성해주세요.`,
+        );
       }
 
+      const name = await uniqueScheduleName(
+        companyId,
+        year,
+        month,
+        args.name?.trim() || `초안 ${draftCount + 1}`,
+        tx,
+      );
       const schedule = await tx.schedule.create({
         data: {
           companyId,
           year,
           month,
+          name,
           status: 'DRAFT' as ScheduleStatus,
           createdBy: adminId,
           notes: `Solver: ${policy.preset ?? 'CUSTOM'} | fairness ${output.metrics.fairnessScore}/100 | sweet ${(output.metrics.withinTargetRate * 100).toFixed(0)}% | hard 위반 ${output.metrics.hardViolationCount}`,
@@ -720,14 +720,30 @@ export async function generateMonthlyScheduleV2(args: {
   adminId: number;
   /** override policy (테스트·시뮬레이션용). 미지정 시 회사 정책 자동 로드 */
   policyOverride?: CompanyPolicy;
+  /** @deprecated 멀티 초안 도입으로 항상 새 초안을 생성한다 (무시됨) */
   overwriteDraft?: boolean;
+  /** 초안 프로필 이름 — 미지정 시 "초안 N" 자동 부여 */
+  name?: string;
+  /** 근무/휴무 사이클 오버라이드 (생성 모달의 근무 일수·휴무 일수 입력) */
+  restCycleOverride?: { workDays: number; restDays: number };
   /** 생성 시 수동 지정 신규 기사 ID */
   newHireDriverIds?: number[];
   /** 노선별 사고(배차 금지) 기사 — 노선 id 기준 */
   blockedRoutes?: { routeId: number; driverIds: number[] }[];
 }): Promise<GenerateScheduleV2Result> {
   const start = Date.now();
-  const policy = args.policyOverride ?? (await loadCompanyPolicy(args.companyId));
+  const basePolicy = args.policyOverride ?? (await loadCompanyPolicy(args.companyId));
+  // 생성 모달에서 입력한 근무/휴무 일수를 회사 정책 위에 덮어쓴다
+  const policy = args.restCycleOverride
+    ? {
+        ...basePolicy,
+        restCycle: {
+          ...basePolicy.restCycle,
+          workDays: args.restCycleOverride.workDays,
+          restDays: args.restCycleOverride.restDays,
+        },
+      }
+    : basePolicy;
 
   // 노선별 사고 기사 → driverId → 금지 routeId 목록 으로 변환
   const blockedRouteIdsByDriver = new Map<number, number[]>();
@@ -767,7 +783,7 @@ export async function generateMonthlyScheduleV2(args: {
     adminId: args.adminId,
     policy,
     output,
-    overwriteDraft: args.overwriteDraft,
+    name: args.name,
   });
 
   return {

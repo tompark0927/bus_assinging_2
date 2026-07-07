@@ -16,6 +16,9 @@ jest.mock('../../utils/logger', () => ({
 jest.mock('../../services/notificationService', () => ({
   sendPushNotification: jest.fn().mockResolvedValue(undefined),
   sendBulkPushNotifications: jest.fn().mockResolvedValue(undefined),
+  notifyAvailableDriversForEmergency: jest.fn().mockResolvedValue(undefined),
+  notifyAdminsUrgentEmergency: jest.fn().mockResolvedValue(undefined),
+  notifyAdminsNewDrop: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../../services/emergencyAgentRunner', () => ({
@@ -66,8 +69,9 @@ describe('getEmergencyDrops controller', () => {
 
     await getEmergencyDrops(req, res);
 
+    // agentEnabled: AI 충원 에이전트 활성 여부가 응답에 포함됨
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: true, data: drops }),
+      expect.objectContaining({ success: true, data: drops, agentEnabled: false }),
     );
   });
 
@@ -174,12 +178,38 @@ describe('createEmergencyDrop controller', () => {
     );
   });
 
+  it('should return 400 when slot date is in the past', async () => {
+    const req = createAuthReq({ body: { slotId: 100, reason: '긴급' } });
+    const res = createMockRes();
+
+    const pastDate = new Date();
+    pastDate.setDate(pastDate.getDate() - 10);
+
+    mockPrisma.scheduleSlot.findUnique.mockResolvedValue({
+      id: 100, driverId: 10, isRestDay: false,
+      date: pastDate,
+      route: { routeNumber: '780' },
+      schedule: { companyId: 1 },
+    });
+
+    await createEmergencyDrop(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('지난 날짜') }),
+    );
+  });
+
   it('should return 409 when slot already dropped', async () => {
     const req = createAuthReq({ body: { slotId: 100, reason: '긴급' } });
     const res = createMockRes();
 
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 30);
+
     mockPrisma.scheduleSlot.findUnique.mockResolvedValue({
       id: 100, driverId: 10, isRestDay: false,
+      date: futureDate,
       route: { routeNumber: '780' },
       schedule: { companyId: 1 },
     });
@@ -190,16 +220,21 @@ describe('createEmergencyDrop controller', () => {
     expect(res.status).toHaveBeenCalledWith(409);
   });
 
-  it('should create drop, update slot, and notify admins', async () => {
+  it('should create drop, update slot, and notify resting drivers + admins', async () => {
     const req = createAuthReq({ body: { slotId: 100, reason: '가족 긴급 상황' } });
     const res = createMockRes();
 
+    // D-2 보다 여유 있는 미래 날짜 → 비긴급 경로 (notifyAdminsNewDrop)
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 30);
+
     mockPrisma.scheduleSlot.findUnique.mockResolvedValue({
       id: 100, driverId: 10, isRestDay: false,
-      date: new Date('2026-03-20'),
+      date: futureDate,
       shift: 'FULL_DAY',
       routeId: 1,
       route: { routeNumber: '780' },
+      driver: { name: '김기사' },
       schedule: { companyId: 1 },
     });
     mockPrisma.emergencyDrop.findUnique.mockResolvedValue(null);
@@ -207,10 +242,17 @@ describe('createEmergencyDrop controller', () => {
       id: 5, slotId: 100, driverId: 10, status: 'OPEN',
     });
     mockPrisma.scheduleSlot.update.mockResolvedValue({ id: 100, status: 'DROPPED' });
-    mockPrisma.user.findMany.mockResolvedValue([{ id: 1 }]);
 
     await createEmergencyDrop(req, res);
 
+    const { notifyAvailableDriversForEmergency, notifyAdminsNewDrop } =
+      require('../../services/notificationService');
+    expect(notifyAvailableDriversForEmergency).toHaveBeenCalledWith(
+      5, futureDate, 1, 1, false,
+    );
+    expect(notifyAdminsNewDrop).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 1, dropId: 5, routeNumber: '780' }),
+    );
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: true }),

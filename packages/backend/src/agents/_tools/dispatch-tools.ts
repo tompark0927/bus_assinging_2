@@ -365,22 +365,18 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
     const mode = input.mode ?? 'summary';
 
     // 1. 배차표 헤더 조회 (slots 미포함 — 항상 가벼움)
-    const schedule = await prisma.schedule.findUnique({
-      where: {
-        companyId_year_month: {
-          companyId: ctx.companyId,
-          year: input.year,
-          month: input.month,
-        },
-      },
-      select: {
-        id: true,
-        year: true,
-        month: true,
-        status: true,
-        notes: true,
-      },
-    });
+    // 멀티 초안: 발행본 우선, 없으면 가장 최근 초안
+    const scheduleSelect = { id: true, year: true, month: true, status: true, notes: true } as const;
+    const schedule =
+      (await prisma.schedule.findFirst({
+        where: { companyId: ctx.companyId, year: input.year, month: input.month, status: 'PUBLISHED' },
+        select: scheduleSelect,
+      })) ??
+      (await prisma.schedule.findFirst({
+        where: { companyId: ctx.companyId, year: input.year, month: input.month },
+        orderBy: { updatedAt: 'desc' },
+        select: scheduleSelect,
+      }));
 
     if (!schedule) {
       return { exists: false, year: input.year, month: input.month, mode };

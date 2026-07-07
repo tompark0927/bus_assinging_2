@@ -135,8 +135,22 @@ export default function DashboardPage() {
   });
 
   const { data: drivers = [] } = useQuery<Driver[]>({
-    queryKey: ['users', 'DRIVER'],
-    queryFn: () => usersApi.list({ role: 'DRIVER' }).then((r) => r.data.data).catch(() => []),
+    // 전용 키 + 모든 페이지 조회 — 기본 API 는 페이지당 20건만 반환하므로
+    // 단순 조회 시 기사 수가 20으로 잘려 표시된다(기초 데이터와 키가 겹쳐 캐시 충돌하던 문제도 해소).
+    queryKey: ['users', 'DRIVER', 'dashboard-all'],
+    queryFn: async () => {
+      try {
+        const all: Driver[] = [];
+        for (let page = 1; page <= 100; page++) {
+          const r = await usersApi.list({ role: 'DRIVER', page: String(page), limit: '100' });
+          all.push(...(r.data.data as Driver[]));
+          if (!r.data.pagination?.hasNext) break;
+        }
+        return all;
+      } catch {
+        return [];
+      }
+    },
   });
   const { data: buses = [] } = useQuery<Array<{ id: number; isActive: boolean }>>({
     queryKey: ['buses'],
@@ -248,7 +262,7 @@ export default function DashboardPage() {
 
       {/* 2. 이번 달 배차표 — 큰 카드 */}
       <SectionCard
-        icon={<Calendar className="w-5 h-5 text-blue-500" />}
+        icon={<Calendar className="w-5 h-5 text-gray-900 dark:text-white" />}
         title={`${year}년 ${month}월 배차표`}
         right={<ScheduleStatusBadge schedule={schedule} loading={schedLoading} />}
         to="/dashboard/schedule"
@@ -289,7 +303,7 @@ export default function DashboardPage() {
       {/* 4. 운영 큐 — 2-column */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <SectionCard
-          icon={<CalendarOff className="w-5 h-5 text-amber-500" />}
+          icon={<CalendarOff className="w-5 h-5 text-gray-900 dark:text-white" />}
           title="휴무 신청 검토"
           right={
             <div className="flex items-center gap-2">
@@ -336,7 +350,7 @@ export default function DashboardPage() {
         </SectionCard>
 
         <SectionCard
-          icon={<AlertTriangle className="w-5 h-5 text-red-500" />}
+          icon={<AlertTriangle className="w-5 h-5 text-gray-900 dark:text-white" />}
           title="진행 중인 대타"
           right={<Badge color={openEmergencies.length > 0 ? 'red' : 'gray'}>{openEmergencies.length}건</Badge>}
           to="/dashboard/emergency"
@@ -372,8 +386,8 @@ export default function DashboardPage() {
       {/* 5. 다가오는 휴무 (1주일 내) */}
       {upcomingDayOffs.length > 0 && (
         <SectionCard
-          icon={<CalendarOff className="w-5 h-5 text-blue-500" />}
-          title="다가오는 승인 휴무 (D-7)"
+          icon={<CalendarOff className="w-5 h-5 text-gray-900 dark:text-white" />}
+          title="다가오는 휴무 (D-7)"
           right={<Badge color="blue">{upcomingDayOffs.reduce((sum, [, list]) => sum + list.length, 0)}건</Badge>}
           to="/dashboard/dayoff"
           ctaLabel="전체 보기"
@@ -411,7 +425,7 @@ export default function DashboardPage() {
       {/* 7. 운영 통계 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <CountCard
-          icon={<Users className="w-5 h-5 text-blue-500" />}
+          icon={<Users className="w-5 h-5 text-gray-900 dark:text-white" />}
           label="활성 기사"
           value={counts.drivers}
           unit="명"
@@ -419,7 +433,7 @@ export default function DashboardPage() {
           to="/dashboard/data"
         />
         <CountCard
-          icon={<Bus className="w-5 h-5 text-emerald-500" />}
+          icon={<Bus className="w-5 h-5 text-gray-900 dark:text-white" />}
           label="운행 버스"
           value={counts.buses}
           unit="대"
@@ -543,7 +557,7 @@ function SectionCard({ icon, title, right, to, ctaLabel, children }: { icon: Rea
   return (
     <section className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-5">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-[18px] font-semibold text-gray-900 dark:text-gray-100 inline-flex items-center gap-2">
+        <h2 className="text-[18px] font-bold text-gray-900 dark:text-white inline-flex items-center gap-2">
           {icon}{title}
         </h2>
         <div className="flex items-center gap-2">

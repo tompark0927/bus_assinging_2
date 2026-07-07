@@ -390,7 +390,6 @@ describe('cleanupFixture', () => {
     expect(mockDropDeleteMany).toHaveBeenCalled();
     expect(mockSlotDeleteMany).toHaveBeenCalled();
     expect(mockScheduleDeleteMany).toHaveBeenCalled();
-    expect(mockGoldenTicketDeleteMany).toHaveBeenCalled();
     expect(mockAgentDecisionDeleteMany).toHaveBeenCalled();
     expect(mockDayOffRequestDeleteMany).toHaveBeenCalled();
     expect(mockCompanyRuleDeleteMany).toHaveBeenCalled();

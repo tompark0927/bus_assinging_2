@@ -331,21 +331,29 @@ const getFairnessDrift: AgentTool<GetFairnessDriftInput, unknown> = {
       y: number,
       m: number
     ): Promise<{ exists: boolean; fairnessScore: number; outliers: number; stdev: number }> => {
-      const schedule = await prisma.schedule.findUnique({
-        where: { companyId_year_month: { companyId: ctx.companyId, year: y, month: m } },
-        include: {
-          slots: {
-            select: {
-              driverId: true,
-              routeId: true,
-              shift: true,
-              isRestDay: true,
-              date: true,
-              status: true,
-            },
+      // 멀티 초안: 발행본 우선, 없으면 가장 최근 초안 기준
+      const scheduleInclude = {
+        slots: {
+          select: {
+            driverId: true,
+            routeId: true,
+            shift: true,
+            isRestDay: true,
+            date: true,
+            status: true,
           },
         },
-      });
+      } as const;
+      const schedule =
+        (await prisma.schedule.findFirst({
+          where: { companyId: ctx.companyId, year: y, month: m, status: 'PUBLISHED' },
+          include: scheduleInclude,
+        })) ??
+        (await prisma.schedule.findFirst({
+          where: { companyId: ctx.companyId, year: y, month: m },
+          orderBy: { updatedAt: 'desc' },
+          include: scheduleInclude,
+        }));
       if (!schedule || schedule.slots.length === 0) {
         return { exists: false, fairnessScore: 0, outliers: 0, stdev: 0 };
       }

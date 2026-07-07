@@ -220,20 +220,20 @@ export async function notifyAvailableDriversForEmergency(
 ) {
   const dateStr = date.toISOString().split('T')[0];
   const month = date.getUTCMonth() + 1;
-  const year = date.getFullYear();
 
   const route = await prisma.route.findFirst({ where: { id: routeId, companyId }, select: { routeNumber: true, name: true, companyId: true } });
   if (!route) return;
 
-  const schedule = await prisma.schedule.findUnique({
-    where: { companyId_year_month: { companyId: route.companyId, year, month } },
-    select: { id: true },
+  // 드랍된 슬롯이 속한 배차표 기준으로 그날 쉬는 기사를 찾는다 (멀티 초안 대응)
+  const drop = await prisma.emergencyDrop.findUnique({
+    where: { id: emergencyDropId },
+    select: { slot: { select: { scheduleId: true } } },
   });
 
   // 그날 쉬는 기사 (스케줄이 없으면 빈 배열)
-  const restingDriverSlots = schedule
+  const restingDriverSlots = drop
     ? await prisma.scheduleSlot.findMany({
-        where: { scheduleId: schedule.id, date: new Date(dateStr), isRestDay: true },
+        where: { scheduleId: drop.slot.scheduleId, date: new Date(dateStr), isRestDay: true },
         select: { driverId: true },
       })
     : [];

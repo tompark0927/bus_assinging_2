@@ -85,7 +85,7 @@ export default function CompanyInfoPage() {
 
       {/* 기본 정보 카드 */}
       <section className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6">
-        <h2 className="text-[18px] font-semibold text-gray-900 dark:text-gray-100 mb-5">기본 정보</h2>
+        <h2 className="text-[18px] font-bold text-gray-900 dark:text-white mb-5">기본 정보</h2>
 
         <div className="space-y-4">
           <div>
@@ -149,7 +149,7 @@ export default function CompanyInfoPage() {
 
       {/* 등록 현황 */}
       <section className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6">
-        <h2 className="text-[18px] font-semibold text-gray-900 dark:text-gray-100 mb-5">등록 현황</h2>
+        <h2 className="text-[18px] font-bold text-gray-900 dark:text-white mb-5">등록 현황</h2>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <StatLink
@@ -178,7 +178,7 @@ export default function CompanyInfoPage() {
 
       {/* 빠른 진입 */}
       <section className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6">
-        <h2 className="text-[18px] font-semibold text-gray-900 dark:text-gray-100 mb-5">빠른 진입</h2>
+        <h2 className="text-[18px] font-bold text-gray-900 dark:text-white mb-5">빠른 진입</h2>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <QuickLink

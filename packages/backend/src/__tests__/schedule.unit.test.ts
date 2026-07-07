@@ -47,23 +47,24 @@ describe('조별 근무 시프트 결정', () => {
 
   it('1조: block=0이면 MORNING', () => {
     // 2000-01-01 = daySerial 0, block 0
-    const date = new Date('2000-01-03'); // daySerial=2, block=0
+    // 로컬 타임존 기준 생성 — base(new Date(2000,0,1))와 동일 기준이라 TZ 무관하게 daySerial 정확
+    const date = new Date(2000, 0, 3); // daySerial=2, block=0
     expect(getShiftType(date, '1조')).toBe('MORNING');
   });
 
   it('1조: block=1이면 AFTERNOON', () => {
     // 2000-01-15 = daySerial 14, block = floor(14/14)%2 = 1
-    const date = new Date('2000-01-15');
+    const date = new Date(2000, 0, 15);
     expect(getShiftType(date, '1조')).toBe('AFTERNOON');
   });
 
   it('2조: block=0이면 AFTERNOON (1조와 반대)', () => {
-    const date = new Date('2000-01-03');
+    const date = new Date(2000, 0, 3);
     expect(getShiftType(date, '2조')).toBe('AFTERNOON');
   });
 
   it('2조: block=1이면 MORNING', () => {
-    const date = new Date('2000-01-15');
+    const date = new Date(2000, 0, 15);
     expect(getShiftType(date, '2조')).toBe('MORNING');
   });
 
@@ -84,8 +85,8 @@ describe('조별 근무 시프트 결정', () => {
   });
 
   it('14일마다 시프트 전환 (1조 기준)', () => {
-    const date1 = new Date('2026-03-01');
-    const date2 = new Date('2026-03-15'); // 14일 후
+    const date1 = new Date(2026, 2, 1);
+    const date2 = new Date(2026, 2, 15); // 14일 후
     const shift1 = getShiftType(date1, '1조');
     const shift2 = getShiftType(date2, '1조');
     expect(shift1).not.toBe(shift2);

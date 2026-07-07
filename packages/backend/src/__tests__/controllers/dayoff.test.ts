@@ -15,6 +15,7 @@ jest.mock('../../utils/logger', () => ({
 
 jest.mock('../../services/notificationService', () => ({
   sendPushNotification: jest.fn().mockResolvedValue(undefined),
+  notifyAdminsNewDayoffRequest: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../../services/emergencyAgentRunner', () => ({
@@ -249,12 +250,18 @@ describe('reviewDayOffRequest controller', () => {
       id: 1, status: 'APPROVED', driverId: 10, date: new Date('2026-03-25'),
       driver: { id: 10, name: '김기사' },
     });
-    mockPrisma.schedule.findUnique.mockResolvedValue(null);
+    // 드랍/대타는 발행된(PUBLISHED) 배차표에만 생성 — 발행본 없음 → 슬롯 드랍 없이 승인만
+    mockPrisma.schedule.findFirst.mockResolvedValue(null);
 
     await reviewDayOffRequest(req, res);
 
+    expect(mockPrisma.schedule.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: 'PUBLISHED' }),
+      }),
+    );
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: true }),
+      expect.objectContaining({ success: true, slotNotified: false }),
     );
   });
 

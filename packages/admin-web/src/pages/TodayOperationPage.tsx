@@ -68,8 +68,15 @@ export default function TodayOperationPage() {
   });
 
   const { data: schedule, isLoading: schedLoading } = useQuery<{ slots: Slot[]; status: string } | null>({
-    queryKey: ['schedule', year, month],
-    queryFn: () => schedulesApi.get(year, month).then((r) => r.data.data).catch(() => null),
+    queryKey: ['schedule', 'today-operation', year, month],
+    // 운행 현황은 발행된 배차표만 대상 — 초안 프로필 데이터가 노출되면 안 됨
+    queryFn: () =>
+      schedulesApi.get(year, month)
+        .then((r) => {
+          const s = r.data.data as { slots: Slot[]; status: string } | null;
+          return s && s.status === 'PUBLISHED' ? s : null;
+        })
+        .catch(() => null),
   });
 
   const { data: routes = [] } = useQuery<Route[]>({
