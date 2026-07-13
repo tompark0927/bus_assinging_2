@@ -1,3 +1,4 @@
+import type { Request, Response, NextFunction } from 'express';
 import rateLimit, { type Options } from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
 import { getRedis } from '../config/redis';
@@ -26,7 +27,7 @@ function createStore(prefix: string): RedisStore | undefined {
 }
 
 function createLimiter(prefix: string, opts: Partial<Options>) {
-  return rateLimit({
+  const limiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     // 개발 환경에서는 rate limit 을 적용하지 않는다 (로컬 테스트/스크린샷 작업 편의).
@@ -35,6 +36,24 @@ function createLimiter(prefix: string, opts: Partial<Options>) {
     store: createStore(prefix),
     ...opts,
   });
+
+  // Fail-open 방어: store(Redis) 가 도달 불가하면 express-rate-limit 이 next(err) 로 에러를
+  // 넘기고, 글로벌 에러 핸들러가 모든 rate-limited 요청을 500 으로 만든다.
+  // (Redis 다운 시 로그인·OTP·이메일 인증이 전부 "서버 내부 오류" 로 죽는 실제 장애 원인)
+  // → store 에러는 삼키고 이번 요청을 제한 없이 통과시켜 서비스 가용성을 지킨다.
+  //   정상 통과/한도 초과(429) 동작은 그대로 유지된다 (429 는 handler 가 응답을 직접 보냄).
+  return (req: Request, res: Response, next: NextFunction) => {
+    limiter(req, res, (err?: unknown) => {
+      if (err) {
+        logger.warn('Rate limiter store 오류 — 이번 요청은 제한 없이 통과(fail-open)', {
+          prefix,
+          message: (err as Error)?.message,
+        });
+        return next();
+      }
+      next();
+    });
+  };
 }
 
 // 로그인 브루트포스 방지: 15분에 10회 (프로덕션), 개발 100회

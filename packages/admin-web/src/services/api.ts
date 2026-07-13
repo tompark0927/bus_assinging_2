@@ -318,7 +318,7 @@ export type ContactTopic = 'general' | 'demo' | 'pricing' | 'bug';
 export const contactApi = {
   submit: (data: {
     name: string;
-    phone: string;
+    phone?: string;
     email?: string;
     topic?: ContactTopic;
     buses?: number;

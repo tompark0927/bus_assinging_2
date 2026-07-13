@@ -81,17 +81,17 @@ const STATS = [
 export default function LandingPage() {
   const navigate = useNavigate();
   const [contactName, setContactName] = useState('');
-  const [contactPhone, setContactPhone] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleContactSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      await contactApi.submit({ name: contactName, phone: contactPhone, topic: 'demo' });
+      await contactApi.submit({ name: contactName, email: contactEmail, topic: 'demo' });
       setContactName('');
-      setContactPhone('');
-      toast.success('도입 문의가 접수되었습니다. 곧 연락드리겠습니다!');
+      setContactEmail('');
+      toast.success('데모 신청이 접수되었습니다. 곧 이메일로 연락드리겠습니다!');
     } catch (error) {
       console.error(error);
       toast.error('문의 접수 중 오류가 발생했습니다.');
@@ -280,7 +280,7 @@ export default function LandingPage() {
           <Section delay={100}>
             <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-2xl p-8 lg:p-10 text-left max-w-xl mx-auto">
               <h3 className="text-xl font-bold mb-1">데모 상담 신청</h3>
-              <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">연락처를 남겨주시면 빠르게 연락드리겠습니다.</p>
+              <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">이메일을 남겨주시면 빠르게 연락드리겠습니다.</p>
 
               <form onSubmit={handleContactSubmit} className="space-y-4">
                 <div>
@@ -295,14 +295,14 @@ export default function LandingPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1.5">연락처 <span className="text-red-500">*</span></label>
+                  <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1.5">이메일 <span className="text-red-500">*</span></label>
                   <input
-                    type="tel"
+                    type="email"
                     required
-                    value={contactPhone}
-                    onChange={(e) => setContactPhone(e.target.value)}
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-white/10 rounded-xl px-4 py-3 text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
-                    placeholder="010-1234-5678"
+                    placeholder="name@company.com"
                   />
                 </div>
                 <button
