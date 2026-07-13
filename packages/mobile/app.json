@@ -28,7 +28,6 @@
         "UIBackgroundModes": [
           "remote-notification"
         ],
-        "NSLocationWhenInUseUsageDescription": "선호 노선 추천에 위치 정보를 사용할 수 있습니다.",
         "NSUserNotificationsUsageDescription": "긴급 대타 요청과 배차 변경 알림을 받기 위해 알림을 사용합니다.",
         "ITSAppUsesNonExemptEncryption": false
       }
