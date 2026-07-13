@@ -62,7 +62,23 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-xl font-bold mb-2">7. 개인정보 보호책임자</h2>
+            <h2 className="text-xl font-bold mb-2">7. 계정 및 데이터 삭제 요청</h2>
+            <p>
+              이용자는 계정 및 관련 개인정보의 삭제를 요청할 수 있습니다. 삭제되는 항목,
+              보관되는 항목, 요청 방법은{' '}
+              <a href="/account-deletion" className="text-blue-600 hover:underline">
+                계정 및 데이터 삭제 요청
+              </a>{' '}
+              페이지에서 안내합니다. 소속 회사 관리자 또는{' '}
+              <a href="mailto:support.busync@gmail.com?subject=계정 삭제 요청" className="text-blue-600 hover:underline">
+                support.busync@gmail.com
+              </a>
+              으로 요청하실 수 있습니다.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold mb-2">8. 개인정보 보호책임자</h2>
             <p>
               개인정보 보호책임자: Busync 운영팀<br />
               이메일: <a href="mailto:support.busync@gmail.com" className="text-blue-600 hover:underline">support.busync@gmail.com</a>

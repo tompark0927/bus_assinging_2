@@ -19,6 +19,7 @@ const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 const SupportPage = lazy(() => import('./pages/SupportPage'));
 const TermsPage = lazy(() => import('./pages/TermsPage'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
+const AccountDeletionPage = lazy(() => import('./pages/AccountDeletionPage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const SchedulePage = lazy(() => import('./pages/SchedulePage'));
 const DayOffPage = lazy(() => import('./pages/DayOffPage'));
@@ -53,6 +54,7 @@ export default function App() {
             <Route path="/support" element={<SupportPage />} />
             <Route path="/terms" element={<TermsPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/account-deletion" element={<AccountDeletionPage />} />
             <Route path="/dashboard/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
 
             {/* Protected Admin Routes */}
