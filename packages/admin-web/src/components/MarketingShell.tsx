@@ -136,9 +136,7 @@ export function MarketingFooter() {
 
           {/* Company */}
           <FooterColumn title="회사">
-            <FooterText>인천광역시 남동구</FooterText>
             <FooterText>support.busync@gmail.com</FooterText>
-            <FooterText>032-000-0000</FooterText>
           </FooterColumn>
         </div>
 
