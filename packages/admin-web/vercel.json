@@ -7,6 +7,10 @@
     {
       "source": "/socket.io/:path*",
       "destination": "https://busyncbackend-production.up.railway.app/socket.io/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
