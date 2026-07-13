@@ -20,7 +20,9 @@ function getUserId(): number | null {
 
 async function reportError(errorData: Partial<ErrorReport>) {
   try {
-    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+    // 상대경로 기본값: 프로덕션에선 Vercel rewrite 가 /api 를 Railway 백엔드로 프록시.
+    // (localhost 하드코딩 시 배포 환경에서 에러 리포트가 유실됨)
+    const apiBase = import.meta.env.VITE_API_URL || '';
     await fetch(`${apiBase}/api/v1/error-report`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
