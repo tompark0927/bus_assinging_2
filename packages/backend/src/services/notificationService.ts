@@ -268,7 +268,7 @@ export async function notifyAvailableDriversForEmergency(
   // 긴급 단계(D-2 이내): 알림톡 stub 호출 — 카카오 채널·템플릿 승인 후 실제 발송으로 스왑.
   if (urgent) {
     const drivers = await prisma.user.findMany({
-      where: { id: { in: targetDriverIds } },
+      where: { companyId, id: { in: targetDriverIds } },
       select: { id: true, name: true, phone: true },
     });
     const phones = drivers.map((d) => d.phone).filter((p): p is string => !!p);

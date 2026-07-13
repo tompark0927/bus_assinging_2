@@ -183,6 +183,7 @@ export default function EmergencyScreen() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['my-schedule'] });
       queryClient.invalidateQueries({ queryKey: ['emergency-open'] });
+      // 팝업은 신청 시점에 이미 닫혔으므로 입력값만 초기화한다
       setShowDropModal(false);
       setDropReason('');
       setSelectedSlotId(null);
@@ -475,7 +476,11 @@ export default function EmergencyScreen() {
                     {
                       text: t('common.confirm'),
                       style: 'destructive',
-                      onPress: () => dropMutation.mutate({ slotId: selectedSlotId, reason: dropReason }),
+                      onPress: () => {
+                        // 신청과 동시에 입력 팝업을 내린다 (전송은 백그라운드로 진행)
+                        setShowDropModal(false);
+                        dropMutation.mutate({ slotId: selectedSlotId, reason: dropReason });
+                      },
                     },
                   ]
                 );
