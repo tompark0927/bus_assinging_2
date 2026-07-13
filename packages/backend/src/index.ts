@@ -21,6 +21,16 @@ import {
 import { initSocket } from './services/socketService';
 import { runAuditLogRetentionSafe, isAuditLogRetentionDisabled } from './services/auditLogRetention';
 
+// 외부 의존성(Redis 등)의 일시적 실패로 프로세스가 죽지 않도록 안전망.
+// 예: REDIS_URL 이 도달 불가할 때 ioredis 가 던지는 MaxRetriesPerRequestError →
+//     로그만 남기고 서버는 계속 실행 (rate limit 은 메모리로 자연 폴백).
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled Rejection (서버 유지):', reason instanceof Error ? reason.stack || reason.message : reason);
+});
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught Exception (서버 유지):', err instanceof Error ? err.stack || err.message : err);
+});
+
 const PORT = process.env.PORT || 4000;
 
 const server = http.createServer(app);

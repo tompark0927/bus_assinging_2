@@ -877,8 +877,8 @@ export const contactValidation = {
   submit: validate([
     requiredString('name', '이름', { min: 1, max: 50 }),
     body('phone')
+      .optional({ checkFalsy: true })
       .trim()
-      .notEmpty().withMessage('연락처는 필수입니다.')
       .matches(/^01[016789]-?\d{3,4}-?\d{4}$/).withMessage('유효한 전화번호 형식이어야 합니다.'),
     body('email')
       .optional({ checkFalsy: true })

@@ -1,35 +1,23 @@
-import nodemailer, { type Transporter } from 'nodemailer';
 import logger from '../utils/logger';
 
 /**
- * 이메일 발송 (nodemailer / SMTP).
+ * 이메일 발송 (Resend HTTP API).
  *
- *   - EMAIL_DEV_MODE=true 이거나 SMTP 설정이 없으면 → 실제 발송 대신 콘솔에 출력 (개발용)
- *   - 그 외 → SMTP 로 실제 발송
+ * SMTP(포트 587)를 쓰지 않고 HTTPS API 로 발송한다 → Railway 등 아웃바운드 SMTP 를
+ * 차단하는 호스팅에서도 정상 동작 (기존 nodemailer/SMTP 는 프로덕션에서 무한 행 발생).
+ *
+ *   - EMAIL_DEV_MODE=true 이거나 RESEND_API_KEY 미설정 → 실제 발송 대신 콘솔 출력 (개발용)
+ *   - 그 외 → Resend API 로 실제 발송
  *
  * 필요한 환경변수:
- *   SMTP_HOST, SMTP_PORT(기본 587), SMTP_USER, SMTP_PASS, SMTP_FROM(없으면 SMTP_USER)
+ *   RESEND_API_KEY   Resend 대시보드에서 발급한 API 키
+ *   EMAIL_FROM       발신 주소 (예: "Busync <no-reply@yourdomain.com>").
+ *                    ⚠️ Resend 에서 도메인을 인증해야 발신 가능. 테스트용으로는
+ *                    'onboarding@resend.dev' 를 쓸 수 있으나 수신처가 제한된다.
  */
 
-let transporter: Transporter | null = null;
-
-function getTransporter(): Transporter | null {
-  if (transporter) return transporter;
-
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!host || !user || !pass) return null;
-
-  const port = Number(process.env.SMTP_PORT) || 587;
-  transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465, // 465 = SMTPS, 그 외(587 등) = STARTTLS
-    auth: { user, pass },
-  });
-  return transporter;
-}
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+const SEND_TIMEOUT_MS = 15_000;
 
 export async function sendEmail(
   to: string,
@@ -38,16 +26,42 @@ export async function sendEmail(
   text?: string,
 ): Promise<void> {
   const devMode = process.env.EMAIL_DEV_MODE === 'true';
-  const t = getTransporter();
+  const apiKey = process.env.RESEND_API_KEY;
 
-  // 개발 모드 또는 SMTP 미설정: 콘솔에만 출력 (SMS 개발 모드와 동일한 패턴)
-  if (devMode || !t) {
+  // 개발 모드 또는 API 키 미설정: 콘솔에만 출력 (SMS 개발 모드와 동일한 패턴)
+  if (devMode || !apiKey) {
     logger.info(`[EMAIL 개발 모드] 수신: ${to} | 제목: ${subject}\n${text || html.replace(/<[^>]+>/g, ' ')}`);
     return;
   }
 
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER!;
-  await t.sendMail({ from, to, subject, html, text });
+  const from = process.env.EMAIL_FROM || 'Busync <onboarding@resend.dev>';
+
+  // 절대 무한 대기하지 않도록 타임아웃 — 실패해도 요청이 15초 내 반환된다.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+  try {
+    const resp = await fetch(RESEND_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ from, to, subject, html, text }),
+      signal: controller.signal,
+    });
+
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      throw new Error(`Resend 발송 실패 (${resp.status}): ${detail}`);
+    }
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') {
+      throw new Error(`Resend 발송 타임아웃 (${SEND_TIMEOUT_MS}ms)`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** 인증번호(OTP) 이메일 본문 — 비밀번호 재설정용 */
