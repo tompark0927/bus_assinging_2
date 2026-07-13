@@ -277,10 +277,6 @@ export const approvalsApi = {
 
 export const attendanceApi = {
   todayStatus: () => api.get('/attendance/today'),
-  checkIn: (latitude: number, longitude: number) =>
-    api.post('/attendance/check-in', { latitude, longitude }),
-  checkOut: (latitude: number, longitude: number) =>
-    api.post('/attendance/check-out', { latitude, longitude }),
 };
 
 export const postsApi = {
