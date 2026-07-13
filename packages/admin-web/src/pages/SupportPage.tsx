@@ -5,7 +5,6 @@ import {
   Phone,
   MessageCircle,
   Clock,
-  MapPin,
   Send,
   CheckCircle2,
   HelpCircle,
@@ -90,16 +89,6 @@ export default function SupportPage() {
               ['토요일', '휴무'],
               ['일요일·공휴일', '휴무'],
               ['긴급 운영 장애', '24시간 (Pro 이상)'],
-            ]}
-          />
-          <InfoCard
-            icon={<MapPin size={20} className="text-blue-600 dark:text-blue-400" />}
-            title="주소"
-            rows={[
-              ['본사', '인천광역시 남동구'],
-              ['우편번호', '21565'],
-              ['사업자등록번호', '000-00-00000'],
-              ['대표', '홍길동'],
             ]}
           />
         </div>
