@@ -15,3 +15,10 @@ web-build/
 coverage/
 logs/
 
+# Mobile secrets — never commit
+# NOTE: google-services.json / GoogleService-Info.plist are NOT secret (they ship
+# inside the app binary) and MUST stay tracked so EAS Build can upload them.
+google-play-service-account*.json
+*.keystore
+*.p8
+

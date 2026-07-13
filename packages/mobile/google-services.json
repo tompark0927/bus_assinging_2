@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "795358486138",
+    "project_id": "busync-b5538",
+    "storage_bucket": "busync-b5538.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:795358486138:android:55e33b06c5fefc30bbe5c3",
+        "android_client_info": {
+          "package_name": "com.busync.driver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDoAUBExq4I5UVKDl0uYV9_IRfXVAlHiko"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

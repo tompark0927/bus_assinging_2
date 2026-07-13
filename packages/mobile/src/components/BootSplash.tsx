@@ -108,12 +108,9 @@ export default function BootSplash() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <Animated.View
-        style={[
-          styles.topBlock,
-          { opacity: introOpacity, transform: [{ translateY: introLift }] },
-        ]}
-      >
+      <View style={styles.topBlock}>
+        {/* 로고는 네이티브 스플래시(splash.png)와 동일 위치에 정적으로 렌더 —
+            페이드인에서 제외해 스플래시 → 부트스플래시 전환 시 깜빡임을 없앤다. */}
         <Image
           source={require('../../assets/busync-lockup-transparent.png')}
           style={styles.lockup}
@@ -121,15 +118,21 @@ export default function BootSplash() {
           accessibilityIgnoresInvertColors
         />
 
-        <View style={styles.copyBlock}>
+        {/* 카피만 페이드/리프트 인 */}
+        <Animated.View
+          style={[
+            styles.copyBlock,
+            { opacity: introOpacity, transform: [{ translateY: introLift }] },
+          ]}
+        >
           <Text style={styles.headline}>
             기사님,{'\n'}오늘도 안전 운행{'\n'}하세요.
           </Text>
           <Text style={styles.subhead}>
             배차 · 휴무 · 대타까지 모든 일정을{'\n'}한 곳에서 관리하세요.
           </Text>
-        </View>
-      </Animated.View>
+        </Animated.View>
+      </View>
 
       {/* ── 하단 로딩바: 버스 경로 모티브 ─────────── */}
       <View style={styles.loaderWrap}>
