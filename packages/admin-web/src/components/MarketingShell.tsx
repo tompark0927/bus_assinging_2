@@ -145,6 +145,7 @@ export function MarketingFooter() {
           <div className="flex gap-6 text-sm text-gray-400">
             <Link to="/terms" className="hover:text-gray-600 dark:hover:text-gray-200 transition-colors">이용약관</Link>
             <Link to="/privacy" className="hover:text-gray-600 dark:hover:text-gray-200 transition-colors">개인정보처리방침</Link>
+            <Link to="/account-deletion" className="hover:text-gray-600 dark:hover:text-gray-200 transition-colors">계정 삭제</Link>
           </div>
         </div>
       </div>
