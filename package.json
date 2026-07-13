@@ -19,7 +19,7 @@
     "react": "18.2.0",
     "react-native": "0.74.5"
   },
-  "devDependencies": {
+  "dependencies": {
     "patch-package": "^8.0.1"
   }
 }
