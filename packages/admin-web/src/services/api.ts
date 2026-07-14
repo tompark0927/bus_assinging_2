@@ -165,7 +165,7 @@ export const authApi = {
   forgotPasswordReset: (companyCode: string, identifier: string, otp: string, newPassword: string) =>
     api.post('/auth/forgot-password/reset', { companyCode, identifier, otp, newPassword }),
   // 회사 코드 찾기 (등록된 휴대폰으로 문자 발송)
-  findCompanyCode: (phone: string) => api.post('/auth/find-company-code', { phone }),
+  findCompanyCode: (email: string) => api.post('/auth/find-company-code', { email }),
   // 회원가입 이메일 인증
   sendEmailOtp: (email: string) => api.post('/auth/email/send-otp', { email }),
   verifyEmailOtp: (email: string, otp: string) => api.post('/auth/email/verify-otp', { email, otp }),
