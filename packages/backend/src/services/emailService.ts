@@ -78,6 +78,27 @@ export function otpEmailHtml(otp: string): string {
   `;
 }
 
+/** 회사 코드 찾기 이메일 본문 — 가입된 회사(들)의 코드를 안내 */
+export function companyCodeFoundEmailHtml(companies: { name: string; code: string }[]): string {
+  const rows = companies
+    .map(
+      (c) => `
+      <div style="background:#f3f4f6;border-radius:12px;padding:16px 20px;margin-bottom:12px">
+        <div style="font-size:13px;color:#6b7280;margin-bottom:6px">${c.name}</div>
+        <div style="font-size:26px;font-weight:700;letter-spacing:5px;color:#2563eb">${c.code}</div>
+      </div>`,
+    )
+    .join('');
+  return `
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111827">
+      <h2 style="margin:0 0 8px;font-size:20px">Busync 회사 코드 안내</h2>
+      <p style="margin:0 0 20px;color:#6b7280;font-size:14px">입력하신 이메일로 가입된 회사 코드입니다. 로그인 시 이 코드가 필요합니다.</p>
+      ${rows}
+      <p style="margin:8px 0 0;color:#9ca3af;font-size:13px">본인이 요청하지 않았다면 이 메일을 무시하세요.</p>
+    </div>
+  `;
+}
+
 /** 회사 코드 안내 이메일 본문 — 회원가입 완료 시 발송 */
 export function companyCodeEmailHtml(companyName: string, companyCode: string): string {
   return `

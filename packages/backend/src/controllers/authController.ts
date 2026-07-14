@@ -6,7 +6,7 @@ import axios from 'axios';
 import { prisma } from '../utils/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { sendSms, generateOtp } from '../services/smsService';
-import { sendEmail, otpEmailHtml } from '../services/emailService';
+import { sendEmail, otpEmailHtml, companyCodeFoundEmailHtml } from '../services/emailService';
 import logger from '../utils/logger';
 
 // 타이밍 공격 방지용 상수 시간 비교.
@@ -58,12 +58,6 @@ function safeUser(user: Record<string, unknown>) {
 
 // 휴대폰 번호 마스킹: "010-1234-5678" / "01012345678" → "010-****-5678"
 // 비밀번호 재설정 시 "어느 번호로 인증번호가 갔는지" 힌트를 안전하게 보여주기 위함.
-function maskPhone(phone: string | null | undefined): string {
-  const d = String(phone ?? '').replace(/\D/g, '');
-  if (d.length < 7) return '***';
-  return `${d.slice(0, 3)}-****-${d.slice(-4)}`;
-}
-
 // 이메일 마스킹: "tompark0927@gmail.com" → "to****@gmail.com"
 function maskEmail(email: string | null | undefined): string {
   const e = String(email ?? '');
@@ -627,14 +621,13 @@ export const forgotPasswordReset = async (req: Request, res: Response) => {
 // ─────────────────────────────────────────
 export const findCompanyCode = async (req: Request, res: Response) => {
   try {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ success: false, message: '전화번호를 입력해주세요.' });
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: '이메일을 입력해주세요.' });
 
-    const raw = String(phone).trim();
-    const digits = raw.replace(/\D/g, '');
+    const raw = String(email).trim().toLowerCase();
 
     const users = await prisma.user.findMany({
-      where: { isActive: true, OR: [{ phone: raw }, ...(digits ? [{ phone: digits }] : [])] },
+      where: { isActive: true, email: raw },
       include: { company: true },
     });
 
@@ -644,18 +637,22 @@ export const findCompanyCode = async (req: Request, res: Response) => {
     );
 
     // enumeration 방지: 찾았든 못 찾았든 동일한 일반 응답.
-    // 실제 코드는 본인 휴대폰 문자로만 전달 (SMS_DEV_MODE=true 면 서버 콘솔에 출력).
+    // 실제 코드는 본인 이메일로만 전달 (EMAIL_DEV_MODE=true 면 서버 콘솔에 출력).
     if (companies.length > 0) {
-      const lines = companies.map((c) => `· ${c.name}: ${c.code}`).join('\n');
-      await sendSms(raw, `[Busync] 가입된 회사 코드 안내\n${lines}`);
-      logger.info('회사 코드 찾기 — 발송', { phone: maskPhone(raw), count: companies.length });
+      await sendEmail(
+        raw,
+        '[Busync] 가입된 회사 코드 안내',
+        companyCodeFoundEmailHtml(companies.map((c) => ({ name: c.name, code: c.code }))),
+        `가입된 회사 코드 안내\n${companies.map((c) => `· ${c.name}: ${c.code}`).join('\n')}`,
+      );
+      logger.info('회사 코드 찾기 — 발송', { email: maskEmail(raw), count: companies.length });
     } else {
-      logger.warn('회사 코드 찾기 — 일치하는 계정 없음', { phone: maskPhone(raw) });
+      logger.warn('회사 코드 찾기 — 일치하는 계정 없음', { email: maskEmail(raw) });
     }
 
     return res.json({
       success: true,
-      message: '입력하신 번호로 가입된 회사 코드가 있다면 문자로 발송했습니다. 잠시 후 확인해주세요.',
+      message: '입력하신 이메일로 가입된 회사 코드가 있다면 이메일로 발송했습니다. 잠시 후 확인해주세요.',
     });
   } catch (error) {
     logger.error('회사 코드 찾기 오류', { error });
