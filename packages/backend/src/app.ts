@@ -35,6 +35,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { globalLimiter, apiLimiter, uploadLimiter } from './middleware/rateLimits';
 import { sanitizeInput } from './middleware/security';
 import logger from './utils/logger';
+import { allowedOrigins } from './config/allowedOrigins';
 import { prisma } from './utils/prisma';
 
 const app = express();
@@ -50,26 +51,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // --------------- CORS ---------------
-// 프로덕션 도메인은 기본으로 허용한다. ALLOWED_ORIGINS/FRONTEND_URL 은 여기에 "추가"된다
-// (덮어쓰지 않는다) → 환경변수가 비어 있어도 실서비스 도메인이 막혀 500 나는 사고를 방지.
-const DEFAULT_ALLOWED_ORIGINS = [
-  'https://busync.kr',
-  'https://www.busync.kr',
-  'https://busync.co.kr',
-  'https://www.busync.co.kr',
-  'http://localhost:3000',
-  'http://localhost:5173',
-];
-const allowedOrigins = Array.from(
-  new Set([
-    ...DEFAULT_ALLOWED_ORIGINS,
-    ...`${process.env.ALLOWED_ORIGINS || ''},${process.env.FRONTEND_URL || ''}`
-      .split(',')
-      .map((o) => o.trim())
-      .filter(Boolean),
-  ]),
-);
-
+// 허용 origin 목록은 config/allowedOrigins 에서 관리(Socket.IO 와 공유).
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, curl, health checks)

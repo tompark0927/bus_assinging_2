@@ -3,13 +3,14 @@ import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
+import { allowedOrigins } from '../config/allowedOrigins';
 
 let io: Server;
 
 export function initSocket(httpServer: HttpServer) {
   io = new Server(httpServer, {
     cors: {
-      origin: process.env.ALLOWED_ORIGINS?.split(',') || process.env.FRONTEND_URL || 'http://localhost:3000',
+      origin: allowedOrigins,
       credentials: true,
     },
   });

@@ -18,7 +18,12 @@ export function getSocket(token: string): Socket {
     socket.disconnect();
   }
 
-  const serverUrl = window.location.origin;
+  // Vercel(프로덕션)은 WebSocket 프록시를 지원하지 않아 wss://www.busync.kr/socket.io 가
+  // 실패한다(polling 폴백도 rewrite 가 SPA index.html 로 떨어짐). → 프로덕션에서는
+  // Railway 백엔드에 직접 연결한다. dev 는 vite 프록시가 ws 까지 처리하므로 same-origin 유지.
+  const serverUrl = import.meta.env.DEV
+    ? window.location.origin
+    : (import.meta.env.VITE_SOCKET_URL as string) || 'https://busyncbackend-production.up.railway.app';
 
   socket = io(serverUrl, {
     auth: { token },
