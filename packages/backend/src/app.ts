@@ -50,16 +50,35 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // --------------- CORS ---------------
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || 'http://localhost:3000')
-  .split(',')
-  .map((o) => o.trim());
+// 프로덕션 도메인은 기본으로 허용한다. ALLOWED_ORIGINS/FRONTEND_URL 은 여기에 "추가"된다
+// (덮어쓰지 않는다) → 환경변수가 비어 있어도 실서비스 도메인이 막혀 500 나는 사고를 방지.
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://busync.kr',
+  'https://www.busync.kr',
+  'https://busync.co.kr',
+  'https://www.busync.co.kr',
+  'http://localhost:3000',
+  'http://localhost:5173',
+];
+const allowedOrigins = Array.from(
+  new Set([
+    ...DEFAULT_ALLOWED_ORIGINS,
+    ...`${process.env.ALLOWED_ORIGINS || ''},${process.env.FRONTEND_URL || ''}`
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean),
+  ]),
+);
 
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, curl, health checks)
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
-    callback(new Error(`CORS: origin ${origin} not allowed`));
+    // 허용되지 않은 origin: 에러를 throw 하면 cors 가 next(err) 로 넘겨 글로벌 핸들러가
+    // 모든 브라우저 요청을 500 으로 만든다(실제 장애 원인). → CORS 헤더만 빼고 정상 통과.
+    logger.warn('CORS: 허용되지 않은 origin', { origin });
+    callback(null, false);
   },
   credentials: true,
 }));
