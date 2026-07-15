@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ActivityIndicator, ScrollView,
+  KeyboardAvoidingView, Platform, ActivityIndicator, ScrollView, Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { authApi } from '../services/api';
 import { useAuthStore } from '../store/authStore';
-import { registerForPushNotifications } from '../services/notifications';
 import { toast } from '../components/ToastHost';
 
 // 모던 라이트 + 액센트 팔레트 (slate / indigo)
@@ -51,8 +50,12 @@ export default function LoginScreen() {
         toast.error(t('auth.driverOnly'));
         return;
       }
+      // 키보드를 먼저 내려 화면 전환 애니메이션과 겹치지 않게 한다.
+      // (전환 중 네이티브 UI가 겹치면 iPad에서 앱이 멈추는 사례 — App Review 2.1 반려)
+      Keyboard.dismiss();
       await setAuth(user, token, refreshToken);
-      registerForPushNotifications().catch(() => {});
+      // 푸시 등록(권한 다이얼로그 포함)은 App.tsx 의 token effect 가 전환 완료 후
+      // 단 한 번 수행한다. 여기서 중복 호출하지 않는다.
     } catch (err: unknown) {
       const axiosMsg = (err as { response?: { data?: { message?: string } } })?.response?.data
         ?.message;
@@ -105,6 +108,7 @@ export default function LoginScreen() {
             onChangeText={setPhone}
             placeholder={t('auth.phonePlaceholder')}
             keyboardType="phone-pad"
+            textContentType="telephoneNumber"
             autoCapitalize="none"
             placeholderTextColor={C.textSubtle}
             accessibilityLabel={t('auth.phone')}
@@ -120,6 +124,7 @@ export default function LoginScreen() {
             onChangeText={setPassword}
             placeholder="••••••••"
             secureTextEntry={!showPw}
+            textContentType="password"
             autoCapitalize="none"
             placeholderTextColor={C.textSubtle}
             accessibilityLabel={t('auth.password')}

@@ -74,6 +74,7 @@ export default function ForceChangePasswordScreen() {
                 onChangeText={setNewPw}
                 placeholder="6자리 이상"
                 secureTextEntry={!showNew}
+                textContentType="newPassword"
                 autoCapitalize="none"
                 placeholderTextColor={colors.textSubtle}
                 accessibilityLabel="새 비밀번호"
@@ -99,6 +100,7 @@ export default function ForceChangePasswordScreen() {
                 onChangeText={setConfirmPw}
                 placeholder="새 비밀번호 재입력"
                 secureTextEntry={!showConfirm}
+                textContentType="newPassword"
                 autoCapitalize="none"
                 placeholderTextColor={colors.textSubtle}
                 accessibilityLabel="새 비밀번호 확인"

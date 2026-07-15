@@ -79,7 +79,12 @@
           "sounds": []
         }
       ],
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "로그인 정보를 기기 보안 저장소에 안전하게 보관하기 위해 사용될 수 있습니다."
+        }
+      ],
       [
         "expo-build-properties",
         {

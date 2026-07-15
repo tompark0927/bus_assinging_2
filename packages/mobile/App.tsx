@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { NavigationContainer, NavigationContainerRef, LinkingOptions } from '@react-navigation/native';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './src/lib/queryClient';
+import { InteractionManager } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -60,7 +61,15 @@ export default function App() {
   useEffect(() => {
     if (!token) return;
 
-    registerForPushNotifications();
+    // 푸시 권한 다이얼로그(네이티브 모달)를 로그인 → 메인 화면 전환이 완전히
+    // 끝난 뒤에 띄운다. 전환 애니메이션·키보드 내려감과 동시에 네이티브 모달이
+    // 뜨면 iPad(호환 모드)에서 터치가 먹통이 되는 사례가 있었다 (App Review 2.1(a) 반려).
+    let cancelled = false;
+    const interaction = InteractionManager.runAfterInteractions(() => {
+      setTimeout(() => {
+        if (!cancelled) registerForPushNotifications().catch(() => {});
+      }, 800);
+    });
 
     const cleanup = setupNotificationListeners(
       (notification) => {
@@ -93,7 +102,11 @@ export default function App() {
       }
     );
 
-    return cleanup;
+    return () => {
+      cancelled = true;
+      interaction.cancel();
+      cleanup();
+    };
   }, [token]);
 
   return (
