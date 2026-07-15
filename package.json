@@ -14,10 +14,6 @@
     "build:web": "npm run build --workspace=packages/admin-web",
     "postinstall": "if command -v patch-package >/dev/null 2>&1; then patch-package; fi"
   },
-  "overrides": {
-    "react": "18.2.0",
-    "react-native": "0.74.5"
-  },
   "dependencies": {
     "patch-package": "^8.0.1"
   }
