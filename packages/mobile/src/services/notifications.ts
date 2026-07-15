@@ -7,8 +7,10 @@ import Constants from 'expo-constants';
 import { authApi } from './api';
 
 Notifications.setNotificationHandler({
+  // SDK 54: shouldShowAlert → shouldShowBanner(전면 배너) + shouldShowList(알림 센터)
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),
@@ -136,8 +138,9 @@ export function setupNotificationListeners(
   const responseListener = Notifications.addNotificationResponseReceivedListener(onResponse);
 
   return () => {
-    Notifications.removeNotificationSubscription(notificationListener);
-    Notifications.removeNotificationSubscription(responseListener);
+    // SDK 54: removeNotificationSubscription 제거 → EventSubscription.remove() 사용
+    notificationListener.remove();
+    responseListener.remove();
   };
 }
 
