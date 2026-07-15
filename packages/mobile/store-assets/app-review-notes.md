@@ -2,34 +2,34 @@
 
 ⚠️ 제출 전 `[COMPANY_CODE]` / `[PHONE]` / `[PASSWORD]` / `[MODEL]` / `[VERSION]` 자리를 실제 값으로 채울 것.
 ⚠️ 데모 계정은 반드시 `mustChangePassword=false` 상태 + 배차표/휴무/알림 데이터가 채워진 상태여야 함.
-⚠️ iPad 실기기 검증을 하지 않았다면 해당 문장을 "We verified the fix on iPhone hardware and iPad simulator in Release configuration." 으로 교체.
+✅ iPad 실기기 검증 완료: SDK 54 빌드에서 로그인 → 권한 다이얼로그 응답 → 화면 정상 반응 확인.
+   제출 대상: production 빌드 8 (EAS id 211a2c61-e80f-496f-8919-300377c52165), 버전 1.0.1.
 
 ---
 
-## 1. Resolution Center 답장 (빌드 5 재제출 시)
+## 1. Resolution Center 답장 (빌드 8 재제출 시)
 
-Subject: Guideline 2.1(a) — Unresponsiveness after login: root cause identified and fixed
+Subject: Guideline 2.1(a) — Unresponsiveness after login: root cause fixed and verified on iPad
 
-Hello, and thank you for the detailed review.
+Hello, and thank you for the detailed review and for pointing us to iPad testing.
 
-We reproduced the conditions of the issue and identified the root cause. The app requested push-notification permission (a native dialog) at the exact moment the login→home navigation transition and keyboard dismissal were in progress. Under this timing, touch handling could deadlock — matching the behavior your reviewer observed on iPad Air (iPadOS 26.5.2). It also explains why the app worked normally after relaunch (the session was already saved, so no transition/permission race occurred).
+We reproduced the freeze on a physical iPad and identified the root cause. The app's application framework (React Native) was on a version that predates the modern iOS window/scene lifecycle. On iPadOS 26 in iPhone-compatibility mode, when the system notification-permission dialog dismissed, the app window did not reliably regain touch focus — leaving the UI unresponsive until the app was backgrounded and reopened. This matches exactly what your reviewer observed, and why a relaunch appeared to fix it.
 
-Fixes in this build (1.0.0, build 6):
-1. On iPad hardware, the app no longer triggers the notification-permission system dialog. We reproduced the reported freeze on a physical iPad and traced it to the system permission prompt: after it dismisses in iPhone-compatibility mode, the app's window did not regain touch focus (backgrounding and reopening the app restored it). The app is iPhone-targeted; on iPads, push registration now occurs silently only if permission was already granted.
-2. The permission dialog (on iPhone) is now requested only after the login navigation transition fully completes — never during screen transitions.
-3. A duplicate concurrent permission request was removed; a guard structurally prevents concurrent native dialogs.
-4. The keyboard is dismissed before the post-login screen transition begins.
+Fix in this build (1.0.1, build 8):
+- We upgraded the app's framework to a current version (Expo SDK 54 / React Native 0.81) that adopts the modern iOS scene-based lifecycle. This resolves the window-focus loss after the permission dialog.
+- We verified on a physical iPad that a fresh install → log in → respond to the notification-permission dialog (both Allow and Don't Allow) → the app remains fully responsive with no freeze.
+- As additional hardening, the permission prompt is now requested only after the login screen transition completes, and duplicate concurrent permission requests were removed.
 
-We verified on a physical iPad ([MODEL], iPadOS [VERSION]) and iPhone: fresh install → log in → grant/deny notification permission → the app remains fully responsive.
+We verified on a physical iPad ([MODEL], iPadOS [VERSION]) and on iPhone: fresh install → log in → grant/deny notification permission → the app remains fully responsive throughout.
 
-Demo account (unchanged):
+Demo account:
 - Company code: [COMPANY_CODE]
 - Phone: [PHONE]
 - Password: [PASSWORD]
 
 Note: Busync is an employee app for bus companies — accounts are provisioned by company administrators, and there is no in-app sign-up. The demo account above is pre-configured to skip the first-login password change so you can access all features immediately.
 
-Thank you — we appreciate the pointer to iPad testing.
+Thank you again.
 
 ---
 
