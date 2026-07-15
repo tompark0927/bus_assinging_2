@@ -19,6 +19,22 @@ Notifications.setNotificationHandler({
 const PENDING_TOKEN_KEY = 'push:pendingToken';
 const REGISTERED_TOKEN_KEY = 'push:registeredToken';
 
+/**
+ * iPad(호환 모드) 푸시 권한 요청 방식.
+ *
+ * 배경: SDK 51 + iPadOS 26 조합에서 시스템 권한 다이얼로그가 닫힌 뒤 앱 윈도우가
+ * 터치 포커스를 되찾지 못해 화면이 먹통이 되는 버그가 있었다 (App Review 2.1(a) 반려).
+ * SDK 54(RN 0.81) 업그레이드로 해결됐는지는 실기기 검증으로 판단한다.
+ *
+ *  - 'prompt':      iPhone 과 동일하게 시스템 다이얼로그 표시 (SDK 54 검증용/정상 경로)
+ *  - 'provisional': 다이얼로그 없이 조용한 알림 권한 획득 (알림 센터에만 표시)
+ *  - 'skip':        권한 요청 안 함 — 이미 허용된 경우에만 토큰 등록 (SDK 51 회피책)
+ *
+ * ⚠️ 'prompt' 로 제출하기 전 반드시 iPad 실기기에서 새 설치 → 로그인 → 다이얼로그
+ *    응답 후 터치 반응을 확인할 것 (허용/거부 각각, 2-3회 반복).
+ */
+const IPAD_PUSH_MODE: 'prompt' | 'provisional' | 'skip' = 'prompt';
+
 let netListenerAttached = false;
 
 // 동시 호출 가드 — 권한 다이얼로그(네이티브 모달)가 이중으로 뜨는 것을 방지.
@@ -49,18 +65,20 @@ async function doRegister(): Promise<string | null> {
     let finalStatus = existingStatus;
 
     if (existingStatus !== 'granted') {
-      // iPad(호환 모드)에서는 iOS 알림 권한 다이얼로그(시스템 UI)가 닫힌 뒤
-      // 앱 윈도우가 터치 포커스를 되찾지 못해 화면 전체가 먹통이 되는
-      // iPadOS 26 버그가 있다 (백그라운드 전환 시 복구되는 것으로 확인).
-      // → iPad 하드웨어에서는 권한 요청을 띄우지 않는다. 이미 허용된 경우에만
-      //   토큰을 등록하고, 아니면 조용히 건너뛴다. (본 앱은 iPhone 전용 배포)
       // Platform.isPad 는 호환 모드에서 phone 으로 보고되므로 하드웨어 모델로 판별.
       const hardwareModel = `${Device.modelName ?? ''} ${Device.modelId ?? ''}`;
-      if (Platform.OS === 'ios' && /ipad/i.test(hardwareModel)) {
-        console.log('Skipping push permission prompt on iPad (compatibility mode)');
+      const isIpad = Platform.OS === 'ios' && /ipad/i.test(hardwareModel);
+
+      if (isIpad && IPAD_PUSH_MODE === 'skip') {
+        console.log('Skipping push permission prompt on iPad (IPAD_PUSH_MODE=skip)');
         return null;
       }
-      const { status } = await Notifications.requestPermissionsAsync();
+
+      const { status } = await Notifications.requestPermissionsAsync(
+        isIpad && IPAD_PUSH_MODE === 'provisional'
+          ? { ios: { allowProvisional: true } }
+          : undefined,
+      );
       finalStatus = status;
     }
 
