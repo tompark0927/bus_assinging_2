@@ -27,6 +27,8 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../utils/prisma';
 import { sendBulkPushNotifications } from '../../services/notificationService';
+import { wouldExceedWeeklyWork } from '../../services/weeklyRestEligibility';
+import { loadCompanyPolicy } from '../../services/solverDispatchService';
 import type { AgentTool, ToolContext } from '../_core/types';
 
 // ─────────────────────────────────────────────
@@ -341,7 +343,22 @@ const listOffDutyDrivers: AgentTool<ListOffDutyInput, unknown> = {
       select: { id: true },
     });
 
-    if (candidates.length === 0) {
+    // 3.5. 주휴일(근로기준법 제55조) 위반이 되는 후보 제외 — 그 주 근무일이 상한에 도달한 기사는
+    // 대타를 맡으면 주휴일이 사라지므로 후보에서 뺀다. (정책 1회 로드 후 공유)
+    const policy = await loadCompanyPolicy(ctx.companyId);
+    const restChecks = await Promise.all(
+      candidates.map((c) =>
+        wouldExceedWeeklyWork(prisma, {
+          driverId: c.id,
+          dateISO: input.date,
+          companyId: ctx.companyId,
+          policy,
+        }),
+      ),
+    );
+    const eligibleCandidates = candidates.filter((_, i) => restChecks[i].eligible);
+
+    if (eligibleCandidates.length === 0) {
       return {
         date: input.date,
         shift: input.shift,
@@ -351,14 +368,14 @@ const listOffDutyDrivers: AgentTool<ListOffDutyInput, unknown> = {
         returnedCount: 0,
         limit,
         ranked: [],
-        warning: '자격 유효한 미배차 기사가 없습니다. 즉시 escalate_to_admin 권장.',
+        warning: '자격 유효 + 주휴일 보장 가능한 미배차 기사가 없습니다. 즉시 escalate_to_admin 권장.',
       };
     }
 
     // 4. 후보를 자동 점수화 (헬퍼 재사용 — DB 호출 1번)
     const scored = await scoreCandidatesInternal({
       companyId: ctx.companyId,
-      driverIds: candidates.map((c) => c.id),
+      driverIds: eligibleCandidates.map((c) => c.id),
       date,
       routeId: input.routeId,
       virtualNow: ctx.virtualNow,
@@ -626,6 +643,21 @@ const recordAcceptance: AgentTool<RecordAcceptanceInput, unknown> = {
     });
     if (!driver) {
       throw new Error(`기사 ${input.driverId} 가 회사 소속 활성 기사가 아닙니다.`);
+    }
+
+    // 주휴일(근로기준법 제55조) 하드 가드 — AI 가 위반 기사를 자동배정하지 못하게 한다.
+    // 에이전트는 이 오류를 받고 다른 기사를 찾거나 관리자에게 인계해야 한다.
+    const rest = await wouldExceedWeeklyWork(prisma, {
+      driverId: driver.id,
+      dateISO: drop.slot.date.toISOString().slice(0, 10),
+      companyId: ctx.companyId,
+      excludeSlotId: drop.slotId,
+    });
+    if (!rest.eligible) {
+      throw new Error(
+        `기사 ${driver.name}(${driver.id}) 는 해당 주에 이미 ${rest.weeklyWorkDays}일 근무 중이라 ` +
+          `주휴일(근로기준법 제55조) 보장을 위해 이 대타를 배정할 수 없습니다. 다른 기사를 찾거나 escalate_to_admin 하세요.`,
+      );
     }
 
     await prisma.$transaction([

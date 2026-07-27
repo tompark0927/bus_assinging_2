@@ -875,6 +875,12 @@ interface DriverCandidate {
   employeeId: string;
   driverType: 'MAIN' | 'SPARE' | null;
   isActive: boolean;
+  /** 이 대타를 맡으면 주휴일(근로기준법 제55조)이 보장되지 않는가 */
+  weeklyRestViolation?: boolean;
+  /** 해당 주 현재 근무일 수 */
+  weeklyWorkDays?: number;
+  /** 주 최대 근무일 상한 */
+  maxWeeklyWorkDays?: number;
 }
 
 function ManualFillModal({
@@ -888,6 +894,7 @@ function ManualFillModal({
 }) {
   const [q, setQ] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [overrideReason, setOverrideReason] = useState('');
 
   // 해당 날짜에 이미 근무가 있는 기사는 서버에서 제외된 가용 기사만 조회
   const { data: drivers = [], isLoading } = useQuery<DriverCandidate[]>({
@@ -912,10 +919,21 @@ function ManualFillModal({
       });
   }, [drivers, drop.driver.id, q]);
 
+  const selectedCandidate = useMemo(
+    () => drivers.find((d) => d.id === selectedId) ?? null,
+    [drivers, selectedId],
+  );
+  // 선택 기사가 주휴일(제55조) 위반이면 강제 배정 사유 입력이 필요하다.
+  const needsOverride = !!selectedCandidate?.weeklyRestViolation;
+
   const fill = useMutation({
     mutationFn: () => {
       if (!selectedId) throw new Error('NO_DRIVER');
-      return emergencyApi.manualFill(drop.id, selectedId);
+      return emergencyApi.manualFill(
+        drop.id,
+        selectedId,
+        needsOverride ? { override: true, overrideReason: overrideReason.trim() } : undefined,
+      );
     },
     onSuccess: (res) => {
       const msg = (res.data as { message?: string })?.message || '배정 완료';
@@ -923,9 +941,14 @@ function ManualFillModal({
       onSuccess();
     },
     onError: (e: unknown) => {
-      const m = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
-        || '배정 중 오류가 발생했습니다.';
-      toast.error(m);
+      const data = (e as { response?: { data?: { message?: string; requiresOverride?: boolean } } })
+        ?.response?.data;
+      // 서버가 오버라이드를 요구하면(플래그가 stale 했던 경우) 사유 입력 UI 로 유도
+      if (data?.requiresOverride) {
+        toast.error(data.message || '주휴일 보장 위반 — 강제 배정 사유를 입력하세요.');
+        return;
+      }
+      toast.error(data?.message || '배정 중 오류가 발생했습니다.');
     },
   });
 
@@ -1002,6 +1025,11 @@ function ManualFillModal({
                           <span className="font-medium text-gray-900 dark:text-gray-100">{d.name}</span>
                           <span className="text-[12px] text-gray-500 dark:text-gray-400">{d.employeeId}</span>
                         </div>
+                        {d.weeklyRestViolation && (
+                          <div className="mt-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400">
+                            ⚠ 주휴일 초과 (이번 주 {d.weeklyWorkDays}일 근무 / 최대 {d.maxWeeklyWorkDays}일)
+                          </div>
+                        )}
                       </div>
                       <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
                         d.driverType === 'SPARE'
@@ -1019,6 +1047,28 @@ function ManualFillModal({
           )}
         </div>
 
+        {/* 주휴일 초과 강제 배정 경고 + 사유 입력 */}
+        {needsOverride && (
+          <div className="px-6 pt-3">
+            <div className="rounded-xl border border-rose-300 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/10 p-3">
+              <div className="text-[13px] font-semibold text-rose-700 dark:text-rose-300">
+                ⚠ 주휴일(근로기준법 제55조) 위반 배정
+              </div>
+              <div className="text-[12px] text-rose-600 dark:text-rose-400 mt-1">
+                {selectedCandidate?.name} 기사님은 이번 주 이미 {selectedCandidate?.weeklyWorkDays}일 근무
+                중입니다. 배정 시 주휴일이 보장되지 않습니다. 강제 배정하려면 사유를 입력하세요.
+              </div>
+              <textarea
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+                placeholder="강제 배정 사유 (예: 대체 인력 전무, 기사 본인 동의)"
+                rows={2}
+                className="mt-2 w-full px-3 py-2 rounded-lg border border-rose-300 dark:border-rose-500/30 bg-white dark:bg-white/5 text-[13px] focus:outline-none focus:ring-2 focus:ring-rose-500/30"
+              />
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
         <div className="px-6 py-4 border-t border-gray-200 dark:border-white/10 flex items-center justify-between gap-3">
           <div className="text-[12px] text-gray-500 dark:text-gray-400">
@@ -1033,11 +1083,13 @@ function ManualFillModal({
             </button>
             <button
               onClick={() => fill.mutate()}
-              disabled={!selectedId || fill.isPending}
-              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white inline-flex items-center gap-2 text-[14px] font-medium"
+              disabled={!selectedId || fill.isPending || (needsOverride && !overrideReason.trim())}
+              className={`px-5 py-2.5 rounded-xl disabled:opacity-50 text-white inline-flex items-center gap-2 text-[14px] font-medium ${
+                needsOverride ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'
+              }`}
             >
               {fill.isPending && <Loader2 size={16} className="animate-spin" />}
-              배정 확정
+              {needsOverride ? '강제 배정' : '배정 확정'}
             </button>
           </div>
         </div>
