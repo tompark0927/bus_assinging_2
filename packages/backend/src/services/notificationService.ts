@@ -3,6 +3,8 @@ import { prisma } from '../utils/prisma';
 import { NotificationType, Role } from '@prisma/client';
 import logger from '../utils/logger';
 import { emitToUser, emitToCompany } from './socketService';
+import { wouldExceedWeeklyWork } from './weeklyRestEligibility';
+import { loadCompanyPolicy } from './solverDispatchService';
 
 const expo = new Expo();
 
@@ -244,12 +246,23 @@ export async function notifyAvailableDriversForEmergency(
     select: { id: true },
   });
 
-  const targetDriverIds = Array.from(
+  const candidateDriverIds = Array.from(
     new Set<number>([
       ...restingDriverSlots.map((s) => s.driverId),
       ...spareDrivers.map((d) => d.id),
     ]),
   );
+
+  // 주휴일(근로기준법 제55조) 위반이 되는 기사는 대타 알림 대상에서 제외 —
+  // 수락할 수 없는 대타 푸시를 보내지 않는다. (정책 1회 로드 후 공유)
+  const policy = await loadCompanyPolicy(companyId);
+  const eligibilityChecks = await Promise.all(
+    candidateDriverIds.map(async (driverId) => ({
+      driverId,
+      ...(await wouldExceedWeeklyWork(prisma, { driverId, dateISO: dateStr, companyId, policy })),
+    })),
+  );
+  const targetDriverIds = eligibilityChecks.filter((c) => c.eligible).map((c) => c.driverId);
 
   if (targetDriverIds.length === 0) return;
 

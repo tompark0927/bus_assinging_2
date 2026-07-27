@@ -282,7 +282,11 @@ export const emergencyApi = {
   create: (slotId: number, reason: string) => api.post('/emergency', { slotId, reason }),
   accept: (id: number) => api.put(`/emergency/${id}/accept`),
   cancel: (id: number) => api.put(`/emergency/${id}/cancel`),
-  manualFill: (id: number, driverId: number) => api.put(`/emergency/${id}/manual-fill`, { driverId }),
+  manualFill: (
+    id: number,
+    driverId: number,
+    opts?: { override?: boolean; overrideReason?: string },
+  ) => api.put(`/emergency/${id}/manual-fill`, { driverId, ...opts }),
   availableDrivers: (id: number) => api.get(`/emergency/${id}/available-drivers`),
   notifiedDrivers: (id: number) => api.get(`/emergency/${id}/notified-drivers`),
 };
