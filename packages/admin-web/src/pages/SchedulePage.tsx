@@ -35,6 +35,7 @@ import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
 import PageHeader from '../components/PageHeader';
 import SectionHeader from '../components/SectionHeader';
+import { SLOT_FILL, SHIFT_LABEL, getSlotView, isRouteLabel, SlotDot, SlotLegend } from '../constants/slotLegend';
 import { scheduleHelp } from '../help/helpContent';
 import { useAuthStore } from '../store/authStore';
 
@@ -44,11 +45,8 @@ import { useAuthStore } from '../store/authStore';
 
 const DAYS_KR = ['일', '월', '화', '수', '목', '금', '토'] as const;
 
-const SHIFT_LABELS: Record<string, string> = {
-  MORNING: '조',
-  AFTERNOON: '석',
-  FULL_DAY: '종',
-};
+// 교대 축약 표기(조/석/종)는 공유 표준(SHIFT_LABEL)을 그대로 사용.
+const SHIFT_LABELS = SHIFT_LABEL;
 
 const STATUS_CONFIG: Record<string, { label: string; bg: string; text: string; border: string }> = {
   DRAFT: { label: '초안', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
@@ -56,17 +54,8 @@ const STATUS_CONFIG: Record<string, { label: string; bg: string; text: string; b
   ARCHIVED: { label: '보관', bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' },
 };
 
-// 색상은 4가지로 단순화: 근무(파랑) · 대타 충원(초록) · 공석(빨강) · 휴무(회색).
-//  COMPLETED(운행완료)→근무 파랑, ABSENT(결근)→공석 빨강 으로 통합. 휴가만 옅은 청록 유지.
-const SLOT_COLORS = {
-  SCHEDULED: { bg: 'bg-blue-100', text: 'text-blue-800', ring: 'ring-blue-300' },
-  COMPLETED: { bg: 'bg-blue-100', text: 'text-blue-800', ring: 'ring-blue-300' },
-  FILLED: { bg: 'bg-emerald-100', text: 'text-emerald-700', ring: 'ring-emerald-300' },
-  DROPPED: { bg: 'bg-red-100', text: 'text-red-700', ring: 'ring-red-300' },
-  ABSENT: { bg: 'bg-red-100', text: 'text-red-700', ring: 'ring-red-300' },
-  REST: { bg: 'bg-gray-50', text: 'text-gray-400', ring: 'ring-gray-200' },
-  VACATION: { bg: 'bg-teal-50', text: 'text-teal-600', ring: 'ring-teal-200' },
-} as const;
+// 슬롯 색상은 공유 표준(SLOT_FILL) + getSlotView 로 통일 — 상태 기준 4색(근무/대타충원/공석/휴무),
+// 교대는 색 없이 텍스트, 휴가는 점으로 구분. (배차표 그리드 · 기사 상세 모달 공용)
 
 interface Slot {
   id: number;
@@ -333,11 +322,20 @@ export default function SchedulePage() {
     queryFn: () => dayOffApi.list({ month: monthParam, limit: '100' }).then((r) => r.data.data ?? []),
   });
 
-  // 승인된 휴가 (기사ID|날짜) — 그리드에서 '휴가 반영' 휴무 표시용
+  // 승인된 휴가 (기사ID|날짜) — 그리드에서 승인 휴가(초록 점) 표시용
   const approvedDayoffKeys = useMemo(() => {
     const set = new Set<string>();
     for (const d of monthDayoffs) {
       if (d.status === 'APPROVED') set.add(`${d.driver.id}|${d.date.slice(0, 10)}`);
+    }
+    return set;
+  }, [monthDayoffs]);
+
+  // 대기중 휴가 요청 (기사ID|날짜) — 그리드에서 휴가 요청(빨강 점) 표시용
+  const pendingDayoffKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of monthDayoffs) {
+      if (d.status === 'PENDING') set.add(`${d.driver.id}|${d.date.slice(0, 10)}`);
     }
     return set;
   }, [monthDayoffs]);
@@ -867,48 +865,14 @@ export default function SchedulePage() {
 
   // ─── 셀 렌더링 헬퍼 ───
 
-  const getCellInfo = useCallback((slot: Slot | undefined, isVacation = false) => {
-    if (!slot) {
-      return { label: '', sub: '', colors: null, isEmpty: true };
-    }
-    if (slot.isRestDay) {
-      if (isVacation) {
-        return {
-          label: '휴가',
-          sub: '반영',
-          colors: SLOT_COLORS.VACATION,
-          isEmpty: false,
-        };
-      }
-      return {
-        label: '휴',
-        sub: '',
-        colors: SLOT_COLORS.REST,
-        isEmpty: false,
-      };
-    }
-    const statusColors = SLOT_COLORS[slot.status as keyof typeof SLOT_COLORS] || SLOT_COLORS.SCHEDULED;
-    const shiftLabel = SHIFT_LABELS[slot.shift] || '';
-    const routeNum = slot.route?.routeNumber || '';
-    const busNum = slot.bus?.busNumber || '';
-
-    let label = '';
-    if (slot.status === 'DROPPED') {
-      label = '드랍';
-    } else if (slot.status === 'ABSENT') {
-      label = '결근';
-    } else {
-      label = routeNum || shiftLabel;
-    }
-
-    let sub = '';
-    if (slot.status !== 'DROPPED' && slot.status !== 'ABSENT') {
-      if (routeNum && shiftLabel) sub = shiftLabel;
-      if (busNum) sub = sub ? `${sub}/${busNum}` : busNum;
-    }
-
-    return { label, sub, colors: statusColors, isEmpty: false };
-  }, []);
+  const getCellInfo = useCallback(
+    (slot: Slot | undefined, opts?: { approved?: boolean; pending?: boolean }) => {
+      const view = getSlotView(slot, { ...opts, withBus: true });
+      const colors = view.fillKey ? SLOT_FILL[view.fillKey] : null;
+      return { label: view.label, sub: view.sub, colors, isEmpty: view.isEmpty, dot: view.dot };
+    },
+    [],
+  );
 
 // ─── 상태 뱃지 ───
 
@@ -1384,8 +1348,8 @@ export default function SchedulePage() {
 
                 {filteredDrivers.map((driver, idx) => {
                   const slotMap = driverSlotMap.get(driver.id) || new Map<string, Slot>();
-                  const isEven = idx % 2 === 0;
-                  const rowBg = isEven ? 'bg-white dark:bg-gray-800' : 'bg-gray-50/80 dark:bg-gray-750';
+                  // 행 교차(zebra) 제거 — 모든 행 흰색 통일
+                  const rowBg = 'bg-white dark:bg-gray-800';
 
                   // 기사별 통계
                   const driverWorkCount = Array.from(slotMap.values()).filter((s) => !s.isRestDay).length;
@@ -1429,8 +1393,11 @@ export default function SchedulePage() {
                         const dateKey = format(date, 'yyyy-MM-dd');
                         const slot = slotMap.get(dateKey);
                         const dow = date.getDay();
-                        const isVacation = !!slot?.isRestDay && approvedDayoffKeys.has(`${driver.id}|${dateKey}`);
-                        const { label, sub, colors, isEmpty } = getCellInfo(slot, isVacation);
+                        const dayKey = `${driver.id}|${dateKey}`;
+                        const approved = approvedDayoffKeys.has(dayKey);
+                        const pending = pendingDayoffKeys.has(dayKey);
+                        const isVacation = !!slot?.isRestDay && approved;
+                        const { label, sub, colors, isEmpty, dot } = getCellInfo(slot, { approved, pending });
                         const isDraft = schedule.status === 'DRAFT';
                         const isEditable = isDraft && !!slot;
                         const canAdd = isDraft && !slot;
@@ -1500,18 +1467,16 @@ export default function SchedulePage() {
                                     수동
                                   </span>
                                 )}
+                                {/* 휴가 점: 승인(초록) / 대기중 요청(빨강) */}
+                                {dot && <SlotDot kind={dot} className="bottom-0.5 right-0.5" />}
                               </div>
                             )}
                           </td>
                         );
                       })}
 
-                      {/* 합계 */}
-                      <td
-                        className={`text-center border-b border-l-2 border-gray-200 dark:border-gray-700 py-2 px-2 ${
-                          isEven ? 'bg-gray-50 dark:bg-gray-700/50' : 'bg-gray-100/80 dark:bg-gray-700'
-                        }`}
-                      >
+                      {/* 합계 — 교차 없이 단일 배경 */}
+                      <td className="text-center border-b border-l-2 border-gray-200 dark:border-gray-700 py-2 px-2 bg-white dark:bg-gray-800">
                         <div className="text-base font-bold text-blue-700 dark:text-blue-400">{driverWorkCount}일</div>
                         <div className="text-sm text-gray-400 dark:text-gray-500">{driverRestCount}휴</div>
                       </td>
@@ -1528,18 +1493,7 @@ export default function SchedulePage() {
       {schedule && (
         <div data-print-section="legend" className="card py-4 px-5 dark:bg-gray-800">
           <SectionHeader icon={Info} title="범례 (색상 안내)" className="mb-3" />
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-base">
-            <LegendItem color="bg-blue-100 border-blue-300" label="근무" />
-            <LegendItem color="bg-emerald-100 border-emerald-300" label="대타 충원" />
-            <LegendItem color="bg-red-100 border-red-300" label="공석 (드랍·결근)" />
-            <LegendItem color="bg-gray-50 border-gray-200" label="휴무" />
-            <LegendItem color="bg-teal-50 border-teal-200" label="휴가" />
-            <span className="ml-4 border-l border-gray-200 dark:border-gray-600 pl-4 flex items-center gap-3 text-gray-500 dark:text-gray-400">
-              <span className="font-bold text-blue-800 dark:text-blue-400">조</span> 오전
-              <span className="font-bold text-blue-800 dark:text-blue-400">석</span> 오후
-              <span className="font-bold text-blue-800 dark:text-blue-400">종</span> 전일
-            </span>
-          </div>
+          <SlotLegend variant="full" />
         </div>
       )}
       </div>
@@ -2324,15 +2278,6 @@ function StatCard({
   );
 }
 
-function LegendItem({ color, label }: { color: string; label: string }) {
-  return (
-    <span className="flex items-center gap-2">
-      <span className={`w-5 h-5 rounded border ${color}`} />
-      <span className="text-gray-600 dark:text-gray-400">{label}</span>
-    </span>
-  );
-}
-
 function ToggleButton({
   active,
   onClick,
@@ -2629,15 +2574,19 @@ function DriverDetailModal({
     return m;
   }, [driverSlots]);
 
-  // 이 기사의 휴가(휴무) 요청일 — 캘린더에 점으로 표시
+  // 이 기사의 휴가 요청 — 승인(초록 점)/대기중(빨강 점)으로 분리해 캘린더에 표시
   const monthParam = `${year}-${String(month).padStart(2, '0')}`;
-  const { data: dayOffReqs = [] } = useQuery<Array<{ date: string }>>({
+  const { data: dayOffReqs = [] } = useQuery<Array<{ date: string; status: string }>>({
     queryKey: ['dayoff', 'driver', driverId, monthParam],
     queryFn: () =>
       dayOffApi.list({ driverId: String(driverId), month: monthParam }).then((r) => r.data.data ?? []),
   });
-  const requestedDays = useMemo(
-    () => new Set(dayOffReqs.map((d) => d.date.slice(0, 10))),
+  const approvedDays = useMemo(
+    () => new Set(dayOffReqs.filter((d) => d.status === 'APPROVED').map((d) => d.date.slice(0, 10))),
+    [dayOffReqs],
+  );
+  const pendingDays = useMemo(
+    () => new Set(dayOffReqs.filter((d) => d.status === 'PENDING').map((d) => d.date.slice(0, 10))),
     [dayOffReqs],
   );
 
@@ -2694,11 +2643,12 @@ function DriverDetailModal({
         <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
           <StatChip label="근무" value={`${stats.work}일`} color="blue" />
           <StatChip label="휴무" value={`${stats.rest}일`} color="gray" />
-          {stats.morning > 0 && <StatChip label="오전" value={`${stats.morning}일`} color="amber" />}
-          {stats.afternoon > 0 && <StatChip label="오후" value={`${stats.afternoon}일`} color="sky" />}
-          {stats.fullDay > 0 && <StatChip label="종일" value={`${stats.fullDay}일`} color="indigo" />}
+          {/* 교대(오전/오후/종일)는 색으로 구분하지 않음 — 중립 회색 칩으로 카운트만 표시 */}
+          {stats.morning > 0 && <StatChip label="오전(조)" value={`${stats.morning}일`} color="gray" />}
+          {stats.afternoon > 0 && <StatChip label="오후(석)" value={`${stats.afternoon}일`} color="gray" />}
+          {stats.fullDay > 0 && <StatChip label="전일(종)" value={`${stats.fullDay}일`} color="gray" />}
           {stats.dropped > 0 && <StatChip label="드랍" value={`${stats.dropped}건`} color="red" />}
-          {stats.filled > 0 && <StatChip label="대타 출근" value={`${stats.filled}건`} color="emerald" />}
+          {stats.filled > 0 && <StatChip label="대타 충원" value={`${stats.filled}건`} color="emerald" />}
           {stats.overrides > 0 && <StatChip label="수동 변경" value={`${stats.overrides}건`} color="purple" />}
         </div>
 
@@ -2736,18 +2686,19 @@ function DriverDetailModal({
               const slot = slotByDay.get(dateKey);
               const dow = date.getDay();
               return (
-                <DayCell key={day} day={day} dow={dow} slot={slot} requested={requestedDays.has(dateKey)} />
+                <DayCell
+                  key={day}
+                  day={day}
+                  dow={dow}
+                  slot={slot}
+                  approved={approvedDays.has(dateKey)}
+                  pending={pendingDays.has(dateKey)}
+                />
               );
             })}
           </div>
-          {/* 색상/표시 안내 */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-3 text-[11px] text-gray-500 dark:text-gray-400">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border bg-amber-50 border-amber-200" /> 오전</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border bg-sky-50 border-sky-200" /> 오후</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border bg-indigo-50 border-indigo-200" /> 종일</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border bg-gray-100 border-gray-200" /> 휴무</span>
-            <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-rose-500" /> 휴가 요청일</span>
-          </div>
+          {/* 색상/표시 안내 — 배차표와 통일된 범례 */}
+          <SlotLegend variant="compact" />
         </div>
 
       </div>
@@ -2832,12 +2783,13 @@ function friendlyFairnessNote(note?: string | null): string | null {
   return null; // 알 수 없는 내부 코드는 숨김
 }
 
-function DayCell({ day, dow, slot, requested }: { day: number; dow: number; slot?: Slot; requested?: boolean }) {
+function DayCell({ day, dow, slot, approved, pending }: { day: number; dow: number; slot?: Slot; approved?: boolean; pending?: boolean }) {
   const dowColor = dow === 0 ? 'text-red-500' : dow === 6 ? 'text-blue-500' : 'text-gray-500';
-  // 휴가 요청일 점 표시 (요청만 — 승인/반려 무관하게 "신청했음")
-  const dot = requested ? (
-    <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-500" title="휴가 요청일" />
-  ) : null;
+  // 상태 기준 색(배차표와 통일): 근무 파랑 · 대타충원 초록 · 공석 빨강 · 휴무 회색.
+  // 교대는 색 없이 조/석/종 텍스트. 휴가는 점(승인 초록 / 대기중 빨강)으로 표시.
+  const view = getSlotView(slot, { approved, pending });
+  const dot = view.dot ? <SlotDot kind={view.dot} /> : null;
+
   if (!slot) {
     return (
       <div className="relative aspect-square rounded-lg border border-gray-100 dark:border-white/5 p-1.5 bg-gray-50/50 dark:bg-white/[0.01] flex flex-col">
@@ -2846,31 +2798,18 @@ function DayCell({ day, dow, slot, requested }: { day: number; dow: number; slot
       </div>
     );
   }
-  if (slot.isRestDay) {
-    return (
-      <div className="relative aspect-square rounded-lg border border-gray-200 dark:border-white/10 p-1.5 bg-gray-100 dark:bg-white/5 flex flex-col">
-        {dot}
-        <div className={`text-[11px] font-medium ${dowColor}`}>{day}</div>
-        <div className="flex-1 flex items-center justify-center text-gray-400 text-[12px] font-semibold">휴</div>
-      </div>
-    );
-  }
-  // 색상은 교대(오전/오후/종일) 기준
-  const shiftBg = slot.shift === 'MORNING'
-    ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30'
-    : slot.shift === 'AFTERNOON'
-    ? 'bg-sky-50 dark:bg-sky-500/10 border-sky-200 dark:border-sky-500/30'
-    : 'bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/30';
-  const shiftLabel = slot.shift === 'MORNING' ? '오전' : slot.shift === 'AFTERNOON' ? '오후' : slot.shift === 'FULL_DAY' ? '종일' : '';
+
+  const fill = view.fillKey ? SLOT_FILL[view.fillKey] : null;
+  const isRest = view.fillKey === 'REST';
   return (
-    <div className={`relative aspect-square rounded-lg border p-1.5 flex flex-col ${shiftBg}`}>
+    <div className={`relative aspect-square rounded-lg border p-1.5 flex flex-col ${fill?.bg ?? ''} ${fill?.border ?? ''}`}>
       {dot}
       <div className={`text-[11px] font-medium ${dowColor}`}>{day}</div>
       <div className="flex-1 flex flex-col items-center justify-center min-h-0">
-        <div className="text-[11px] font-bold text-gray-900 dark:text-gray-100 leading-tight">
-          {slot.route?.routeNumber || '-'}번
+        <div className={`text-[12px] font-bold leading-tight ${isRest ? 'text-gray-400 dark:text-gray-500' : fill?.text ?? 'text-gray-900 dark:text-gray-100'}`}>
+          {view.label}{isRouteLabel(view) ? '번' : ''}
         </div>
-        {shiftLabel && <div className="text-[9px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">{shiftLabel}</div>}
+        {view.sub && <div className="text-[9px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">{view.sub}</div>}
       </div>
     </div>
   );
