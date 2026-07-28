@@ -6,6 +6,8 @@ import { companyInfoApi } from '../services/api';
 import {
   LayoutDashboard, Calendar, AlertTriangle, Database, LogOut,
   Settings,
+  BrainCircuit,
+  Wand2,
   CalendarOff, Bus, UserCog, Building2, ScrollText,
   PanelLeftClose, PanelLeft,
 } from 'lucide-react';
@@ -45,6 +47,7 @@ const navGroups: NavGroup[] = [
     items: [
       { to: '/dashboard', labelKey: '대시보드', icon: LayoutDashboard },
       { to: '/dashboard/schedule', labelKey: '배차표 관리', icon: Calendar, roles: ['DISPATCH'] },
+      { to: '/dashboard/engine/draft', labelKey: 'AI 초안 생성', icon: Wand2, roles: ['DISPATCH'] },
       { to: '/dashboard/emergency', labelKey: '대타 관리', icon: AlertTriangle, roles: ['DISPATCH'] },
       { to: '/dashboard/dayoff', labelKey: '휴무 요청', icon: CalendarOff, roles: ['DISPATCH', 'HR'] },
       { to: '/dashboard/today', labelKey: '오늘 운행 현황', icon: Bus, roles: ['DISPATCH'] },
@@ -62,6 +65,7 @@ const navGroups: NavGroup[] = [
     label: '설정',
     items: [
       { to: '/dashboard/settings', labelKey: '배차 설정', icon: Settings, roles: ['DISPATCH'] },
+      { to: '/dashboard/engine', labelKey: 'AI 엔진 설정', icon: BrainCircuit, roles: ['DISPATCH'] },
       { to: '/dashboard/accounts', labelKey: '계정 관리', icon: UserCog, restrictTo: ['OWNER', 'DIRECTOR', 'ADMIN'] },
       { to: '/dashboard/company', labelKey: '회사 정보', icon: Building2, restrictTo: ['OWNER', 'DIRECTOR', 'ADMIN'] },
     ],
