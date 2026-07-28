@@ -222,6 +222,37 @@ export const companyPolicyApi = {
   update: (policy: Record<string, unknown>) => api.put('/companies/policy', { policy }),
 };
 
+// AI 배차 엔진 (Python dispatch-engine 프록시 — /api/v1/engine/*)
+export const engineApi = {
+  catalog: () => api.get('/engine/catalog'),
+  getPolicy: () => api.get('/engine/policy'),
+  putPolicy: (policy: Record<string, unknown>) => api.put('/engine/policy', { policy }),
+  // 엑셀 분석은 파일 업로드 + 솔버 분석이라 타임아웃 여유
+  analyze: (form: FormData) =>
+    api.post('/engine/analyze', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    }),
+  // 배차 초안 생성 — CP-SAT 솔버 실행 (기본 3분 제한이라 타임아웃 크게)
+  generate: (form: FormData) =>
+    api.post('/engine/generate', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    }),
+  explainCell: (draftId: string, date: string, vehicle: string, shift: string) =>
+    api.get(`/engine/draft/${draftId}/explain`, { params: { date, vehicle, shift } }),
+  reportAbsence: (draftId: string, form: FormData) =>
+    api.post(`/engine/draft/${draftId}/absence`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+  applyRepair: (draftId: string, form: FormData) =>
+    api.post(`/engine/draft/${draftId}/repair`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+  draftXlsx: (draftId: string) =>
+    api.get(`/engine/draft/${draftId}/xlsx`, { responseType: 'blob', timeout: 60000 }),
+};
+
 // Company Info (회사 기본 정보)
 export const companyInfoApi = {
   get: () => api.get('/companies/me'),
