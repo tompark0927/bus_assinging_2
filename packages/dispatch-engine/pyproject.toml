@@ -1,0 +1,12 @@
+[project]
+name = "busync-dispatch-engine"
+version = "0.1.0"
+description = "BuSync AI 배차 엔진 — CP-SAT 기반 시내버스 배차 생성/검증 코어"
+requires-python = ">=3.11"
+dependencies = [
+    "openpyxl>=3.1",
+    "ortools>=9.8",
+]
+
+[tool.setuptools.packages.find]
+include = ["busync_engine*"]
