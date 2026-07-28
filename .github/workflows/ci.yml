@@ -17,6 +17,22 @@ on:
           - 'true'
 
 jobs:
+  engine-tests:
+    # Python 배차 엔진 (packages/dispatch-engine) — 파서·로테이션·솔버 불변식.
+    # 실데이터 의존 테스트는 파일이 없으면 자동 skip 된다.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: packages/dispatch-engine/requirements-dev.txt
+      - name: Install engine dependencies
+        run: cd packages/dispatch-engine && pip install -r requirements-dev.txt
+      - name: Engine tests
+        run: cd packages/dispatch-engine && python -m pytest tests/ -q
+
   lint-and-typecheck:
     runs-on: ubuntu-latest
     steps:
