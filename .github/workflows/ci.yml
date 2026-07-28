@@ -46,7 +46,7 @@ jobs:
       - name: Install admin-web dependencies
         run: cd packages/admin-web && npm ci
       - name: Generate Prisma client
-        run: cd packages/backend && npx prisma generate
+        run: cd packages/backend && npx prisma@5 generate
       - name: TypeScript check (backend)
         run: cd packages/backend && npx tsc --noEmit
       - name: TypeScript check (backend scripts — backtest CLIs)
@@ -86,9 +86,9 @@ jobs:
           node-version: '20'
           cache: 'npm'
       - run: cd packages/backend && npm ci
-      - run: cd packages/backend && npx prisma generate
+      - run: cd packages/backend && npx prisma@5 generate
       - name: Run migrations
-        run: cd packages/backend && npx prisma migrate deploy
+        run: cd packages/backend && npx prisma@5 migrate deploy
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/busync_test
       - name: Run tests
@@ -138,9 +138,9 @@ jobs:
           node-version: '20'
           cache: 'npm'
       - run: cd packages/backend && npm ci
-      - run: cd packages/backend && npx prisma generate
+      - run: cd packages/backend && npx prisma@5 generate
       - name: Run migrations
-        run: cd packages/backend && npx prisma migrate deploy
+        run: cd packages/backend && npx prisma@5 migrate deploy
       - name: EmergencyAgent smoke backtest (StubAgent)
         run: cd packages/backend && npm run backtest:emergency -- --smoke --drops=10
       - name: DispatchAgent smoke backtest (StubAgent)
@@ -167,13 +167,13 @@ jobs:
       - name: Install backend dependencies
         run: cd packages/backend && npm ci
       - name: Generate Prisma client
-        run: cd packages/backend && npx prisma generate
+        run: cd packages/backend && npx prisma@5 generate
       - name: Run migrations
-        run: cd packages/backend && npx prisma migrate deploy
+        run: cd packages/backend && npx prisma@5 migrate deploy
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/busync_test
       - name: Seed database
-        run: cd packages/backend && npx prisma db seed
+        run: cd packages/backend && npx prisma@5 db seed
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/busync_test
           JWT_SECRET: test-secret-key-that-is-long-enough-for-validation
