@@ -31,6 +31,7 @@ import driverPreferenceRoutes from './routes/driverPreferences';
 import agentDecisionRoutes from './routes/agentDecisions';
 import dailyReportRoutes from './routes/dailyReports';
 import errorReportRoutes from './routes/error-report';
+import engineRoutes from './routes/engine';
 import { errorHandler } from './middleware/errorHandler';
 import { globalLimiter, apiLimiter, uploadLimiter } from './middleware/rateLimits';
 import { sanitizeInput } from './middleware/security';
@@ -194,6 +195,10 @@ v1.use('/driver-tags', standardApiBody, apiLimiter, sanitizeInput, driverTagRout
 v1.use('/driver-preferences', standardApiBody, apiLimiter, sanitizeInput, driverPreferenceRoutes);
 v1.use('/agents', standardApiBody, apiLimiter, sanitizeInput, agentDecisionRoutes);
 v1.use('/daily-reports', standardApiBody, apiLimiter, sanitizeInput, dailyReportRoutes);
+
+// --- Python 배차 엔진 프록시: multipart(엑셀) 그대로 전달해야 하므로 raw body ---
+// sanitizeInput 미적용 — 바디를 파싱하지 않고 엔진에 패스스루한다 (엔진이 검증).
+v1.use('/engine', express.raw({ type: '*/*', limit: '30mb' }), uploadLimiter, engineRoutes);
 
 // --- Error report: no auth required, small body, own rate limit ---
 v1.use('/error-report', express.json({ limit: '16kb' }), sanitizeInput, errorReportRoutes);
