@@ -56,9 +56,10 @@ async function main() {
   // Create routes
   const routes = await Promise.all([
     prisma.route.upsert({
-      where: { routeNumber: '16' },
+      where: { companyId_routeNumber: { companyId: company.id, routeNumber: '16' } },
       update: {},
       create: {
+        companyId: company.id,
         routeNumber: '16',
         name: '16번 노선',
         description: '시내버스 16번 노선',
@@ -67,9 +68,10 @@ async function main() {
       },
     }),
     prisma.route.upsert({
-      where: { routeNumber: '23' },
+      where: { companyId_routeNumber: { companyId: company.id, routeNumber: '23' } },
       update: {},
       create: {
+        companyId: company.id,
         routeNumber: '23',
         name: '23번 노선',
         description: '시내버스 23번 노선',
@@ -78,9 +80,10 @@ async function main() {
       },
     }),
     prisma.route.upsert({
-      where: { routeNumber: '37' },
+      where: { companyId_routeNumber: { companyId: company.id, routeNumber: '37' } },
       update: {},
       create: {
+        companyId: company.id,
         routeNumber: '37',
         name: '37번 노선',
         description: '시내버스 37번 노선',
@@ -94,50 +97,50 @@ async function main() {
   // Create buses
   const buses = await Promise.all([
     prisma.bus.upsert({
-      where: { busNumber: 'BUS01' },
+      where: { companyId_busNumber: { companyId: company.id, busNumber: 'BUS01' } },
       update: {},
       create: {
+        companyId: company.id,
         busNumber: 'BUS01',
         plateNumber: '인천12가3456',
         model: '현대 뉴 슈퍼 에어로시티',
         year: 2022,
-        capacity: 40,
         routeId: routes[0].id,
       },
     }),
     prisma.bus.upsert({
-      where: { busNumber: 'BUS02' },
+      where: { companyId_busNumber: { companyId: company.id, busNumber: 'BUS02' } },
       update: {},
       create: {
+        companyId: company.id,
         busNumber: 'BUS02',
         plateNumber: '인천12나3457',
         model: '현대 뉴 슈퍼 에어로시티',
         year: 2021,
-        capacity: 40,
         routeId: routes[0].id,
       },
     }),
     prisma.bus.upsert({
-      where: { busNumber: 'BUS03' },
+      where: { companyId_busNumber: { companyId: company.id, busNumber: 'BUS03' } },
       update: {},
       create: {
+        companyId: company.id,
         busNumber: 'BUS03',
         plateNumber: '인천12다3458',
         model: '현대 블루시티',
         year: 2023,
-        capacity: 40,
         routeId: routes[1].id,
       },
     }),
     prisma.bus.upsert({
-      where: { busNumber: 'BUS04' },
+      where: { companyId_busNumber: { companyId: company.id, busNumber: 'BUS04' } },
       update: {},
       create: {
+        companyId: company.id,
         busNumber: 'BUS04',
         plateNumber: '인천12라3459',
         model: '현대 뉴 슈퍼 에어로시티',
         year: 2022,
-        capacity: 40,
         routeId: routes[2].id,
       },
     }),
