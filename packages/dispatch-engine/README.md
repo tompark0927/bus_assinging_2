@@ -153,6 +153,24 @@ uvicorn service:app --port 8100
 | `POST /leave/triage` | 휴무신청 자동 승낙/검토 분류 |
 | `GET /leave/annual` | 근로기준법 연차 자동계산 |
 
+## Railway 배포
+
+이 디렉토리는 자체 `Dockerfile` + `railway.json`으로 독립 서비스로 배포된다.
+
+1. Railway 대시보드 → New Service → GitHub Repo(`bus_assinging_2`) 연결
+2. 서비스 Settings → **Root Directory = `packages/dispatch-engine`**
+   (Dockerfile·railway.json 자동 인식, `/health` 헬스체크)
+3. Variables: `PORT=8100` (내부 통신 포트 고정)
+4. Volume 마운트: **`/data`** — 정책(`policies/`)·초안(`drafts/`) 영속화.
+   볼륨 없이도 동작하지만 재배포 시 저장된 정책이 사라진다.
+5. 백엔드 서비스 Variables에 추가:
+   `ENGINE_URL=http://<엔진서비스이름>.railway.internal:8100`
+   (같은 프로젝트 내 private networking — 공개 도메인 불필요)
+6. 백엔드 재배포 후 admin-web `/dashboard/engine`에서 연결 확인.
+
+주의: 엔진은 인증이 없다 — 반드시 백엔드 프록시 뒤(private network)에만 두고
+공개 도메인(Generate Domain)을 만들지 말 것.
+
 ## 미구현 (다음 단계)
 
 - 삼성지선(멀티 노선 단일 시트) 변형 파서 — 스펙 3.5. 해당 실데이터 미보유로 보류
