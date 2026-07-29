@@ -61,10 +61,49 @@ async function proxy(req: AuthRequest, res: Response) {
       .set('content-type', upstream.headers.get('content-type') ?? 'application/json')
       .send(body);
   } catch (err) {
-    logger.error(`[engine-proxy] ${req.method} ${url} 실패: ${err}`);
-    res.status(502).json({ error: '배차 엔진 연결 실패' });
+    // 502는 "주소는 있는데 닿지 않는다" — 원인 대부분이 배포 설정이라
+    // 화면에서 바로 짚을 수 있게 실제 사유를 함께 내려준다.
+    const cause = err instanceof Error ? err.message : String(err);
+    logger.error(`[engine-proxy] ${req.method} ${url} 실패: ${cause}`);
+    res.status(502).json({
+      error: '배차 엔진에 연결하지 못했습니다',
+      message:
+        `엔진(${ENGINE_URL}) 연결 실패: ${cause}. ` +
+        '엔진 서비스가 실행 중인지, ENGINE_URL의 서비스 이름·포트가 맞는지 확인해 주세요.',
+      hint: cause,
+    });
   }
 }
+
+/**
+ * 엔진 연결 진단 — 배포 문제를 화면에서 바로 확인하기 위한 경로.
+ * 프록시와 같은 인증을 거치며, 엔진 /health 응답을 그대로 전달한다.
+ */
+router.get('/_diagnose', async (_req: AuthRequest, res: Response) => {
+  if (!ENGINE_URL) {
+    return res.status(503).json({
+      ok: false, engineUrl: null,
+      message: 'ENGINE_URL 이 설정되지 않았습니다 (백엔드 환경변수).',
+    });
+  }
+  const started = Date.now();
+  try {
+    const r = await fetch(`${ENGINE_URL}/health`);
+    return res.json({
+      ok: r.ok, engineUrl: ENGINE_URL, status: r.status,
+      elapsedMs: Date.now() - started,
+    });
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    return res.status(502).json({
+      ok: false, engineUrl: ENGINE_URL, error: cause,
+      elapsedMs: Date.now() - started,
+      message:
+        'Railway 사설망은 IPv6 전용입니다 — 엔진이 `--host ::` 로 떠 있는지, ' +
+        '서비스 이름과 포트(8100)가 ENGINE_URL과 일치하는지 확인해 주세요.',
+    });
+  }
+});
 
 // 모든 하위 경로 패스스루 (엔진 쪽에서 라우팅)
 router.all(/.*/, proxy);
