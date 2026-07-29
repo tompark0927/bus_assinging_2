@@ -29,7 +29,6 @@ const DailyReportsPage = lazy(() => import('./pages/DailyReportsPage'));
 const BasicDataPage = lazy(() => import('./pages/BasicDataPage'));
 const DispatchSettingsPage = lazy(() => import('./pages/DispatchSettingsPage'));
 const EngineSettingsPage = lazy(() => import('./pages/EngineSettingsPage'));
-const EngineDraftPage = lazy(() => import('./pages/EngineDraftPage'));
 const TodayOperationPage = lazy(() => import('./pages/TodayOperationPage'));
 const AccountsPage = lazy(() => import('./pages/AccountsPage'));
 const CompanyInfoPage = lazy(() => import('./pages/CompanyInfoPage'));
@@ -77,7 +76,6 @@ export default function App() {
               <Route path="today" element={<Suspense fallback={<PageLoadingFallback />}><TodayOperationPage /></Suspense>} />
               <Route path="settings" element={<Suspense fallback={<PageLoadingFallback />}><DispatchSettingsPage /></Suspense>} />
               <Route path="engine" element={<Suspense fallback={<PageLoadingFallback />}><EngineSettingsPage /></Suspense>} />
-              <Route path="engine/draft" element={<Suspense fallback={<PageLoadingFallback />}><EngineDraftPage /></Suspense>} />
               <Route path="accounts" element={<Suspense fallback={<PageLoadingFallback />}><AccountsPage /></Suspense>} />
               <Route path="company" element={<Suspense fallback={<PageLoadingFallback />}><CompanyInfoPage /></Suspense>} />
               {/* OWNER/DIRECTOR 전용 — 사이드바 하단 작은 링크로만 노출 */}

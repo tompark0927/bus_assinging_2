@@ -7,6 +7,7 @@ import {
   Send,
   Trash2,
   Sparkles,
+  Upload,
   ChevronLeft,
   ChevronRight,
   X,
@@ -35,6 +36,7 @@ import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
 import PageHeader from '../components/PageHeader';
 import PostingScheduleGrid, { type PostingView } from '../components/PostingScheduleGrid';
+import { engineApi } from '../services/api';
 import SectionHeader from '../components/SectionHeader';
 import { scheduleHelp } from '../help/helpContent';
 import { useAuthStore } from '../store/authStore';
@@ -400,10 +402,62 @@ export default function SchedulePage() {
 
   // ─── 뮤테이션 ───
 
+  // AI 배차 엔진(CP-SAT)으로 생성 → 배차표로 저장.
+  // 엔진은 과거 배차표에서 로테이션·감차·짝궁 규칙을 이어받으므로 직전 월이
+  // 포함된 엑셀이 필요하다. 규칙 자체는 [AI 엔진 설정]의 정책을 따른다.
+  const [engineFile, setEngineFile] = useState<File | null>(null);
+  const [engineUnmatched, setEngineUnmatched] = useState<{ vehicles: string[]; drivers: string[] } | null>(null);
+  const engineFileRef = useRef<HTMLInputElement>(null);
+
+  const engineGenerateMutation = useMutation({
+    mutationFn: async () => {
+      if (!engineFile) throw new Error('과거 배차표 엑셀을 선택해 주세요.');
+      const form = new FormData();
+      form.append('file', engineFile);
+      form.append('year', String(year));
+      form.append('month', String(month));
+      const draft = (await engineApi.generate(form)).data as {
+        cells: Record<string, Record<string, unknown>>;
+        audit: { ok: boolean; violations: unknown[] };
+        warnings: string[];
+      };
+      const saved = (await schedulesApi.saveFromEngine({
+        year, month,
+        name: newDraftName.trim() || undefined,
+        cells: draft.cells,
+      })).data.data as {
+        scheduleId: number; slotCount: number;
+        unmatched: { vehicles: string[]; drivers: string[] };
+      };
+      return { draft, saved };
+    },
+    onSuccess: ({ draft, saved }) => {
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-posting'] });
+      setSelectedScheduleId(saved.scheduleId);
+      setEngineUnmatched(saved.unmatched);
+      setShowGenerateModal(false);
+      setNewDraftName('');
+      setEngineFile(null);
+      toast.success(
+        `${year}년 ${month}월 초안 생성 완료 — 배정 ${saved.slotCount}건` +
+        (draft.audit.ok ? ', 제약 위반 0건' : `, 위반 ${draft.audit.violations.length}건 확인 필요`)
+      );
+    },
+    onError: (err: unknown) => {
+      const msg =
+        (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data?.detail ||
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        (err as Error)?.message ||
+        '배차표 생성 중 오류가 발생했습니다.';
+      toast.error(msg);
+    },
+  });
+
   const generateMutation = useMutation({
-    // v2 솔버 사용 — 회사 정책(CITY_2SHIFT 등) 자동 적용 + PAIR + 헌법룰
-    // 신규 기사(면제·단독배차 금지) / 노선별 사고 기사(해당 노선 배차 금지) 를 함께 전달.
-    // 멀티 초안: 생성할 때마다 새 초안 프로필이 추가된다 (월 최대 5개).
+    // (구) v2 솔버 — 순번·로테이션 개념이 없어 게시 양식을 재현하지 못한다.
+    // AI 엔진으로 대체되었으며 옛 배차표 재생성 용도로만 남겨둔다.
     mutationFn: () => schedulesApi.generateV2({
       year, month,
       name: newDraftName.trim() || undefined,
@@ -2024,6 +2078,32 @@ export default function SchedulePage() {
           icon={<Sparkles size={24} className="text-blue-600" />}
         >
           <div className="space-y-5">
+            {/* AI 엔진 생성 — 과거 배차표에서 로테이션을 이어받는다 */}
+            <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+              <label className="block text-base font-semibold text-gray-800 dark:text-gray-200 mb-1">
+                과거 배차표 엑셀 <span className="text-red-500">*</span>
+              </label>
+              <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
+                직전 월({month === 1 ? year - 1 : year}년 {month === 1 ? 12 : month - 1}월)이 포함된 파일을 올려주세요.
+                순번 로테이션·주말 감차·짝궁 교대를 그대로 이어받습니다.
+              </p>
+              <input
+                ref={engineFileRef}
+                type="file"
+                accept=".xlsx,.xlsm"
+                className="hidden"
+                onChange={(e) => setEngineFile(e.target.files?.[0] ?? null)}
+              />
+              <button
+                type="button"
+                onClick={() => engineFileRef.current?.click()}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+              >
+                <Upload size={15} />
+                {engineFile ? engineFile.name : '엑셀 선택'}
+              </button>
+            </div>
+
             <div>
               <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">
                 초안 이름 <span className="text-sm font-normal text-gray-400">(선택 — 비우면 "초안 N" 자동 부여)</span>
@@ -2141,13 +2221,13 @@ export default function SchedulePage() {
               취소
             </button>
             <button
-              onClick={handleGenerateClick}
-              disabled={generateMutation.isPending}
-              className="btn-primary flex-1 text-base py-3 min-h-[52px] inline-flex items-center justify-center gap-2"
+              onClick={() => engineGenerateMutation.mutate()}
+              disabled={engineGenerateMutation.isPending || !engineFile}
+              className="btn-primary flex-1 text-base py-3 min-h-[52px] inline-flex items-center justify-center gap-2 disabled:opacity-40"
             >
-              {generateMutation.isPending ? (
+              {engineGenerateMutation.isPending ? (
                 <>
-                  <Loader2 size={20} className="animate-spin" /> AI가 최적 배차를 계산하고 있습니다...
+                  <Loader2 size={20} className="animate-spin" /> AI가 최적 배차를 계산하고 있습니다... (최대 3분)
                 </>
               ) : (
                 <>

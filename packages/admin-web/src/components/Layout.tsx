@@ -7,7 +7,6 @@ import {
   LayoutDashboard, Calendar, AlertTriangle, Database, LogOut,
   Settings,
   BrainCircuit,
-  Wand2,
   CalendarOff, Bus, UserCog, Building2, ScrollText,
   PanelLeftClose, PanelLeft,
 } from 'lucide-react';
@@ -47,7 +46,6 @@ const navGroups: NavGroup[] = [
     items: [
       { to: '/dashboard', labelKey: '대시보드', icon: LayoutDashboard },
       { to: '/dashboard/schedule', labelKey: '배차표 관리', icon: Calendar, roles: ['DISPATCH'] },
-      { to: '/dashboard/engine/draft', labelKey: 'AI 초안 생성', icon: Wand2, roles: ['DISPATCH'] },
       { to: '/dashboard/emergency', labelKey: '대타 관리', icon: AlertTriangle, roles: ['DISPATCH'] },
       { to: '/dashboard/dayoff', labelKey: '휴무 요청', icon: CalendarOff, roles: ['DISPATCH', 'HR'] },
       { to: '/dashboard/today', labelKey: '오늘 운행 현황', icon: Bus, roles: ['DISPATCH'] },
