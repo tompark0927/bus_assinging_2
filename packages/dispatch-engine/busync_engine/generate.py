@@ -73,6 +73,16 @@ def generate_month(
     first = dt.date(year, month, 1)
     last = dt.date(year, month, _calendar.monthrange(year, month)[1])
     last_prev_day = first - dt.timedelta(days=1)
+
+    # 로테이션은 전월 말일 상태에서 이어받는다 (월 경계 리셋 금지 — 스펙 7).
+    # 따라서 history의 마지막은 반드시 '직전 월'이어야 한다.
+    if (prev.year, prev.month) != (last_prev_day.year, last_prev_day.month):
+        raise ValueError(
+            f"직전 월({last_prev_day.year}-{last_prev_day.month:02d}) 배차표가 필요합니다. "
+            f"현재 마지막 이력은 {prev.year}-{prev.month:02d}입니다 — 로테이션 순번을 "
+            f"이어받을 수 없습니다. 대상 월을 {prev.year}-{prev.month + 1:02d}로 바꾸거나, "
+            f"직전 월이 포함된 엑셀을 올려주세요."
+        )
     prev_t = MonthlyRoster(
         year=prev.year, month=prev.month,
         division=prev.division, groups=prev.groups,
@@ -107,7 +117,14 @@ def generate_month(
             cfg.rest_counts = {}
         last_map = slot_map(prev_t, g, last_prev_day)
         if len(last_map) < g.size:
-            last_map = replay_underlying(prev_t, g, rule)[last_prev_day]
+            # 감차일이라 표시 순번이 비었으면 언더라잉을 복원해 이어받는다
+            replayed = replay_underlying(prev_t, g, rule)
+            if last_prev_day not in replayed:
+                raise ValueError(
+                    f"{g.name}: 전월 말일({last_prev_day}) 로테이션 상태를 복원할 수 없습니다 "
+                    f"— 직전 월 배차표가 말일까지 채워져 있는지 확인해 주세요."
+                )
+            last_map = replayed[last_prev_day]
         if not policy.get("rotation_carry_over"):
             last_map = {v: s for v, s in sorted(
                 ((v, i + 1) for i, v in enumerate(g.vehicles)), key=lambda x: x[1]

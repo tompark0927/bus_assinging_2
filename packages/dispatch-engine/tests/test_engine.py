@@ -367,3 +367,22 @@ def test_daily_parser_routes_and_vacancies():
     assert any(s.adjust is not None for s in daily.slots)
     # 결원 슬롯 존재 + 기사명이 "0"으로 오염되지 않음
     assert all(s.am != "0" and s.pm != "0" for s in daily.slots)
+
+
+@pytest.mark.skipif(not os.path.exists(JISEON), reason="실데이터 없음")
+def test_generate_requires_immediately_previous_month():
+    """로테이션은 전월 말일에서 이어받으므로 직전 월 이력이 없으면 거부해야 한다.
+
+    (예전엔 replay_underlying에서 KeyError로 터졌다 — 원인을 알 수 없는 실패)
+    """
+    from busync_engine.generate import generate_month
+    from busync_engine.importer.weekly import parse_workbook_month
+    from busync_engine.policy import CompanyPolicy
+
+    history = [
+        parse_workbook_month(JISEON, "지선배차표(2026년 5월)", "지선"),
+        parse_workbook_month(JISEON, "지선배차표(2026년 6월)", "지선"),
+    ]
+    # 이력은 6월까지인데 8월을 요청 → 7월이 비어 로테이션을 이을 수 없다
+    with pytest.raises(ValueError, match="직전 월"):
+        generate_month(history, CompanyPolicy(), 2026, 8, time_limit_s=5)
