@@ -155,21 +155,29 @@ uvicorn service:app --port 8100
 
 ## Railway 배포
 
-이 디렉토리는 자체 `Dockerfile` + `railway.json`으로 독립 서비스로 배포된다.
+**스크립트 한 방** (`railway login` + 프로젝트 링크만 되어 있으면 됨):
 
-1. Railway 대시보드 → New Service → GitHub Repo(`bus_assinging_2`) 연결
-2. 서비스 Settings → **Root Directory = `packages/dispatch-engine`**
-   (Dockerfile·railway.json 자동 인식, `/health` 헬스체크)
-3. Variables: `PORT=8100` (내부 통신 포트 고정)
-4. Volume 마운트: **`/data`** — 정책(`policies/`)·초안(`drafts/`) 영속화.
-   볼륨 없이도 동작하지만 재배포 시 저장된 정책이 사라진다.
-5. 백엔드 서비스 Variables에 추가:
-   `ENGINE_URL=http://<엔진서비스이름>.railway.internal:8100`
-   (같은 프로젝트 내 private networking — 공개 도메인 불필요)
-6. 백엔드 재배포 후 admin-web `/dashboard/engine`에서 연결 확인.
+```bash
+railway login                      # 최초 1회 (브라우저 인증)
+railway link                       # 백엔드가 있는 프로젝트 선택
+BACKEND_SERVICE_NAME=<백엔드서비스명> ./packages/dispatch-engine/deploy-railway.sh
+```
+
+스크립트가 하는 일: 엔진 서비스 생성(GitHub 연결 → push 시 자동 재배포) →
+`PORT`·`RAILWAY_DOCKERFILE_PATH` 설정 → `/data` 볼륨 생성 → 배포 →
+백엔드에 `ENGINE_URL` 주입.
+
+빌드 컨텍스트는 **리포 루트**이고 `RAILWAY_DOCKERFILE_PATH`로 Dockerfile
+위치를 지정하므로, 대시보드에서 Root Directory를 손댈 필요가 없다.
+
+로컬 도커 빌드(리포 루트에서):
+
+```bash
+docker build -f packages/dispatch-engine/Dockerfile -t busync-engine .
+```
 
 주의: 엔진은 인증이 없다 — 반드시 백엔드 프록시 뒤(private network)에만 두고
-공개 도메인(Generate Domain)을 만들지 말 것.
+공개 도메인(Generate Domain)을 만들지 말 것. 스크립트도 도메인을 만들지 않는다.
 
 ## 미구현 (다음 단계)
 
