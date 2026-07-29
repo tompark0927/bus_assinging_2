@@ -272,6 +272,13 @@ export const schedulesApi = {
   rename: (scheduleId: number, name: string) => api.put(`/schedules/by-id/${scheduleId}/rename`, { name }),
   generate: (data: { year: number; month: number; workDays?: number; restDays?: number }) =>
     api.post('/schedules/generate', data),
+  // AI 배차 엔진(Python) 생성 결과를 배차표 초안으로 저장
+  saveFromEngine: (data: {
+    year: number; month: number; name?: string;
+    cells: Record<string, Record<string, unknown>>;
+  }) => api.post('/schedules/from-engine', data, { timeout: 120000 }),
+  // 게시 양식 조회 (행=차량, 열=날짜 → 순번|오전|오후)
+  posting: (scheduleId: number) => api.get(`/schedules/by-id/${scheduleId}/posting`),
   // v2: 정책 기반 솔버 (PAIR/SOLO + 1/2/3교대 + 헌법룰). 생성할 때마다 새 초안 프로필 추가 (월 최대 5개).
   generateV2: (data: {
     year: number;

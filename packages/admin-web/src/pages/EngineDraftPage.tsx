@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import {
   AlertTriangle,
+  Save,
   CalendarRange,
   Check,
   Download,
@@ -14,7 +15,8 @@ import {
   X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { engineApi } from '../services/api';
+import { Link } from 'react-router-dom';
+import { engineApi, schedulesApi } from '../services/api';
 import PageHeader from '../components/PageHeader';
 
 /* ────────────────────────────────────────────
@@ -159,6 +161,29 @@ export default function EngineDraftPage() {
     onError: () => toast.error('확정에 실패했습니다.'),
   });
 
+  // 초안을 실제 배차표(DB)로 저장 — 저장하면 배차표 관리에서 게시 양식으로 보인다
+  const [savedId, setSavedId] = useState<number | null>(null);
+  const [unmatched, setUnmatched] = useState<{ vehicles: string[]; drivers: string[] } | null>(null);
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (!draft) throw new Error('no draft');
+      return (await schedulesApi.saveFromEngine({
+        year: draft.year,
+        month: draft.month,
+        name: `AI 엔진 초안 (${draft.month}월)`,
+        cells: draft.cells as unknown as Record<string, Record<string, unknown>>,
+      })).data.data;
+    },
+    onSuccess: (data: { scheduleId: number; slotCount: number; unmatched: { vehicles: string[]; drivers: string[] } }) => {
+      setSavedId(data.scheduleId);
+      setUnmatched(data.unmatched);
+      toast.success(`배차표로 저장되었습니다 (배정 ${data.slotCount}건)`);
+    },
+    onError: (err: { response?: { data?: { message?: string } } }) => {
+      toast.error(err?.response?.data?.message ?? '저장에 실패했습니다.');
+    },
+  });
+
   const downloadXlsx = async () => {
     if (!draft) return;
     try {
@@ -293,8 +318,35 @@ export default function EngineDraftPage() {
               >
                 <Download size={15} /> 게시용 엑셀 다운로드
               </button>
+              <button
+                onClick={() => saveMutation.mutate()}
+                disabled={saveMutation.isPending}
+                className="ml-2 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saveMutation.isPending
+                  ? <Loader2 size={15} className="animate-spin" />
+                  : <Save size={15} />}
+                배차표로 저장
+              </button>
             </div>
           </section>
+
+          {savedId && (
+            <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+              <p className="font-semibold">
+                배차표로 저장되었습니다.{' '}
+                <Link to="/dashboard/schedule" className="underline">배차표 관리에서 열기 →</Link>
+              </p>
+              {unmatched && (unmatched.vehicles.length > 0 || unmatched.drivers.length > 0) && (
+                <p className="mt-1 text-xs text-amber-700">
+                  ⚠ 기초 데이터에 없어 저장되지 않은 항목이 있습니다 —
+                  {unmatched.vehicles.length > 0 && ` 차량 ${unmatched.vehicles.length}대(${unmatched.vehicles.slice(0, 5).join(', ')}${unmatched.vehicles.length > 5 ? '…' : ''})`}
+                  {unmatched.drivers.length > 0 && ` 기사 ${unmatched.drivers.length}명(${unmatched.drivers.slice(0, 5).join(', ')}${unmatched.drivers.length > 5 ? '…' : ''})`}
+                  . 기초 데이터에 등록하면 다음 저장 때 반영됩니다.
+                </p>
+              )}
+            </div>
+          )}
 
           {draft.warnings.length > 0 && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
