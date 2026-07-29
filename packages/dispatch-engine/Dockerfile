@@ -25,4 +25,10 @@ ENV ENGINE_DATA_DIR=/data
 EXPOSE 8100
 
 # Railway가 PORT를 주입한다. 로컬 실행 시 8100.
-CMD ["sh", "-c", "uvicorn service:app --host 0.0.0.0 --port ${PORT:-8100}"]
+#
+# ⚠️ --host 는 반드시 `::` (IPv6 와일드카드). Railway 사설망
+# (*.railway.internal)은 **IPv6 전용**이라 0.0.0.0(IPv4)로 바인딩하면
+# 백엔드가 엔진에 닿지 못하고 프록시가 502를 낸다.
+# 리눅스 기본 설정(dual-stack)에서는 `::` 가 IPv4 매핑 주소도 함께 받으므로
+# 로컬 http://localhost:8100 접속도 그대로 동작한다.
+CMD ["sh", "-c", "uvicorn service:app --host :: --port ${PORT:-8100}"]
