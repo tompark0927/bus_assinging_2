@@ -386,3 +386,11 @@ def test_generate_requires_immediately_previous_month():
     # 이력은 6월까지인데 8월을 요청 → 7월이 비어 로테이션을 이을 수 없다
     with pytest.raises(ValueError, match="직전 월"):
         generate_month(history, CompanyPolicy(), 2026, 8, time_limit_s=5)
+
+    # 다만 '월 경계 이어가기'를 끄면 직전 월 없이도 생성돼야 한다
+    # (첫 도입처럼 지난달 자료가 아예 없는 경우)
+    policy = CompanyPolicy()
+    policy.set("rotation_carry_over", False)
+    result = generate_month(history, policy, 2026, 8, time_limit_s=20)
+    assert result.roster.entries, "이어받기를 꺼도 배차표는 생성되어야 함"
+    assert any("새로 시작" in w for w in result.warnings)

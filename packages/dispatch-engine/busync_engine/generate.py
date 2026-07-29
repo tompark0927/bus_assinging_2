@@ -74,14 +74,19 @@ def generate_month(
     last = dt.date(year, month, _calendar.monthrange(year, month)[1])
     last_prev_day = first - dt.timedelta(days=1)
 
-    # 로테이션은 전월 말일 상태에서 이어받는다 (월 경계 리셋 금지 — 스펙 7).
-    # 따라서 history의 마지막은 반드시 '직전 월'이어야 한다.
-    if (prev.year, prev.month) != (last_prev_day.year, last_prev_day.month):
+    # 로테이션은 전월 말일 상태에서 이어받는 것이 원칙이다 (월 경계 리셋 금지 — 스펙 7).
+    # 다만 첫 도입처럼 직전 월 배차표가 없을 수 있다. 그때는 이어받기를 포기하고
+    # 차량 순서대로 순번을 새로 시작한다(rotation_carry_over=false 와 동일 동작).
+    # 규칙(순열·감차·짝궁) 자체는 어느 달 이력에서든 추론되므로 생성은 가능하다.
+    carry_over = bool(policy.get("rotation_carry_over"))
+    prev_is_immediate = (prev.year, prev.month) == (last_prev_day.year, last_prev_day.month)
+    if carry_over and not prev_is_immediate:
         raise ValueError(
-            f"직전 월({last_prev_day.year}-{last_prev_day.month:02d}) 배차표가 필요합니다. "
-            f"현재 마지막 이력은 {prev.year}-{prev.month:02d}입니다 — 로테이션 순번을 "
-            f"이어받을 수 없습니다. 대상 월을 {prev.year}-{prev.month + 1:02d}로 바꾸거나, "
-            f"직전 월이 포함된 엑셀을 올려주세요."
+            f"직전 월({last_prev_day.year}-{last_prev_day.month:02d}) 배차표가 없습니다 "
+            f"(가장 최근 이력: {prev.year}-{prev.month:02d}). 순번 로테이션을 이어받으려면 "
+            f"직전 월이 포함된 엑셀이 필요합니다.\n"
+            f"직전 월 자료가 없다면 [AI 엔진 설정] → '월 경계 이어가기'를 끄고 다시 "
+            f"생성하세요. 순번이 차량 순서대로 새로 시작됩니다."
         )
     prev_t = MonthlyRoster(
         year=prev.year, month=prev.month,
@@ -115,21 +120,25 @@ def generate_month(
         if not reduction_on:
             cfg.rest_slots = {}
             cfg.rest_counts = {}
-        last_map = slot_map(prev_t, g, last_prev_day)
-        if len(last_map) < g.size:
-            # 감차일이라 표시 순번이 비었으면 언더라잉을 복원해 이어받는다
-            replayed = replay_underlying(prev_t, g, rule)
-            if last_prev_day not in replayed:
-                raise ValueError(
-                    f"{g.name}: 전월 말일({last_prev_day}) 로테이션 상태를 복원할 수 없습니다 "
-                    f"— 직전 월 배차표가 말일까지 채워져 있는지 확인해 주세요."
-                )
-            last_map = replayed[last_prev_day]
-        if not policy.get("rotation_carry_over"):
-            last_map = {v: s for v, s in sorted(
-                ((v, i + 1) for i, v in enumerate(g.vehicles)), key=lambda x: x[1]
-            )}
-            warnings.append(f"{g.name}: 월 경계 이어가기 꺼짐 — 순번 리셋")
+        # 이어받기를 끈 경우엔 전월 상태를 조회하지 않는다 — 직전 월 자료가
+        # 아예 없어도(첫 도입) 생성이 가능해야 하기 때문.
+        if not carry_over or not prev_is_immediate:
+            last_map = {v: i + 1 for i, v in enumerate(g.vehicles)}
+            warnings.append(
+                f"{g.name}: 순번을 차량 순서대로 새로 시작합니다 "
+                f"(직전 월 이어받기 없음)"
+            )
+        else:
+            last_map = slot_map(prev_t, g, last_prev_day)
+            if len(last_map) < g.size:
+                # 감차일이라 표시 순번이 비었으면 언더라잉을 복원해 이어받는다
+                replayed = replay_underlying(prev_t, g, rule)
+                if last_prev_day not in replayed:
+                    raise ValueError(
+                        f"{g.name}: 전월 말일({last_prev_day}) 로테이션 상태를 복원할 수 "
+                        f"없습니다 — 직전 월 배차표가 말일까지 채워져 있는지 확인해 주세요."
+                    )
+                last_map = replayed[last_prev_day]
         patterns[g.name] = expand_pattern(
             rule, last_map, first, last, cal, cfg, disp
         )
