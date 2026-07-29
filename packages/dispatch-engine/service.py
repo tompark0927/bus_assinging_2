@@ -290,12 +290,28 @@ async def generate_endpoint(
     except (ValueError, RuntimeError) as ex:
         raise HTTPException(422, str(ex))
 
+    # 패턴(1단계)에서 언더라잉 슬롯·운행여부·그룹을 끌어와 셀에 붙인다.
+    # 백엔드가 이 값들을 SchedulePattern으로 영속화해 다음 달 로테이션을 이어간다.
+    pattern_meta: dict[tuple[dt.date, str], dict] = {}
+    for gname, pat in result.patterns.items():
+        for (d, v), cell in pat.items():
+            pattern_meta[(d, v)] = {
+                "underlying": cell.underlying_slot,
+                "operating": cell.operating,
+                "group": gname,
+            }
+
     cells = defaultdict(dict)
     for (d, v), e in sorted(result.roster.entries.items()):
+        meta = pattern_meta.get((d, v), {})
         cells[d.isoformat()][v] = {
             "slot": e.slot_label,
+            "display_slot": e.slot_index,
             "am": e.am.driver or e.am.raw,
             "pm": e.pm.driver or e.pm.raw,
+            "underlying": meta.get("underlying"),
+            "operating": meta.get("operating", True),
+            "group": meta.get("group"),
         }
     out = {
         "draft_id": _store_draft(result),
