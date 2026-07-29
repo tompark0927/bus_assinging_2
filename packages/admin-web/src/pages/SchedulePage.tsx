@@ -34,6 +34,7 @@ import { format, getDaysInMonth } from 'date-fns';
 import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
 import PageHeader from '../components/PageHeader';
+import PostingScheduleGrid, { type PostingView } from '../components/PostingScheduleGrid';
 import SectionHeader from '../components/SectionHeader';
 import { scheduleHelp } from '../help/helpContent';
 import { useAuthStore } from '../store/authStore';
@@ -301,6 +302,20 @@ export default function SchedulePage() {
     queryFn: () => schedulesApi.get(year, month, selectedScheduleId ?? undefined).then((r) => r.data.data),
     retry: 1,
   });
+
+  // 게시 양식(행=차량, 열=날짜 → 순번|오전|오후) 데이터.
+  // AI 엔진으로 만든 배차표만 순번(SchedulePattern)을 갖는다 — 옛 배차표는
+  // 빈 결과가 와서 자동으로 기존 기사별 뷰로 폴백된다.
+  const { data: postingView } = useQuery<PostingView>({
+    queryKey: ['schedule-posting', schedule?.id],
+    queryFn: () => schedulesApi.posting(schedule!.id).then((r) => r.data.data),
+    enabled: !!schedule?.id,
+    retry: 0,
+  });
+  const hasPosting = (postingView?.groups?.length ?? 0) > 0;
+  // 순번 데이터가 있으면 게시 양식이 기본 — 현장이 보던 그 표
+  const [viewMode, setViewMode] = useState<'posting' | 'driver'>('posting');
+  const showPosting = hasPosting && viewMode === 'posting';
 
   const { data: routes = [] } = useQuery<Route[]>({
     queryKey: ['routes', 'all'],
@@ -570,7 +585,13 @@ export default function SchedulePage() {
         seen.set(slot.driver.id, slot.driver);
       }
     }
-    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    // 배차표 행 순서: 스페어(예비) 기사는 무조건 맨 아래로. 같은 유형 안에서는 이름순.
+    const spareRank = (t: string) => (t === 'SPARE' ? 1 : 0);
+    return Array.from(seen.values()).sort((a, b) => {
+      const byType = spareRank(a.driverType) - spareRank(b.driverType);
+      if (byType !== 0) return byType;
+      return a.name.localeCompare(b.name, 'ko');
+    });
   }, [schedule?.slots]);
 
   const filteredDrivers = useMemo(() => {
@@ -1329,8 +1350,35 @@ export default function SchedulePage() {
           <h2 className="text-xl font-bold text-black">{year}년 {month}월 배차표</h2>
         </div>
       )}
-      {/* ─── 캘린더/그리드 배차표 ─── */}
-      {!isLoading && !isError && schedule && (
+      {/* ─── 뷰 전환 (순번 데이터가 있을 때만 노출) ─── */}
+      {hasPosting && (
+        <div className="flex items-center gap-2 print:hidden">
+          {([
+            ['posting', '게시 양식 (차량·순번)'],
+            ['driver', '기사별 보기'],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                viewMode === mode
+                  ? 'bg-blue-600 text-white'
+                  : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ─── 게시 양식 배차표 (AI 엔진 생성분) ─── */}
+      {!isLoading && !isError && schedule && showPosting && postingView && (
+        <PostingScheduleGrid view={postingView} />
+      )}
+
+      {/* ─── 캘린더/그리드 배차표 (기사별) ─── */}
+      {!isLoading && !isError && schedule && !showPosting && (
         <div className="card p-0 overflow-hidden dark:bg-gray-800">
           <div className="overflow-x-auto">
             <table
