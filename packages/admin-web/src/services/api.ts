@@ -222,35 +222,60 @@ export const companyPolicyApi = {
   update: (policy: Record<string, unknown>) => api.put('/companies/policy', { policy }),
 };
 
+/**
+ * 배차 엔진 전용 클라이언트.
+ *
+ * 배차 생성은 CP-SAT 계산에 1~3분이 걸린다. 그런데 프로덕션의 /api 는
+ * Vercel rewrite 를 거치는데 Vercel 프록시가 그 전에 연결을 끊어버려
+ * 브라우저에는 502 가 뜬다 (백엔드·엔진은 정상 완료 — 실제로 겪은 증상).
+ * Socket.IO 를 Railway 로 직결한 것과 같은 이유로, 엔진 호출도 Vercel 을
+ * 우회해 Railway 백엔드에 직접 보낸다. CORS 는 allowedOrigins 로 허용됨.
+ */
+const ENGINE_BASE = import.meta.env.DEV
+  ? '/api/v1'
+  : `${(import.meta.env.VITE_SOCKET_URL as string) || 'https://busyncbackend-production.up.railway.app'}/api/v1`;
+
+const engineClient = axios.create({
+  baseURL: ENGINE_BASE,
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 300000,
+});
+// 토큰 부착 — api 인스턴스와 같은 저장소를 읽는다
+engineClient.interceptors.request.use((config) => {
+  const { token } = readAuth();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
 // AI 배차 엔진 (Python dispatch-engine 프록시 — /api/v1/engine/*)
 export const engineApi = {
-  catalog: () => api.get('/engine/catalog'),
-  getPolicy: () => api.get('/engine/policy'),
-  putPolicy: (policy: Record<string, unknown>) => api.put('/engine/policy', { policy }),
+  catalog: () => engineClient.get('/engine/catalog'),
+  getPolicy: () => engineClient.get('/engine/policy'),
+  putPolicy: (policy: Record<string, unknown>) => engineClient.put('/engine/policy', { policy }),
   // 엑셀 분석은 파일 업로드 + 솔버 분석이라 타임아웃 여유
   analyze: (form: FormData) =>
-    api.post('/engine/analyze', form, {
+    engineClient.post('/engine/analyze', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 120000,
     }),
   // 배차 초안 생성 — CP-SAT 솔버 실행 (기본 3분 제한이라 타임아웃 크게)
   generate: (form: FormData) =>
-    api.post('/engine/generate', form, {
+    engineClient.post('/engine/generate', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 300000,
     }),
   explainCell: (draftId: string, date: string, vehicle: string, shift: string) =>
-    api.get(`/engine/draft/${draftId}/explain`, { params: { date, vehicle, shift } }),
+    engineClient.get(`/engine/draft/${draftId}/explain`, { params: { date, vehicle, shift } }),
   reportAbsence: (draftId: string, form: FormData) =>
-    api.post(`/engine/draft/${draftId}/absence`, form, {
+    engineClient.post(`/engine/draft/${draftId}/absence`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
   applyRepair: (draftId: string, form: FormData) =>
-    api.post(`/engine/draft/${draftId}/repair`, form, {
+    engineClient.post(`/engine/draft/${draftId}/repair`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
   draftXlsx: (draftId: string) =>
-    api.get(`/engine/draft/${draftId}/xlsx`, { responseType: 'blob', timeout: 60000 }),
+    engineClient.get(`/engine/draft/${draftId}/xlsx`, { responseType: 'blob', timeout: 60000 }),
 };
 
 // Company Info (회사 기본 정보)
@@ -276,7 +301,7 @@ export const schedulesApi = {
   saveFromEngine: (data: {
     year: number; month: number; name?: string;
     cells: Record<string, Record<string, unknown>>;
-  }) => api.post('/schedules/from-engine', data, { timeout: 120000 }),
+  }) => engineClient.post('/schedules/from-engine', data, { timeout: 180000 }),
   // 게시 양식 조회 (행=차량, 열=날짜 → 순번|오전|오후)
   posting: (scheduleId: number) => api.get(`/schedules/by-id/${scheduleId}/posting`),
   // v2: 정책 기반 솔버 (PAIR/SOLO + 1/2/3교대 + 헌법룰). 생성할 때마다 새 초안 프로필 추가 (월 최대 5개).
