@@ -16,7 +16,10 @@ import {
   duplicateSchedule,
   renameSchedule,
 } from '../controllers/scheduleController';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { saveEngineDraft, getPostingView } from '../services/engineScheduleService';
+import logger from '../utils/logger';
+import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
 
 const router = Router();
@@ -211,6 +214,66 @@ router.post(
     }
   },
 );
+
+/**
+ * @swagger
+ * /schedules/from-engine:
+ *   post:
+ *     summary: AI 배차 엔진 생성 결과를 배차표 초안으로 저장
+ *     description: >
+ *       엔진(/engine/generate)이 만든 cells를 그대로 받아 Schedule +
+ *       SchedulePattern(순번·로테이션) + ScheduleSlot(기사 배정)으로 영속화한다.
+ *       엔진은 엑셀 값(차량번호·기사명)으로 말하므로 여기서 DB id로 번역하며,
+ *       매칭 실패 항목은 unmatched로 전부 돌려준다.
+ *     tags: [Schedules]
+ */
+router.post('/from-engine', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  try {
+    const { year, month, name, cells } = req.body ?? {};
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !cells || typeof cells !== 'object') {
+      return res.status(400).json({ success: false, message: 'year, month, cells 가 필요합니다.' });
+    }
+    const result = await saveEngineDraft(req.user!.companyId, req.user!.id, {
+      year, month, name, cells,
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '저장에 실패했습니다.';
+    logger.error(`[schedules/from-engine] ${msg}`);
+    // 매칭 실패처럼 사용자가 고칠 수 있는 문제는 원문을 그대로 보여준다
+    return res.status(422).json({ success: false, message: msg });
+  }
+});
+
+/**
+ * @swagger
+ * /schedules/by-id/{id}/posting:
+ *   get:
+ *     summary: 게시 양식(행=차량, 열=날짜 → 순번|오전|오후) 조회
+ *     description: 패턴이 없는 옛 배차표는 groups/cells 가 비어 오며 호출측이 기존 뷰로 폴백한다.
+ *     tags: [Schedules]
+ */
+router.get('/by-id/:id/posting', async (req: AuthRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ success: false, message: '잘못된 배차표 id 입니다.' });
+    }
+    // 타 회사 배차표 열람 차단
+    const owned = await prisma.schedule.findFirst({
+      where: { id, companyId: req.user!.companyId },
+      select: { id: true },
+    });
+    if (!owned) {
+      return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
+    }
+    const view = await getPostingView(id);
+    return res.json({ success: true, data: view });
+  } catch (error) {
+    logger.error(`[schedules/posting] ${error}`);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+});
 
 router.post('/slots', requireRole('DISPATCH'), createScheduleSlot);
 router.put('/slots/:slotId', requireRole('DISPATCH'), ...scheduleValidation.updateSlot, updateScheduleSlot);
