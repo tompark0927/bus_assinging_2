@@ -639,11 +639,52 @@ export default function SchedulePage() {
         seen.set(slot.driver.id, slot.driver);
       }
     }
-    // 배차표 행 순서: 스페어(예비) 기사는 무조건 맨 아래로. 같은 유형 안에서는 이름순.
-    const spareRank = (t: string) => (t === 'SPARE' ? 1 : 0);
+    // ── 배차표 행 순서 ──
+    // 실제 배차표는 "짝꿍이 위아래로 붙어" 있어야 담당자가 한눈에 본다.
+    // 그래서 이름순이 아니라 (노선 → 차량 → 이름) 순으로 세운다. 같은 차량을
+    // 쓰는 두 고정기사가 자연히 인접한다. 스페어(예비)는 차량이 없으므로 맨 아래.
+    const homeOf = new Map<number, { route: string; bus: string; count: number }>();
+    const tally = new Map<number, Map<string, number>>();
+    for (const slot of schedule.slots) {
+      if (!slot.bus) continue;
+      const key = `${slot.route?.routeNumber ?? ''}|${slot.bus.busNumber}`;
+      const m = tally.get(slot.driver.id) ?? new Map<string, number>();
+      m.set(key, (m.get(key) ?? 0) + 1);
+      tally.set(slot.driver.id, m);
+    }
+    for (const [driverId, m] of tally) {
+      let best = '', bestN = 0;
+      for (const [k, n] of m) if (n > bestN) { best = k; bestN = n; }
+      const [route, bus] = best.split('|');
+      homeOf.set(driverId, { route, bus, count: bestN });
+    }
+    // 그 차량을 절반 이상 몬 사람만 '고정기사'로 본다 — 예비는 여기저기 흩어진다
+    const totalOf = new Map<number, number>();
+    for (const slot of schedule.slots) {
+      totalOf.set(slot.driver.id, (totalOf.get(slot.driver.id) ?? 0) + 1);
+    }
+    const isFixed = (id: number) => {
+      const h = homeOf.get(id);
+      const t = totalOf.get(id) ?? 0;
+      return !!h && t > 0 && h.count / t >= 0.5;
+    };
+    const routeKey = (r: string) => {
+      // "3-2" 같은 노선번호도 자연스럽게 정렬 (문자열 비교면 3-2가 16보다 앞)
+      const m = /^(\d+)(?:-(\d+))?$/.exec(r ?? '');
+      return m ? Number(m[1]) * 100 + Number(m[2] ?? 0) : Number.MAX_SAFE_INTEGER;
+    };
     return Array.from(seen.values()).sort((a, b) => {
-      const byType = spareRank(a.driverType) - spareRank(b.driverType);
-      if (byType !== 0) return byType;
+      const aFixed = isFixed(a.id) && a.driverType !== 'SPARE';
+      const bFixed = isFixed(b.id) && b.driverType !== 'SPARE';
+      if (aFixed !== bFixed) return aFixed ? -1 : 1;   // 고정 먼저, 스페어 아래
+      if (aFixed && bFixed) {
+        const ha = homeOf.get(a.id)!, hb = homeOf.get(b.id)!;
+        const byRoute = routeKey(ha.route) - routeKey(hb.route);
+        if (byRoute !== 0) return byRoute;
+        if (ha.bus !== hb.bus) return ha.bus.localeCompare(hb.bus, 'ko');
+        // 같은 차량 = 짝꿍. 오전 담당이 위로 오도록 이름순으로 안정 정렬
+        return a.name.localeCompare(b.name, 'ko');
+      }
       return a.name.localeCompare(b.name, 'ko');
     });
   }, [schedule?.slots]);
