@@ -17,6 +17,8 @@ export interface PostingDriver {
   name: string;
   slotId: number;
   overridden: boolean;
+  /** 엔진은 배정했지만 기초 데이터에 없어 저장되지 못한 기사 */
+  unregistered?: boolean;
 }
 
 export interface PostingCell {
@@ -202,7 +204,9 @@ export default function PostingScheduleGrid({
       </div>
 
       <p className="text-xs text-gray-400 dark:text-gray-500">
-        빨간 이름 = 수동 변경된 배정 · 순번은 매일 로테이션으로 돌아 이른/늦은 근무가 고르게 배분됩니다.
+        <span className="font-bold text-red-600 dark:text-red-400">빨간 이름</span> = 수동 변경 ·{' '}
+        <span className="text-amber-600/70 underline decoration-dotted">주황 점선</span> = 기초 데이터에 없는 기사
+        (등록하면 정상 표시) · 순번은 매일 로테이션으로 돌아 이른/늦은 근무가 고르게 배분됩니다.
       </p>
     </div>
   );
@@ -240,21 +244,35 @@ function DayCells({
     );
   }
 
-  const nameCls = (d: PostingDriver | null) =>
-    d?.overridden
+  const nameCls = (d: PostingDriver | null) => {
+    if (d?.unregistered) {
+      // 배정은 됐는데 앱에 계정이 없는 기사 — 빈칸으로 두면 '운행 안 함'으로
+      // 오해하므로 이름을 흐리게 보여주고 점선 밑줄로 구분한다
+      return 'text-amber-600/70 dark:text-amber-500/70 underline decoration-dotted underline-offset-2';
+    }
+    return d?.overridden
       ? 'font-bold text-red-600 dark:text-red-400'
       : 'text-gray-800 dark:text-gray-100';
+  };
 
   return (
     <>
       <td className={`${td} text-gray-400 dark:text-gray-500`}>{cell.slot ?? ''}</td>
       <td className={td}>
-        <button onClick={onAm} className={`w-full rounded px-0.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 ${nameCls(cell.am)}`}>
+        <button
+          onClick={onAm}
+          title={cell.am?.unregistered ? `${cell.am.name} — 기초 데이터에 없는 기사입니다` : undefined}
+          className={`w-full rounded px-0.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 ${nameCls(cell.am)}`}
+        >
           {cell.am?.name ?? <span className="text-gray-200 dark:text-gray-600">·</span>}
         </button>
       </td>
       <td className={tdLast}>
-        <button onClick={onPm} className={`w-full rounded px-0.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 ${nameCls(cell.pm)}`}>
+        <button
+          onClick={onPm}
+          title={cell.pm?.unregistered ? `${cell.pm.name} — 기초 데이터에 없는 기사입니다` : undefined}
+          className={`w-full rounded px-0.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 ${nameCls(cell.pm)}`}
+        >
           {cell.pm?.name ?? <span className="text-gray-200 dark:text-gray-600">·</span>}
         </button>
       </td>

@@ -136,6 +136,9 @@ export async function saveEngineDraft(
   // ── 3. 저장할 행 만들기 ──
   const patternRows: Prisma.SchedulePatternCreateManyInput[] = [];
   const slotRows: Omit<Prisma.ScheduleSlotCreateManyInput, 'scheduleId'>[] = [];
+  // 기초 데이터에 없어 저장하지 못한 배정. 그냥 버리면 화면에서 '운행 안 함'
+  // 처럼 보여 오해를 부른다 — 이름을 남겨 회색으로라도 보여주기 위함.
+  const unmatchedCells: Record<string, string> = {};
 
   for (const [dateStr, byVehicle] of Object.entries(cells)) {
     const date = new Date(`${dateStr}T00:00:00.000Z`);
@@ -161,7 +164,10 @@ export async function saveEngineDraft(
       ] as const) {
         if (!isDriverName(raw)) continue;
         const driverId = driverByName.get(raw.trim());
-        if (!driverId) continue;
+        if (!driverId) {
+          unmatchedCells[`${dateStr}|${vehicle}|${shift}`] = raw.trim();
+          continue;
+        }
         slotRows.push({ driverId, routeId, busId: bus.id, date, shift });
       }
     }
@@ -183,7 +189,11 @@ export async function saveEngineDraft(
     const schedule = await tx.schedule.create({
       data: {
         companyId, year, month, name, status: 'DRAFT', createdBy,
-        notes: 'AI 배차 엔진 생성',
+        notes: JSON.stringify({
+          source: 'engine',
+          unmatchedCells,
+          unmatchedDrivers: unmatchedDrivers.slice(0, 200),
+        }),
       },
       select: { id: true },
     });
@@ -216,6 +226,15 @@ export async function saveEngineDraft(
  * 패턴이 없는 옛 배차표는 빈 배열을 돌려주고, 호출측이 기존 뷰로 폴백한다.
  */
 export async function getPostingView(scheduleId: number) {
+  const schedule = await prisma.schedule.findUnique({
+    where: { id: scheduleId }, select: { notes: true },
+  });
+  let unmatchedCells: Record<string, string> = {};
+  try {
+    const meta = schedule?.notes ? JSON.parse(schedule.notes) : null;
+    if (meta?.unmatchedCells) unmatchedCells = meta.unmatchedCells;
+  } catch { /* 옛 배차표는 notes 가 평문 — 무시 */ }
+
   const [patterns, slots] = await Promise.all([
     prisma.schedulePattern.findMany({
       where: { scheduleId },
@@ -254,12 +273,17 @@ export async function getPostingView(scheduleId: number) {
     const list = groups.get(g)!;
     if (!list.includes(p.bus.busNumber)) list.push(p.bus.busNumber);
 
+    // 저장된 배정이 없으면, 기초 데이터에 없어 탈락한 이름이라도 돌려준다
+    const fallback = (shift: 'MORNING' | 'AFTERNOON') => {
+      const name = unmatchedCells[`${d}|${p.bus.busNumber}|${shift}`];
+      return name ? { id: 0, name, slotId: 0, overridden: false, unregistered: true } : null;
+    };
     cells[d] ??= {};
     cells[d][p.bus.busNumber] = {
       slot: p.displaySlot,
       operating: p.operating,
-      am: driverAt.get(`${d}|${p.bus.id}|MORNING`) ?? null,
-      pm: driverAt.get(`${d}|${p.bus.id}|AFTERNOON`) ?? null,
+      am: driverAt.get(`${d}|${p.bus.id}|MORNING`) ?? fallback('MORNING'),
+      pm: driverAt.get(`${d}|${p.bus.id}|AFTERNOON`) ?? fallback('AFTERNOON'),
     };
   }
 
