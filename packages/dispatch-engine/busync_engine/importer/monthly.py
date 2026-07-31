@@ -152,7 +152,11 @@ def parse_monthly_sheet(
             prev_slot = slot_index
 
         route_name = f"{current_route}번" if current_route else "전체"
-        group_name = f"{route_name}-{depot_idx + 1}"
+        # 같은 노선의 출발지그룹 구분 — 시트에 출발지명이 없어 번호로 표기한다
+        # (실물 일일배차에서는 가좌출발/동춘출발로 나뉜다)
+        circled = "①②③④⑤⑥⑦⑧⑨"
+        suffix = circled[depot_idx] if depot_idx < len(circled) else str(depot_idx + 1)
+        group_name = f"{route_name} {suffix}"
 
         g = groups.get(group_name)
         if g is None:
@@ -182,9 +186,9 @@ def parse_monthly_sheet(
     # 출발지그룹이 하나뿐인 노선은 접미사를 떼어 이름을 깔끔하게
     from collections import Counter as _Counter
 
-    base_count = _Counter(g.name.rsplit("-", 1)[0] for g in roster.groups)
+    base_count = _Counter(g.name.rsplit(" ", 1)[0] for g in roster.groups)
     for g in roster.groups:
-        base = g.name.rsplit("-", 1)[0]
+        base = g.name.rsplit(" ", 1)[0]
         if base_count[base] == 1:
             g.name = base
 

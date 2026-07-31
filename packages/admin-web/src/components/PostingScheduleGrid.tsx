@@ -43,6 +43,14 @@ function isWeekend(iso: string) {
   return dow === 0 || dow === 6;
 }
 
+/** 토=파랑, 일=빨강 — 종이 배차표의 관례 */
+function dayTone(iso: string) {
+  const dow = new Date(`${iso}T00:00:00`).getDay();
+  if (dow === 0) return 'text-red-600 dark:text-red-400';
+  if (dow === 6) return 'text-blue-600 dark:text-blue-400';
+  return 'text-gray-700 dark:text-gray-200';
+}
+
 export default function PostingScheduleGrid({
   view,
   onCellClick,
@@ -102,34 +110,45 @@ export default function PostingScheduleGrid({
         ))}
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-        <table className="min-w-full border-collapse text-xs">
+      <div className="overflow-x-auto rounded-lg border border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800">
+        {/* 실물 게시표처럼 촘촘하게 — 한 화면에 한 주(7일)가 들어와야 한다 */}
+        <table className="border-collapse text-[11px] leading-tight tabular-nums">
+          <colgroup>
+            <col style={{ width: 58 }} />
+            {week.map((iso) => (
+              <>
+                <col key={`${iso}-s`} style={{ width: 26 }} />
+                <col key={`${iso}-a`} style={{ width: 58 }} />
+                <col key={`${iso}-p`} style={{ width: 58 }} />
+              </>
+            ))}
+          </colgroup>
           <thead>
-            <tr className="bg-gray-50 dark:bg-gray-900/40">
-              <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-3 py-2 text-left font-semibold text-gray-700 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-200">
+            <tr className="bg-gray-100 dark:bg-gray-900/50">
+              <th className="sticky left-0 z-10 border-b border-r-2 border-gray-300 bg-gray-100 px-1 py-1 text-center font-semibold text-gray-700 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-200">
                 차량
               </th>
               {week.map((iso) => (
                 <th
                   key={iso}
                   colSpan={3}
-                  className={`border-b border-r border-gray-200 px-1 py-2 text-center font-semibold dark:border-gray-700 ${
-                    isWeekend(iso)
-                      ? 'text-red-600 dark:text-red-400'
-                      : 'text-gray-700 dark:text-gray-200'
+                  className={`border-b border-r-2 border-gray-300 px-0.5 py-1 text-center font-semibold dark:border-gray-600 ${
+                    dayTone(iso)
                   }`}
                 >
                   {fmtDay(iso)}
                 </th>
               ))}
             </tr>
-            <tr className="bg-gray-50/60 dark:bg-gray-900/20">
-              <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-3 py-1 dark:border-gray-700 dark:bg-gray-900/40" />
+            <tr className="bg-gray-50 dark:bg-gray-900/20">
+              <th className="sticky left-0 z-10 border-b border-r-2 border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-900/50" />
               {week.map((iso) =>
-                ['순번', '오전', '오후'].map((h) => (
+                ['순번', '오전', '오후'].map((h, hi) => (
                   <th
                     key={`${iso}-${h}`}
-                    className="border-b border-r border-gray-100 px-1 py-1 text-center font-medium text-gray-400 dark:border-gray-700 dark:text-gray-500"
+                    className={`border-b border-gray-200 px-0.5 py-0.5 text-center text-[10px] font-medium text-gray-400 dark:border-gray-700 dark:text-gray-500 ${
+                      hi === 2 ? 'border-r-2 border-r-gray-300 dark:border-r-gray-600' : 'border-r border-r-gray-100'
+                    }`}
                   >
                     {h}
                   </th>
@@ -143,14 +162,14 @@ export default function PostingScheduleGrid({
                 <tr key={`g-${group.name}`}>
                   <td
                     colSpan={1 + week.length * 3}
-                    className="border-b border-gray-100 bg-blue-50/40 px-3 py-1 text-[11px] font-semibold text-blue-700 dark:border-gray-700 dark:bg-blue-900/20 dark:text-blue-300"
+                    className="sticky left-0 border-y border-gray-200 bg-blue-50 px-2 py-0.5 text-[10px] font-bold tracking-wide text-blue-800 dark:border-gray-700 dark:bg-blue-900/30 dark:text-blue-300"
                   >
                     {group.name} · {group.vehicles.length}대
                   </td>
                 </tr>
                 {group.vehicles.map((vehicle) => (
                   <tr key={vehicle} className="hover:bg-gray-50/60 dark:hover:bg-gray-700/30">
-                    <td className="sticky left-0 z-10 border-b border-r border-gray-200 bg-white px-3 py-1 font-semibold text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+                    <td className="sticky left-0 z-10 border-b border-r-2 border-gray-300 bg-white px-1 py-0.5 text-center font-semibold text-gray-800 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
                       {vehicle}
                     </td>
                     {week.map((iso) => {
@@ -197,14 +216,15 @@ function DayCells({
   onAm: () => void;
   onPm: () => void;
 }) {
-  const td = 'border-b border-r border-gray-100 px-1 py-1 text-center whitespace-nowrap dark:border-gray-700';
+  const td = 'border-b border-r border-gray-100 px-0.5 py-0.5 text-center whitespace-nowrap dark:border-gray-700';
+  const tdLast = `${td} border-r-2 border-r-gray-300 dark:border-r-gray-600`;  // 날짜 경계
 
   if (!cell) {
     return (
       <>
         <td className={td} />
         <td className={td} />
-        <td className={td} />
+        <td className={tdLast} />
       </>
     );
   }
@@ -213,9 +233,9 @@ function DayCells({
   if (!cell.operating) {
     return (
       <>
-        <td className={`${td} text-gray-400`}>{cell.slot ?? '○'}</td>
-        <td className={`${td} text-gray-400`}>휴</td>
-        <td className={`${td} text-gray-400`}>휴</td>
+        <td className={`${td} bg-gray-50 text-gray-400 dark:bg-gray-900/30`}>{cell.slot ?? '○'}</td>
+        <td className={`${td} bg-gray-50 text-gray-400 dark:bg-gray-900/30`}>휴</td>
+        <td className={`${tdLast} bg-gray-50 text-gray-400 dark:bg-gray-900/30`}>휴</td>
       </>
     );
   }
@@ -227,15 +247,15 @@ function DayCells({
 
   return (
     <>
-      <td className={`${td} text-gray-500 dark:text-gray-400`}>{cell.slot ?? ''}</td>
+      <td className={`${td} text-gray-400 dark:text-gray-500`}>{cell.slot ?? ''}</td>
       <td className={td}>
         <button onClick={onAm} className={`w-full rounded px-0.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 ${nameCls(cell.am)}`}>
-          {cell.am?.name ?? '—'}
+          {cell.am?.name ?? <span className="text-gray-200 dark:text-gray-600">·</span>}
         </button>
       </td>
-      <td className={td}>
+      <td className={tdLast}>
         <button onClick={onPm} className={`w-full rounded px-0.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 ${nameCls(cell.pm)}`}>
-          {cell.pm?.name ?? '—'}
+          {cell.pm?.name ?? <span className="text-gray-200 dark:text-gray-600">·</span>}
         </button>
       </td>
     </>
