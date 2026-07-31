@@ -223,6 +223,11 @@ def infer_reduction_model(
         )
         return cfg, display, inferred_holidays, 0
 
+    # 감차일이 하나도 관측되지 않았으면 감차 없는 운영 (또는 시트가 휴차를
+    # 표기하지 않는 양식) — 빈 설정으로 돌려보낸다.
+    if not reduced:
+        return GroupReductionConfig(), display, inferred_holidays, 0
+
     # 2) VEHICLE_POINTER 적합: 감차일 순서대로 연속 소비
     order = list(group.vehicles)
     n = len(order)

@@ -103,6 +103,14 @@ SETTINGS_CATALOG: list[SettingSpec] = [
         SettingType.TOGGLE, True, "순번 로테이션",
     ),
     SettingSpec(
+        "rotation_step", "순번 회전 칸수",
+        "매일 순번을 몇 칸씩 옮길지입니다. 기존 배차표에서 자동 감지되면 그 값이 "
+        "우선하고, 감지가 안 되는 양식(월간배차처럼 순번이 고정 열인 경우)에만 "
+        "이 값을 씁니다. 간선은 보통 -1(하루에 한 칸씩 당김)입니다.",
+        SettingType.NUMBER, -1, "순번 로테이션", min_value=-10, max_value=10,
+        advanced=True,
+    ),
+    SettingSpec(
         "rotation_carry_over", "월 경계 이어가기",
         "매월 1일에 로테이션을 처음부터 다시 시작하지 않고 전월 말일에서 이어갑니다. "
         "(끄면 특정 기사에게 이른/늦은 슬롯이 몰릴 수 있어 권장하지 않습니다)",

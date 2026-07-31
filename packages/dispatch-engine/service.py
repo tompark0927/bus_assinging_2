@@ -38,6 +38,10 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from busync_engine.audit import audit as run_audit
 from busync_engine.backtest import backtest_stage1, backtest_stage2
 from busync_engine.generate import generate_month
+from busync_engine.importer.monthly import (
+    looks_like_monthly_sheet,
+    parse_monthly_sheet,
+)
 from busync_engine.importer.weekly import SHEET_YM_RE, parse_workbook_month
 from busync_engine.policy import CompanyPolicy, catalog_as_json
 from busync_engine.recommend import analyze
@@ -99,6 +103,47 @@ def _save_upload(file: UploadFile) -> str:
         return f.name
 
 
+def _load_rosters(path: str, division: str, sheets: list[str]) -> list:
+    """시트 이름 목록 → MonthlyRoster 목록. 양식은 자동 판별한다.
+
+    - 주간배차표(행=차량, 열=날짜별 순번|오전|오후): 지선·간선 게시용
+    - 월간배차(행=노선|순번|차번, 열=날짜별 오전|오후): 담당자 작업용
+    두 양식이 담는 정보는 같아서 어느 쪽이든 생성 입력으로 쓸 수 있다.
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        out = []
+        for name in sheets:
+            ws = wb[name]
+            if looks_like_monthly_sheet(ws):
+                from collections import Counter as _C
+                import datetime as _dt
+
+                ym: _C = _C()
+                for row in ws.iter_rows(min_row=1, max_row=3):
+                    for c in row:
+                        v = c.value
+                        if isinstance(v, (_dt.datetime, _dt.date)):
+                            d = v.date() if isinstance(v, _dt.datetime) else v
+                            ym[(d.year, d.month)] += 1
+                if not ym:
+                    raise HTTPException(422, f"'{name}' 시트에서 날짜를 찾지 못했습니다")
+                (y, m), _ = ym.most_common(1)[0]
+                # read_only 워크시트는 재순회가 필요해 새로 연다
+                wb2 = openpyxl.load_workbook(path, data_only=True)
+                try:
+                    out.append(parse_monthly_sheet(wb2[name], y, m, division))
+                finally:
+                    wb2.close()
+            else:
+                out.append(parse_workbook_month(path, name, division))
+        return out
+    finally:
+        wb.close()
+
+
 def _month_sheets(path: str, division_hint: str = "") -> list[str]:
     """워크북에서 월 시트 자동 감지 (연·월 파싱 가능한 시트, 시간순)."""
     import openpyxl
@@ -112,8 +157,14 @@ def _month_sheets(path: str, division_hint: str = "") -> list[str]:
             m = SHEET_YM_RE.search(name)
             if m:
                 found.append((int(m.group(1)), int(m.group(2)), name))
-        found.sort()
-        return [name for _, _, name in found]
+        if found:
+            found.sort()
+            return [name for _, _, name in found]
+        # 시트명에 연월이 없는 작업용 워크북 — 월간배차 시트를 쓴다
+        for name in wb.sheetnames:
+            if looks_like_monthly_sheet(wb[name]):
+                return [name]
+        return []
     finally:
         wb.close()
 
@@ -166,7 +217,9 @@ async def analyze_endpoint(
     if not names:
         raise HTTPException(400, "분석할 월 시트를 찾지 못했습니다")
     try:
-        rosters = [parse_workbook_month(path, n, division) for n in names]
+        rosters = _load_rosters(path, division, names)
+    except HTTPException:
+        raise
     except Exception as ex:
         raise HTTPException(422, f"파싱 실패: {ex}")
     rep = analyze(rosters)
@@ -267,7 +320,12 @@ async def generate_endpoint(
         _month_sheets(path)[-2:]
     if not names:
         raise HTTPException(400, "과거 월 시트를 찾지 못했습니다")
-    history = [parse_workbook_month(path, n, division) for n in names]
+    try:
+        history = _load_rosters(path, division, names)
+    except HTTPException:
+        raise
+    except Exception as ex:
+        raise HTTPException(422, f"파싱 실패: {ex}")
     if policy_json.strip():
         policy = CompanyPolicy.from_dict(json.loads(policy_json))
     else:

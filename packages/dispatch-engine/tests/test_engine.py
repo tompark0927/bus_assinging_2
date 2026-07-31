@@ -394,3 +394,50 @@ def test_generate_requires_immediately_previous_month():
     result = generate_month(history, policy, 2026, 8, time_limit_s=20)
     assert result.roster.entries, "이어받기를 꺼도 배차표는 생성되어야 함"
     assert any("새로 시작" in w for w in result.warnings)
+
+
+WORK_JUNE = os.path.join(WORKBOOK_ZIP_DIR, "배차표(2026 .6) 배차 작업용.xlsx")
+
+
+@pytest.mark.skipif(not os.path.exists(WORK_JUNE), reason="작업용 실데이터 없음")
+def test_monthly_parser_splits_depot_groups_and_matches_overview():
+    """월간배차 파서 — 출발지그룹 분리 + 배차총괄과 교차검증.
+
+    한 노선이 14대인데 순번이 1~7로 두 번 반복된다(가좌출발/동춘출발).
+    로테이션은 그룹 안에서만 돌므로 반드시 분리돼야 하고, 안 그러면
+    순번이 중복돼 로테이션 추론이 깨진다.
+    """
+    import openpyxl
+    from busync_engine.importer.monthly import parse_monthly_workbook
+    from busync_engine.importer.worksheets import parse_overview
+
+    r = parse_monthly_workbook(WORK_JUNE, division="간선")
+    assert (r.year, r.month) == (2026, 6)
+    # 6개 출발지그룹 × 7대 = 42대
+    assert len(r.groups) == 6
+    assert all(len(g.vehicles) == 7 for g in r.groups)
+    d = sorted(r.month_dates())[0]
+    for g in r.groups:
+        slots = [r.entry(d, v).slot_index for v in g.vehicles]
+        assert len(set(slots)) == len(slots), f"{g.name}: 순번 중복"
+
+    # 배차총괄(기사×날짜)과 근무일수·시프트가 완전히 일치해야 한다
+    wb = openpyxl.load_workbook(WORK_JUNE, read_only=True, data_only=True)
+    ov = parse_overview(wb["배차총괄"])
+    wb.close()
+    from collections import Counter
+
+    mine: Counter = Counter()
+    for (dd, v), e in r.entries.items():
+        if dd.month != r.month:
+            continue
+        for cs in (e.am, e.pm):
+            if cs.driver:
+                mine[cs.driver] += 1
+    mismatched = [
+        row.name for row in ov.drivers
+        if row.work_days_reported is not None
+        and row.name in mine
+        and mine[row.name] != row.work_days_reported
+    ]
+    assert mismatched == [], f"근무일수 불일치: {mismatched[:5]}"

@@ -115,6 +115,18 @@ def generate_month(
             # 로테이션 끔: 전월 말일 순번 고정 (항등 순열)
             rule.perm = {s: s for s in rule.perm}
             warnings.append(f"{g.name}: 로테이션 꺼짐 — 순번 고정")
+        elif all(rule.perm[s] == s for s in rule.perm):
+            # 추론 결과가 항등 = 시트에서 순번 회전을 읽을 수 없었다는 뜻.
+            # 월간배차처럼 순번이 고정 열인 양식이 여기 해당한다 — 이때는
+            # 설정된 회전 칸수를 쓴다 (모르면 회전이 없는 것처럼 돼버리므로).
+            step = int(policy.get("rotation_step"))
+            n = g.size
+            if step % n:
+                rule.perm = {s: ((s - 1 + step) % n) + 1 for s in rule.perm}
+                warnings.append(
+                    f"{g.name}: 시트에서 순번 회전을 감지하지 못해 설정값"
+                    f"({step:+d}칸)을 적용했습니다"
+                )
         cfg, disp, _hols, ptr_end = infer_reduction_model(prev_t, g, rule)
         cfg.pointer_start = ptr_end
         if not reduction_on:
