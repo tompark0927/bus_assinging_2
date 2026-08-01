@@ -322,6 +322,33 @@ export default function SchedulePage() {
   // 게시 양식에서 셀을 눌렀을 때 열리는 편집 대상
   const [editCell, setEditCell] = useState<CellTarget | null>(null);
 
+  // 엑셀엔 있는데 기초 데이터에 없어 이름만 흐리게 뜨는 기사들.
+  // 이게 남아 있으면 배차표가 '미완성'으로 보여 무엇을 보여줘도 신뢰가 안 간다.
+  const missingDrivers = useMemo(() => {
+    const names = new Set<string>();
+    for (const byV of Object.values(postingView?.cells ?? {})) {
+      for (const c of Object.values(byV)) {
+        for (const k of ['am', 'pm'] as const) {
+          const d = c[k];
+          if (d?.unregistered) names.add(d.name);
+        }
+      }
+    }
+    return [...names];
+  }, [postingView]);
+
+  const registerMissing = useMutation({
+    mutationFn: () => schedulesApi.registerMissingDrivers(schedule!.id),
+    onSuccess: (res) => {
+      const d = res.data.data as { created: unknown[]; filledCells: number };
+      queryClient.invalidateQueries({ queryKey: ['schedule-posting'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      toast.success(`기사 ${d.created.length}명 등록 — 배차 ${d.filledCells}칸이 채워졌습니다.`);
+    },
+    onError: (err: { response?: { data?: { message?: string } } }) =>
+      toast.error(err?.response?.data?.message ?? '등록에 실패했습니다.'),
+  });
+
   const { data: routes = [] } = useQuery<Route[]>({
     queryKey: ['routes', 'all'],
     queryFn: () => routesApi.list({ limit: '100' }).then((r) => r.data.data),
@@ -1467,6 +1494,28 @@ export default function SchedulePage() {
               {label}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* ─── 미등록 기사 안내 ─── */}
+      {showPosting && missingDrivers.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 print:hidden dark:border-amber-800 dark:bg-amber-900/20">
+          <div className="min-w-0 text-sm text-amber-800 dark:text-amber-300">
+            <p className="font-semibold">
+              기초 데이터에 없는 기사 {missingDrivers.length}명 — 표에 주황색으로 표시됩니다
+            </p>
+            <p className="mt-0.5 text-xs">
+              {missingDrivers.slice(0, 8).join(', ')}
+              {missingDrivers.length > 8 && ` 외 ${missingDrivers.length - 8}명`}
+            </p>
+          </div>
+          <button
+            onClick={() => registerMissing.mutate()}
+            disabled={registerMissing.isPending}
+            className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:opacity-50"
+          >
+            {registerMissing.isPending ? '등록 중…' : `${missingDrivers.length}명 한번에 등록`}
+          </button>
         </div>
       )}
 

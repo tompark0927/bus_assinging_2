@@ -22,6 +22,7 @@ import {
   OVERRIDE_CODES, getCellCandidates, setCellDriver, type OverrideCode,
 } from '../services/cellEditService';
 import { explainCell } from '../services/explainCellService';
+import { registerMissingDrivers } from '../services/registerMissingDriversService';
 import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
@@ -287,6 +288,25 @@ router.get('/by-id/:id/posting', async (req: AuthRequest, res) => {
  *     description: 규칙 위반은 막지 않고 경고로만 알린다 — 급한 결원처럼 알면서 넣어야 할 때가 있다.
  *     tags: [Schedules]
  */
+/**
+ * @swagger
+ * /schedules/by-id/{id}/register-missing-drivers:
+ *   post:
+ *     summary: 엑셀엔 있는데 기초 데이터에 없는 기사를 일괄 등록하고 빈 칸을 메운다
+ *     description: 계정(로그인)은 만들지 않는다 — 배차에 필요한 건 사람 레코드지 로그인이 아니다.
+ *     tags: [Schedules]
+ */
+router.post('/by-id/:id/register-missing-drivers', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  try {
+    const result = await registerMissingDrivers(req.user!.companyId, Number(req.params.id));
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '등록에 실패했습니다.';
+    logger.error(`[schedules/register-missing] ${msg}`);
+    return res.status(422).json({ success: false, message: msg });
+  }
+});
+
 /**
  * @swagger
  * /schedules/by-id/{id}/cell-explain:
