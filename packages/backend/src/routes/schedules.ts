@@ -21,6 +21,7 @@ import { saveEngineDraft, getPostingView } from '../services/engineScheduleServi
 import {
   OVERRIDE_CODES, getCellCandidates, setCellDriver, type OverrideCode,
 } from '../services/cellEditService';
+import { explainCell } from '../services/explainCellService';
 import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
@@ -286,6 +287,37 @@ router.get('/by-id/:id/posting', async (req: AuthRequest, res) => {
  *     description: 규칙 위반은 막지 않고 경고로만 알린다 — 급한 결원처럼 알면서 넣어야 할 때가 있다.
  *     tags: [Schedules]
  */
+/**
+ * @swagger
+ * /schedules/by-id/{id}/cell-explain:
+ *   get:
+ *     summary: "왜 이 기사가 이 칸인가" — 저장된 배차표에서 배정 근거 재구성
+ *     description: 엔진 초안이 사라진 뒤에도, 담당자가 손으로 고친 칸까지 설명한다.
+ *     tags: [Schedules]
+ */
+router.get('/by-id/:id/cell-explain', async (req: AuthRequest, res) => {
+  try {
+    const { date, vehicle, shift } = req.query as Record<string, string>;
+    if (!date || !vehicle || !shift) {
+      return res.status(400).json({ success: false, message: 'date, vehicle, shift 가 필요합니다.' });
+    }
+    const owned = await prisma.schedule.findFirst({
+      where: { id: Number(req.params.id), companyId: req.user!.companyId },
+      select: { id: true },
+    });
+    if (!owned) return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
+
+    const data = await explainCell(
+      req.user!.companyId, Number(req.params.id), date, vehicle, shift,
+    );
+    return res.json({ success: true, data });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '조회에 실패했습니다.';
+    logger.error(`[schedules/cell-explain] ${msg}`);
+    return res.status(422).json({ success: false, message: msg });
+  }
+});
+
 router.get('/by-id/:id/cell-candidates', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {
     const { date, vehicle, shift } = req.query as Record<string, string>;
