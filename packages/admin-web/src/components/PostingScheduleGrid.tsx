@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { CalendarRange } from 'lucide-react';
+import { CalendarRange, Printer } from 'lucide-react';
 
 /**
  * 게시 양식 배차표 그리드 — 현장에서 수년간 봐온 그 표.
@@ -113,11 +113,64 @@ export default function PostingScheduleGrid({
             {i + 1}주차 ({fmtDay(w[0])}~)
           </button>
         ))}
+        <button
+          onClick={() => window.print()}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+        >
+          <Printer size={14} /> 전체 인쇄 ({weeks.length}장)
+        </button>
       </div>
 
+      {/* 화면: 고른 주 하나 */}
+      <div className="print:hidden">
+        <WeekTable
+          week={week}
+          view={view}
+          onCellClick={onCellClick}
+          onDownloadDay={onDownloadDay}
+        />
+      </div>
+
+      {/* 인쇄: 모든 주를 한 장에 한 주씩.
+          화면에서 고른 주만 나가면 담당자는 같은 조작을 5번 반복해야 한다.
+          게시물은 어차피 월 단위로 한 번에 뽑는 물건이다. */}
+      <div className="hidden print:block">
+        {weeks.map((w, i) => (
+          <div key={i} className={i < weeks.length - 1 ? 'break-after-page' : ''}>
+            <p className="mb-1 text-sm font-bold text-black">
+              {i + 1}주차 · {fmtDay(w[0])} ~ {fmtDay(w[w.length - 1])}
+            </p>
+            <WeekTable week={w} view={view} />
+          </div>
+        ))}
+      </div>
+
+      <p className="text-xs text-gray-400 print:hidden dark:text-gray-500">
+        <span className="font-bold text-red-600 dark:text-red-400">빨간 이름</span> = 수동 변경 ·{' '}
+        <span className="text-amber-600/70 underline decoration-dotted">주황 점선</span> = 기초 데이터에 없는 기사
+        (등록하면 정상 표시) · 순번은 매일 로테이션으로 돌아 이른/늦은 근무가 고르게 배분됩니다
+        {onDownloadDay ? ' · 날짜를 누르면 그날 게시용 엑셀을 받습니다.' : '.'}
+      </p>
+    </div>
+  );
+}
+
+/** 한 주치 표 — 화면(선택한 주)과 인쇄(전 주)가 같은 렌더러를 쓴다 */
+function WeekTable({
+  week, view, onCellClick, onDownloadDay,
+}: {
+  week: string[];
+  view: PostingView;
+  onCellClick?: (p: {
+    date: string; vehicle: string; shift: 'MORNING' | 'AFTERNOON';
+    driver: PostingDriver | null;
+  }) => void;
+  onDownloadDay?: (date: string) => void;
+}) {
+  return (
       <div className="overflow-x-auto rounded-lg border border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800">
         {/* 실물 게시표처럼 촘촘하게 — 한 화면에 한 주(7일)가 들어와야 한다 */}
-        <table className="border-collapse text-[11px] leading-tight tabular-nums">
+        <table className="posting-grid border-collapse text-[11px] leading-tight tabular-nums">
           <colgroup>
             <col style={{ width: 58 }} />
             {week.map((iso) => (
@@ -169,10 +222,12 @@ export default function PostingScheduleGrid({
               )}
             </tr>
           </thead>
-          <tbody>
+            {/* 출발지그룹마다 <tbody> 를 따로 둔다 — 인쇄에서 그룹이 페이지
+                중간에 잘리지 않게 하려면 끊기 단위가 있어야 한다.
+                (42대 기준 한 주가 A4 한 장을 넘어간다) */}
             {view.groups.map((group) => (
-              <>
-                <tr key={`g-${group.name}`}>
+              <tbody key={`g-${group.name}`} className="posting-group">
+                <tr>
                   <td
                     colSpan={1 + week.length * 3}
                     className="sticky left-0 border-y border-gray-200 bg-blue-50 px-2 py-0.5 text-[10px] font-bold tracking-wide text-blue-800 dark:border-gray-700 dark:bg-blue-900/30 dark:text-blue-300"
@@ -208,19 +263,10 @@ export default function PostingScheduleGrid({
                     })}
                   </tr>
                 ))}
-              </>
+              </tbody>
             ))}
-          </tbody>
         </table>
       </div>
-
-      <p className="text-xs text-gray-400 dark:text-gray-500">
-        <span className="font-bold text-red-600 dark:text-red-400">빨간 이름</span> = 수동 변경 ·{' '}
-        <span className="text-amber-600/70 underline decoration-dotted">주황 점선</span> = 기초 데이터에 없는 기사
-        (등록하면 정상 표시) · 순번은 매일 로테이션으로 돌아 이른/늦은 근무가 고르게 배분됩니다
-        {onDownloadDay ? ' · 날짜를 누르면 그날 게시용 엑셀을 받습니다.' : '.'}
-      </p>
-    </div>
   );
 }
 
