@@ -304,6 +304,9 @@ export const schedulesApi = {
   }) => engineClient.post('/schedules/from-engine', data, { timeout: 180000 }),
   // 게시 양식 조회 (행=차량, 열=날짜 → 순번|오전|오후)
   posting: (scheduleId: number) => api.get(`/schedules/by-id/${scheduleId}/posting`),
+  // "왜 이 기사가 이 칸인가" — 저장된 배차표에서 근거 재구성
+  cellExplain: (scheduleId: number, p: { date: string; vehicle: string; shift: string }) =>
+    api.get(`/schedules/by-id/${scheduleId}/cell-explain`, { params: p }),
   // 셀 편집 — 후보 조회 / 기사 교체 (수정 사유 함께 기록)
   cellCandidates: (scheduleId: number, p: { date: string; vehicle: string; shift: string }) =>
     api.get(`/schedules/by-id/${scheduleId}/cell-candidates`, { params: p }),

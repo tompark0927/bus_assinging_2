@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Check, Loader2, Search, UserMinus, X } from 'lucide-react';
+import { AlertTriangle, Check, Info, Loader2, Search, UserMinus, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { schedulesApi } from '../services/api';
 
@@ -43,6 +43,16 @@ export default function CellEditModal({
   const [code, setCode] = useState<string>('');
   const [note, setNote] = useState('');
   const [q, setQ] = useState('');
+
+  // 먼저 "왜 이렇게 됐나"를 보여준다. 바꾸기 전에 이유를 알면
+  // "내 방식과 다르다"가 "아 그래서 그랬구나"로 바뀐다.
+  const { data: explain } = useQuery({
+    queryKey: ['cell-explain', scheduleId, target.date, target.vehicle, target.shift],
+    queryFn: async () => (await schedulesApi.cellExplain(scheduleId, {
+      date: target.date, vehicle: target.vehicle, shift: target.shift,
+    })).data.data as { driver: string | null; summary: string; reasons: { code: string; text: string }[] },
+    retry: 0,
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ['cell-candidates', scheduleId, target.date, target.vehicle, target.shift],
@@ -96,6 +106,22 @@ export default function CellEditModal({
             <X size={18} />
           </button>
         </div>
+
+        {/* 배정 근거 — 바꾸기 전에 이유부터 */}
+        {explain && explain.reasons.length > 0 && (
+          <div className="border-b border-gray-100 bg-blue-50/50 px-4 py-3 dark:border-gray-700 dark:bg-blue-900/10">
+            <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-blue-800 dark:text-blue-300">
+              <Info size={13} /> 왜 이렇게 배정됐나
+            </p>
+            <ul className="space-y-0.5">
+              {explain.reasons.slice(0, 4).map((r) => (
+                <li key={r.code} className="text-xs leading-relaxed text-gray-700 dark:text-gray-300">
+                  · {r.text}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* 후보 목록 */}
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
