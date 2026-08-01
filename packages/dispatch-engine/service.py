@@ -38,6 +38,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from busync_engine.audit import audit as run_audit
 from busync_engine.backtest import backtest_stage1, backtest_stage2
 from busync_engine.generate import generate_month
+from busync_engine.inspector import inspect_roster
 from busync_engine.importer.monthly import (
     extract_depot_names,
     looks_like_monthly_sheet,
@@ -255,6 +256,45 @@ async def analyze_endpoint(
             for r in rep.recommendations
         ],
     }
+
+
+@app.post("/inspect")
+async def inspect_endpoint(
+    file: UploadFile = File(...),
+    division: str = Form(""),
+    sheets: str = Form(""),          # 비우면 마지막(가장 최근) 월 시트
+    policy_json: str = Form(""),     # 비우면 저장된 회사 정책
+    x_company_id: str = Header("default"),
+):
+    """검산 — 담당자가 이미 짜 놓은 배차표를 그대로 받아 규칙 위반을 찾는다.
+
+    생성도 저장도 하지 않는다. 파일을 올리면 결과만 돌려주고 끝이다.
+    이 무해함이 이 기능의 전부다 — 바꾸라고 하지 않으니 거절할 이유가 없다.
+    """
+    path = _save_upload(file)
+    names = [s.strip() for s in sheets.split(",") if s.strip()] or _month_sheets(path)[-1:]
+    if not names:
+        raise HTTPException(400, "검사할 월 시트를 찾지 못했습니다")
+    try:
+        rosters = _load_rosters(path, division, names)
+    except HTTPException:
+        raise
+    except Exception as ex:
+        raise HTTPException(422, f"파싱 실패: {ex}")
+    if not rosters:
+        raise HTTPException(422, "시트에서 배차 데이터를 읽지 못했습니다")
+
+    if policy_json.strip():
+        pol = CompanyPolicy.from_dict(json.loads(policy_json))
+    else:
+        saved = _company_policy_path(x_company_id)
+        pol = (
+            CompanyPolicy.from_dict(json.loads(saved.read_text()))
+            if saved.exists() else CompanyPolicy()
+        )
+    policy = pol.effective()
+    reports = [inspect_roster(r, policy).to_dict() for r in rosters]
+    return {"sheets": names, "reports": reports}
 
 
 @app.post("/backtest")

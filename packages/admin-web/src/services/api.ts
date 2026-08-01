@@ -258,6 +258,12 @@ export const engineApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 120000,
     }),
+  // 검산 — 이미 짜 놓은 배차표를 올려 규칙 위반만 찾는다 (생성도 저장도 안 함)
+  inspect: (form: FormData) =>
+    engineClient.post('/engine/inspect', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    }),
   // 배차 초안 생성 — CP-SAT 솔버 실행 (기본 3분 제한이라 타임아웃 크게)
   generate: (form: FormData) =>
     engineClient.post('/engine/generate', form, {
