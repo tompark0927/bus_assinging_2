@@ -304,6 +304,13 @@ export const schedulesApi = {
   }) => engineClient.post('/schedules/from-engine', data, { timeout: 180000 }),
   // 게시 양식 조회 (행=차량, 열=날짜 → 순번|오전|오후)
   posting: (scheduleId: number) => api.get(`/schedules/by-id/${scheduleId}/posting`),
+  // 셀 편집 — 후보 조회 / 기사 교체 (수정 사유 함께 기록)
+  cellCandidates: (scheduleId: number, p: { date: string; vehicle: string; shift: string }) =>
+    api.get(`/schedules/by-id/${scheduleId}/cell-candidates`, { params: p }),
+  setCell: (scheduleId: number, body: {
+    date: string; vehicle: string; shift: string;
+    driverId: number | null; code?: string; note?: string;
+  }) => api.put(`/schedules/by-id/${scheduleId}/cell`, body),
   // v2: 정책 기반 솔버 (PAIR/SOLO + 1/2/3교대 + 헌법룰). 생성할 때마다 새 초안 프로필 추가 (월 최대 5개).
   generateV2: (data: {
     year: number;

@@ -461,7 +461,12 @@ model ScheduleSlot {
   status           SlotStatus @default(SCHEDULED)
   isRestDay        Boolean    @default(false)
   isManualOverride Boolean    @default(false) // 수동 오버라이드 여부
-  overrideReason   String? // 수동 변경 사유
+  /// 수정 사유 '유형' — 담당자가 왜 바꿨는지. 이게 쌓이면 회사별 숨은 규칙
+  /// (예: 특정 두 기사 분리)을 역으로 뽑아 다음 달 생성에 반영할 수 있다.
+  /// 자유 텍스트만으로는 집계가 안 돼 별도 컬럼으로 둔다.
+  /// PAIR_CONFLICT | ROUTE_UNFIT | BETTER_FIT | PERSONAL | PREFERENCE | OTHER
+  overrideCode     String?
+  overrideReason   String? // 수동 변경 사유 (자유 메모)
   overrideBy       Int? // 변경한 관리자 ID
   fairnessNote     String? // AI 공정성 설명 (예: "지난주 피로도5 노선 4회 → 이번주 꿀노선 배정")
   notes            String?
