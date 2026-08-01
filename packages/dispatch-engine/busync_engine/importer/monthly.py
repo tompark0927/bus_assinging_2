@@ -61,8 +61,57 @@ def looks_like_monthly_sheet(ws) -> bool:
     return False
 
 
+def extract_depot_names(wb) -> dict[str, list[str]]:
+    """일일배차/프린터용 시트에서 출발지 이름을 뽑는다 (노선 → 블록 순서).
+
+    월간배차 시트에는 출발지명이 없어 그룹을 ①②로만 구분할 수밖에 없다.
+    그런데 담당자가 아는 이름은 '가좌출발/동춘출발'이지 '16번-1'이 아니다.
+    게시물이 실물과 같아 보이려면 이 이름을 살려야 한다.
+
+    레이아웃(실측): 2행에 노선 헤더가 가로로, 각 노선 블록 안에서
+    '…출발' 라벨이 블록마다 한 번씩 나온다.
+    """
+    for name in ("프린터용", "일일배차"):
+        if name not in wb.sheetnames:
+            continue
+        ws = wb[name]
+        routes: list[tuple[int, str]] = []   # (열, 노선명)
+        labels: list[tuple[int, int, str]] = []  # (행, 열, 출발지)
+        for row in ws.iter_rows(max_row=60):
+            for c in row:
+                v = c.value
+                if not isinstance(v, str):
+                    continue
+                t = v.strip()
+                if c.row <= 3 and re.match(r"^\d+(-\d+)?번$", t):
+                    routes.append((c.column, t[:-1]))
+                elif t.endswith("출발") and len(t) <= 8:
+                    labels.append((c.row, c.column, t))
+        if not routes or not labels:
+            continue
+        routes.sort()
+        out: dict[str, list[str]] = {}
+        for row_i, col, label in sorted(labels):
+            # 라벨이 속한 노선 = 시작 열이 라벨보다 작거나 같은 것 중 가장 오른쪽
+            owner = None
+            for rc, rname in routes:
+                if rc <= col:
+                    owner = rname
+                else:
+                    break
+            if owner is None:
+                continue
+            out.setdefault(owner, [])
+            if label not in out[owner]:
+                out[owner].append(label)
+        if out:
+            return out
+    return {}
+
+
 def parse_monthly_sheet(
-    ws, year: int, month: int, division: str = ""
+    ws, year: int, month: int, division: str = "",
+    depot_names: dict[str, list[str]] | None = None,
 ) -> MonthlyRoster:
     """월간배차 시트 → MonthlyRoster.
 
@@ -152,10 +201,14 @@ def parse_monthly_sheet(
             prev_slot = slot_index
 
         route_name = f"{current_route}번" if current_route else "전체"
-        # 같은 노선의 출발지그룹 구분 — 시트에 출발지명이 없어 번호로 표기한다
-        # (실물 일일배차에서는 가좌출발/동춘출발로 나뉜다)
-        circled = "①②③④⑤⑥⑦⑧⑨"
-        suffix = circled[depot_idx] if depot_idx < len(circled) else str(depot_idx + 1)
+        # 출발지 이름을 알면 그대로 쓴다 (담당자가 아는 말: '가좌출발').
+        # 모르면 번호로 구분한다.
+        known = (depot_names or {}).get(current_route, [])
+        if depot_idx < len(known):
+            suffix = known[depot_idx]
+        else:
+            circled = "①②③④⑤⑥⑦⑧⑨"
+            suffix = circled[depot_idx] if depot_idx < len(circled) else str(depot_idx + 1)
         group_name = f"{route_name} {suffix}"
 
         g = groups.get(group_name)
@@ -219,6 +272,9 @@ def parse_monthly_workbook(
         if not ym:
             raise ValueError("월간배차: 날짜를 찾지 못했습니다")
         (year, month), _ = ym.most_common(1)[0]
-        return parse_monthly_sheet(ws, year, month, division=division)
+        return parse_monthly_sheet(
+            ws, year, month, division=division,
+            depot_names=extract_depot_names(wb),
+        )
     finally:
         wb.close()

@@ -23,6 +23,7 @@ import {
 } from '../services/cellEditService';
 import { explainCell } from '../services/explainCellService';
 import { registerMissingDrivers } from '../services/registerMissingDriversService';
+import { buildDailyPostingXlsx } from '../services/dailyPostingExport';
 import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
@@ -288,6 +289,34 @@ router.get('/by-id/:id/posting', async (req: AuthRequest, res) => {
  *     description: 규칙 위반은 막지 않고 경고로만 알린다 — 급한 결원처럼 알면서 넣어야 할 때가 있다.
  *     tags: [Schedules]
  */
+/**
+ * @swagger
+ * /schedules/by-id/{id}/export-daily:
+ *   get:
+ *     summary: 일일배차표(게시용) 엑셀 — 현장이 실제로 붙이는 양식
+ *     tags: [Schedules]
+ */
+router.get('/by-id/:id/export-daily', async (req: AuthRequest, res) => {
+  try {
+    const date = (req.query.date as string) || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ success: false, message: 'date=YYYY-MM-DD 가 필요합니다.' });
+    }
+    const { buffer, filename } = await buildDailyPostingXlsx(
+      req.user!.companyId, Number(req.params.id), date,
+    );
+    res.setHeader('Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    return res.send(buffer);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '내보내기에 실패했습니다.';
+    logger.error(`[schedules/export-daily] ${msg}`);
+    return res.status(422).json({ success: false, message: msg });
+  }
+});
+
 /**
  * @swagger
  * /schedules/by-id/{id}/register-missing-drivers:

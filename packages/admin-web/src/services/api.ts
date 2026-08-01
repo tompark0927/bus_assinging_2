@@ -304,6 +304,11 @@ export const schedulesApi = {
   }) => engineClient.post('/schedules/from-engine', data, { timeout: 180000 }),
   // 게시 양식 조회 (행=차량, 열=날짜 → 순번|오전|오후)
   posting: (scheduleId: number) => api.get(`/schedules/by-id/${scheduleId}/posting`),
+  // 일일배차표(게시용) 엑셀 — 현장이 실제로 붙이는 양식
+  exportDaily: (scheduleId: number, date: string) =>
+    api.get(`/schedules/by-id/${scheduleId}/export-daily`, {
+      params: { date }, responseType: 'blob', timeout: 60000,
+    }),
   // 엑셀엔 있는데 기초 데이터에 없는 기사 일괄 등록 + 빈 칸 메우기
   registerMissingDrivers: (scheduleId: number) =>
     api.post(`/schedules/by-id/${scheduleId}/register-missing-drivers`, {}, { timeout: 120000 }),

@@ -1523,6 +1523,19 @@ export default function SchedulePage() {
       {!isLoading && !isError && schedule && showPosting && postingView && (
         <PostingScheduleGrid
           view={postingView}
+          onDownloadDay={async (date) => {
+            try {
+              const res = await schedulesApi.exportDaily(schedule.id, date);
+              const url = URL.createObjectURL(res.data as Blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `일일배차표_${date}.xlsx`;
+              a.click();
+              URL.revokeObjectURL(url);
+            } catch {
+              toast.error('내려받기에 실패했습니다.');
+            }
+          }}
           onCellClick={(p) =>
             setEditCell({
               date: p.date, vehicle: p.vehicle, shift: p.shift,
