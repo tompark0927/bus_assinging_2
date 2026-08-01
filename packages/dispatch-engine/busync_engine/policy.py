@@ -228,6 +228,16 @@ class CompanyPolicy:
             raise KeyError(f"알 수 없는 설정 키: {key}")
         self.values[key] = value
 
+    def effective(self) -> dict[str, Any]:
+        """설정된 값 + 카탈로그 기본값을 합친 전체 딕셔너리.
+
+        검산·감사처럼 '이 회사 규칙이 뭔데?'를 통째로 봐야 하는 쪽에서
+        키마다 get()을 부르지 않도록.
+        """
+        out = {k: s.default for k, s in CATALOG_BY_KEY.items()}
+        out.update(self.values)
+        return out
+
     # ── 직렬화 (백엔드 저장/전송용) ──
     def to_dict(self) -> dict:
         return {
