@@ -39,6 +39,7 @@ from busync_engine.audit import audit as run_audit
 from busync_engine.backtest import backtest_stage1, backtest_stage2
 from busync_engine.generate import generate_month
 from busync_engine.importer.monthly import (
+    extract_depot_names,
     looks_like_monthly_sheet,
     parse_monthly_sheet,
 )
@@ -134,7 +135,10 @@ def _load_rosters(path: str, division: str, sheets: list[str]) -> list:
                 # read_only 워크시트는 재순회가 필요해 새로 연다
                 wb2 = openpyxl.load_workbook(path, data_only=True)
                 try:
-                    out.append(parse_monthly_sheet(wb2[name], y, m, division))
+                    out.append(parse_monthly_sheet(
+                        wb2[name], y, m, division,
+                        depot_names=extract_depot_names(wb2),
+                    ))
                 finally:
                     wb2.close()
             else:

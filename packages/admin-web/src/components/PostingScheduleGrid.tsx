@@ -56,8 +56,11 @@ function dayTone(iso: string) {
 export default function PostingScheduleGrid({
   view,
   onCellClick,
+  onDownloadDay,
 }: {
   view: PostingView;
+  /** 그날짜 게시용(일일배차표) 엑셀 받기 — 현장은 하루치를 붙인다 */
+  onDownloadDay?: (date: string) => void;
   /** 셀 클릭 — 담당자가 배정을 바꾸거나 근거를 보려 할 때 */
   onCellClick?: (p: {
     date: string; vehicle: string; shift: 'MORNING' | 'AFTERNOON';
@@ -138,7 +141,15 @@ export default function PostingScheduleGrid({
                     dayTone(iso)
                   }`}
                 >
-                  {fmtDay(iso)}
+                  {onDownloadDay ? (
+                    <button
+                      onClick={() => onDownloadDay(iso)}
+                      title={`${fmtDay(iso)} 게시용 엑셀 받기`}
+                      className="rounded px-1 hover:bg-blue-100 dark:hover:bg-blue-900/40"
+                    >
+                      {fmtDay(iso)}
+                    </button>
+                  ) : fmtDay(iso)}
                 </th>
               ))}
             </tr>
@@ -206,7 +217,8 @@ export default function PostingScheduleGrid({
       <p className="text-xs text-gray-400 dark:text-gray-500">
         <span className="font-bold text-red-600 dark:text-red-400">빨간 이름</span> = 수동 변경 ·{' '}
         <span className="text-amber-600/70 underline decoration-dotted">주황 점선</span> = 기초 데이터에 없는 기사
-        (등록하면 정상 표시) · 순번은 매일 로테이션으로 돌아 이른/늦은 근무가 고르게 배분됩니다.
+        (등록하면 정상 표시) · 순번은 매일 로테이션으로 돌아 이른/늦은 근무가 고르게 배분됩니다
+        {onDownloadDay ? ' · 날짜를 누르면 그날 게시용 엑셀을 받습니다.' : '.'}
       </p>
     </div>
   );
