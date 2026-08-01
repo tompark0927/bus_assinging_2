@@ -36,6 +36,7 @@ import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
 import PageHeader from '../components/PageHeader';
 import PostingScheduleGrid, { type PostingView } from '../components/PostingScheduleGrid';
+import CellEditModal, { type CellTarget } from '../components/CellEditModal';
 import { engineApi } from '../services/api';
 import SectionHeader from '../components/SectionHeader';
 import { scheduleHelp } from '../help/helpContent';
@@ -318,6 +319,8 @@ export default function SchedulePage() {
   // 순번 데이터가 있으면 게시 양식이 기본 — 현장이 보던 그 표
   const [viewMode, setViewMode] = useState<'posting' | 'driver'>('posting');
   const showPosting = hasPosting && viewMode === 'posting';
+  // 게시 양식에서 셀을 눌렀을 때 열리는 편집 대상
+  const [editCell, setEditCell] = useState<CellTarget | null>(null);
 
   const { data: routes = [] } = useQuery<Route[]>({
     queryKey: ['routes', 'all'],
@@ -1469,7 +1472,23 @@ export default function SchedulePage() {
 
       {/* ─── 게시 양식 배차표 (AI 엔진 생성분) ─── */}
       {!isLoading && !isError && schedule && showPosting && postingView && (
-        <PostingScheduleGrid view={postingView} />
+        <PostingScheduleGrid
+          view={postingView}
+          onCellClick={(p) =>
+            setEditCell({
+              date: p.date, vehicle: p.vehicle, shift: p.shift,
+              currentName: p.driver?.name ?? null,
+            })
+          }
+        />
+      )}
+
+      {editCell && schedule && (
+        <CellEditModal
+          scheduleId={schedule.id}
+          target={editCell}
+          onClose={() => setEditCell(null)}
+        />
       )}
 
       {/* ─── 캘린더/그리드 배차표 (기사별) ─── */}

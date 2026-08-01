@@ -18,6 +18,9 @@ import {
 } from '../controllers/scheduleController';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { saveEngineDraft, getPostingView } from '../services/engineScheduleService';
+import {
+  OVERRIDE_CODES, getCellCandidates, setCellDriver, type OverrideCode,
+} from '../services/cellEditService';
 import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
@@ -272,6 +275,64 @@ router.get('/by-id/:id/posting', async (req: AuthRequest, res) => {
   } catch (error) {
     logger.error(`[schedules/posting] ${error}`);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+/**
+ * @swagger
+ * /schedules/by-id/{id}/cell-candidates:
+ *   get:
+ *     summary: 특정 칸에 넣을 수 있는 기사 후보 (경고 포함)
+ *     description: 규칙 위반은 막지 않고 경고로만 알린다 — 급한 결원처럼 알면서 넣어야 할 때가 있다.
+ *     tags: [Schedules]
+ */
+router.get('/by-id/:id/cell-candidates', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  try {
+    const { date, vehicle, shift } = req.query as Record<string, string>;
+    if (!date || !vehicle || !shift) {
+      return res.status(400).json({ success: false, message: 'date, vehicle, shift 가 필요합니다.' });
+    }
+    const data = await getCellCandidates(
+      req.user!.companyId, Number(req.params.id), date, vehicle, shift,
+    );
+    return res.json({ success: true, data: { ...data, codes: OVERRIDE_CODES } });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '조회에 실패했습니다.';
+    logger.error(`[schedules/cell-candidates] ${msg}`);
+    return res.status(422).json({ success: false, message: msg });
+  }
+});
+
+/**
+ * @swagger
+ * /schedules/by-id/{id}/cell:
+ *   put:
+ *     summary: 셀의 기사 교체 (수정 사유 함께 기록)
+ *     description: >
+ *       그 칸만 바뀐다. 사유 코드는 단순 기록이 아니라 학습 입력 —
+ *       같은 유형이 반복되면 회사별 규칙으로 승격시킬 수 있다.
+ *     tags: [Schedules]
+ */
+router.put('/by-id/:id/cell', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  try {
+    const { date, vehicle, shift, driverId, code, note } = req.body ?? {};
+    if (!date || !vehicle || !shift) {
+      return res.status(400).json({ success: false, message: 'date, vehicle, shift 가 필요합니다.' });
+    }
+    if (code && !(code in OVERRIDE_CODES)) {
+      return res.status(400).json({ success: false, message: `알 수 없는 사유 코드: ${code}` });
+    }
+    const result = await setCellDriver(req.user!.companyId, Number(req.params.id), {
+      date, vehicle, shift,
+      driverId: driverId == null ? null : Number(driverId),
+      code: code as OverrideCode | undefined,
+      note, actorId: req.user!.id,
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '변경에 실패했습니다.';
+    logger.error(`[schedules/cell] ${msg}`);
+    return res.status(422).json({ success: false, message: msg });
   }
 });
 
