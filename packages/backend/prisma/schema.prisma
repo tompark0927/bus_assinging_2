@@ -479,6 +479,12 @@ model ScheduleSlot {
   bus           Bus?           @relation(fields: [busId], references: [id])
   emergencyDrop EmergencyDrop?
 
+  /// 한 배차표에서 (날짜×차량×시프트) 칸은 한 행뿐 — 같은 칸에 두 배정이
+  /// 쌓이는 구조적 오류를 DB가 막는다 (busId NULL인 휴무 슬롯은 제외됨).
+  /// 기사 단위 "같은 날 1근무" 제약은 일부러 DB에 걸지 않는다: 초안에서는
+  /// 엑셀에서 온 중복을 화면에 빨간 테두리로 드러내 고치는 워크플로가
+  /// 의도된 동작이고, 발행 시점에 publishSchedule 게이트가 차단한다.
+  @@unique([scheduleId, date, busId, shift])
   @@index([scheduleId])
   @@index([driverId])
   @@index([routeId])
