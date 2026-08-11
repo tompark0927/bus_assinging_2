@@ -1,6 +1,7 @@
 import { Prisma, ShiftType } from '@prisma/client';
 import { prisma } from '../utils/prisma';
 import logger from '../utils/logger';
+import { registerMissingDrivers, RegisterResult } from './registerMissingDriversService';
 
 /**
  * 배차 엔진(Python) 생성 결과를 DB 배차표로 영속화한다.
@@ -41,9 +42,11 @@ export interface SaveResult {
   unmatched: {
     /** DB에 없는 차량번호 */
     vehicles: string[];
-    /** DB에 없는 기사 이름 */
+    /** DB에 없는 기사 이름 — 자동 등록까지 실패한 잔여분 */
     drivers: string[];
   };
+  /** 엑셀에만 있던 기사를 자동 등록한 결과 (없으면 null) */
+  autoRegistered: RegisterResult | null;
 }
 
 /** 엔진이 기사명 자리에 넣는 비-기사 토큰 (휴무·결행 표기) */
@@ -213,11 +216,36 @@ export async function saveEngineDraft(
       `미매칭(차량 ${unmatchedVehicles.length}/기사 ${unmatchedDrivers.length})`,
   );
 
+  // ── 5. 미등록 기사 자동 등록 + 빈칸 메우기 ──
+  // 배차표는 기초 데이터로부터 완성된 상태로 태어나야 한다. 엑셀에만 있던
+  // 이름을 주황색 경고로 남겨두면 "표가 30% 비어 보이는" 반쪽짜리 초안이 되므로,
+  // 저장 직후 바로 사람 레코드를 만들어(로그인 수단 없이) 칸을 채운다.
+  // 실패해도 저장 자체는 유효 — 기존처럼 미매칭 경고로 내려보낸다.
+  let autoRegistered: RegisterResult | null = null;
+  let remainingDrivers = unmatchedDrivers;
+  if (Object.keys(unmatchedCells).length > 0) {
+    try {
+      autoRegistered = await registerMissingDrivers(companyId, scheduleId);
+      const resolved = new Set([
+        ...autoRegistered.created.map((c) => c.name),
+        ...autoRegistered.skipped,
+      ]);
+      remainingDrivers = unmatchedDrivers.filter((n) => !resolved.has(n));
+      logger.info(
+        `[engineSchedule] 미등록 기사 자동 등록 — ${autoRegistered.created.length}명, ` +
+          `${autoRegistered.filledCells}칸 채움`,
+      );
+    } catch (e) {
+      logger.error(`[engineSchedule] 자동 등록 실패: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   return {
     scheduleId,
     patternCount: patternRows.length,
-    slotCount: slotRows.length,
-    unmatched: { vehicles: unmatchedVehicles, drivers: unmatchedDrivers },
+    slotCount: slotRows.length + (autoRegistered?.filledCells ?? 0),
+    unmatched: { vehicles: unmatchedVehicles, drivers: remainingDrivers },
+    autoRegistered,
   };
 }
 
