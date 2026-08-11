@@ -196,6 +196,28 @@ export const acceptEmergencySlot = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, message: '이미 처리된 슬롯입니다.' });
     }
 
+    // 같은 날 이미 근무가 있는 기사의 자가 수락 차단 — 관리자 경로
+    // (manualFillEmergency 의 noSameDayDoubleAssign)와 동일 기준.
+    // 이 검사가 없으면 이미 배차된 기사가 푸시 알림에서 '수락'을 눌러
+    // 스스로 이중 배정을 만든다 — 이중 배정의 최단 경로였다.
+    const sameDay = await prisma.scheduleSlot.findFirst({
+      where: {
+        driverId: req.user!.id,
+        date: drop.slot.date,
+        isRestDay: false,
+        id: { not: drop.slotId },
+        status: { in: ['SCHEDULED', 'FILLED'] },
+        schedule: { companyId: req.user!.companyId },
+      },
+      select: { id: true },
+    });
+    if (sameDay) {
+      return res.status(409).json({
+        success: false,
+        message: '해당 날짜에 이미 배정된 근무가 있어 수락할 수 없습니다.',
+      });
+    }
+
     // Update drop + slot atomically with optimistic lock on status
     const result = await prisma.$transaction(async (tx) => {
       const claimed = await tx.emergencyDrop.updateMany({
