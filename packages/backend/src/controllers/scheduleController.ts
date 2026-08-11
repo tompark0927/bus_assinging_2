@@ -421,6 +421,39 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    // ── 발행 게이트: 같은 날 같은 기사 중복 배정 검사 ──
+    // 발행되면 기사앱은 같은 날 슬롯 중 하나만 보여준다(달력 last-wins,
+    // 홈 first-wins). 즉 중복은 발행 후엔 화면에서 보이지도 않는다 —
+    // 여기서 못 막으면 아무도 못 막는다. 화면 배너(duplicateInfo)와
+    // 술어를 동일하게 유지할 것: 휴무·드랍·결근 제외.
+    const dupGroups = await prisma.scheduleSlot.groupBy({
+      by: ['driverId', 'date'],
+      where: {
+        scheduleId: existing.id,
+        isRestDay: false,
+        status: { notIn: ['DROPPED', 'ABSENT'] },
+      },
+      having: { driverId: { _count: { gt: 1 } } },
+    });
+    const forcePublish = (req.body as { force?: boolean } | undefined)?.force === true;
+    if (dupGroups.length > 0 && !forcePublish) {
+      const dupDrivers = await prisma.user.findMany({
+        where: { id: { in: [...new Set(dupGroups.map((g) => g.driverId))] } },
+        select: { id: true, name: true },
+      });
+      const nameOf = new Map(dupDrivers.map((d) => [d.id, d.name]));
+      const duplicates = dupGroups.map((g) => ({
+        driverId: g.driverId,
+        driverName: nameOf.get(g.driverId) ?? `기사#${g.driverId}`,
+        date: g.date.toISOString().slice(0, 10),
+      }));
+      return res.status(409).json({
+        success: false,
+        message: `같은 날 두 번 배정된 기사가 ${dupGroups.length}건 있습니다. 중복을 해소한 뒤 발행해주세요.`,
+        data: { duplicates },
+      });
+    }
+
     const schedule = await prisma.schedule.update({
       where: { id: existing.id },
       data: { status: 'PUBLISHED' },
@@ -435,6 +468,10 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
         status: { old: existing.status, new: 'PUBLISHED' },
         year: { old: null, new: year },
         month: { old: null, new: month },
+        // 중복을 알고도 강제 발행한 경우 — 반드시 감사 기록에 남긴다
+        ...(dupGroups.length > 0
+          ? { forcedDuplicates: { old: null, new: dupGroups.length } }
+          : {}),
       },
     });
 
