@@ -294,6 +294,13 @@ export const busValidation = {
       .isInt({ min: 1990, max: 2100 }).withMessage('연식은 1990~2100 범위여야 합니다.')
       .toInt(),
     optionalInt('routeId', '노선 ID'),
+    // 출발 그룹 — 빈 문자열/null 은 "구분 없음"으로 지운다는 뜻이라 허용
+    body('groupType')
+      .custom((v) => v == null || (typeof v === 'string' && v.length <= 20))
+      .withMessage('출발 그룹은 20자 이내여야 합니다.'),
+    body('orderInGroup')
+      .custom((v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 99))
+      .withMessage('그룹 내 순번은 1~99 범위여야 합니다.'),
   ]),
 
   update: validate([
@@ -309,6 +316,12 @@ export const busValidation = {
     body('isActive')
       .optional()
       .isBoolean().withMessage('활성 상태는 boolean이어야 합니다.'),
+    body('groupType')
+      .custom((v) => v == null || (typeof v === 'string' && v.length <= 20))
+      .withMessage('출발 그룹은 20자 이내여야 합니다.'),
+    body('orderInGroup')
+      .custom((v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 99))
+      .withMessage('그룹 내 순번은 1~99 범위여야 합니다.'),
   ]),
 
   delete: validate([

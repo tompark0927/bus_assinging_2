@@ -4,6 +4,10 @@ import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { getPagination, paginatedResponse } from '../utils/pagination';
 
+// 그룹 내 순번 — 폼에서 빈 값이 오면 "지움(null)"로 해석한다
+const parseOrderInGroup = (v: unknown): number | null | undefined =>
+  v === undefined ? undefined : v === null || v === '' ? null : parseInt(String(v), 10);
+
 export const getBuses = async (req: AuthRequest, res: Response) => {
   try {
     const where = { companyId: req.user!.companyId };
@@ -43,12 +47,15 @@ export const getBusById = async (req: AuthRequest, res: Response) => {
 
 export const createBus = async (req: AuthRequest, res: Response) => {
   try {
-    const { busNumber, plateNumber, model, year, routeId } = req.body;
+    const { busNumber, plateNumber, model, year, routeId, groupType, orderInGroup } = req.body;
 
     const bus = await prisma.bus.create({
       data: {
         companyId: req.user!.companyId,
-        busNumber, plateNumber, model, year, routeId
+        busNumber, plateNumber, model, year, routeId,
+        // 출발 그룹 구분(예: "가좌출발"/"동춘출발") — 배차표에서 노선 안 블록을 나누는 라벨
+        groupType: typeof groupType === 'string' ? groupType.trim() || null : groupType,
+        orderInGroup: parseOrderInGroup(orderInGroup),
       },
       include: { route: true },
     });
@@ -62,7 +69,7 @@ export const createBus = async (req: AuthRequest, res: Response) => {
 
 export const updateBus = async (req: AuthRequest, res: Response) => {
   try {
-    const { busNumber, plateNumber, model, year, routeId, isActive } = req.body;
+    const { busNumber, plateNumber, model, year, routeId, isActive, groupType, orderInGroup } = req.body;
     const busId = parseInt(req.params.id);
 
     const existingBus = await prisma.bus.findFirst({ where: { id: busId, companyId: req.user!.companyId } });
@@ -72,7 +79,11 @@ export const updateBus = async (req: AuthRequest, res: Response) => {
 
     const bus = await prisma.bus.update({
       where: { id: busId },
-      data: { busNumber, plateNumber, model, year, routeId, isActive },
+      data: {
+        busNumber, plateNumber, model, year, routeId, isActive,
+        groupType: typeof groupType === 'string' ? groupType.trim() || null : groupType,
+        orderInGroup: parseOrderInGroup(orderInGroup),
+      },
       include: { route: true },
     });
 
