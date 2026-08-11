@@ -23,6 +23,7 @@ import {
 } from '../services/cellEditService';
 import { explainCell } from '../services/explainCellService';
 import { registerMissingDrivers } from '../services/registerMissingDriversService';
+import { setVehicleOff } from '../services/vehicleOffService';
 import { buildDailyPostingXlsx } from '../services/dailyPostingExport';
 import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
@@ -325,6 +326,33 @@ router.get('/by-id/:id/export-daily', async (req: AuthRequest, res) => {
  *     description: 계정(로그인)은 만들지 않는다 — 배차에 필요한 건 사람 레코드지 로그인이 아니다.
  *     tags: [Schedules]
  */
+/**
+ * @swagger
+ * /schedules/by-id/{id}/vehicle-off:
+ *   put:
+ *     summary: 감차(휴차) 표기 토글
+ *     description: >
+ *       (날짜×차량) 감차 상태를 SchedulePattern.operating 에 기록/해제한다 —
+ *       화면·일일배차 엑셀·기사앱이 모두 이 값을 본다. 배정이 남아 있으면
+ *       기사 이름과 함께 거부하며, 초안 상태에서만 변경할 수 있다.
+ *     tags: [Schedules]
+ */
+router.put('/by-id/:id/vehicle-off', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { busNumber, date, off } = req.body ?? {};
+    if (!Number.isInteger(id) || typeof busNumber !== 'string' || typeof date !== 'string' || typeof off !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'busNumber, date, off 가 필요합니다.' });
+    }
+    const result = await setVehicleOff(req.user!.companyId, id, busNumber, date, off);
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '감차 변경에 실패했습니다.';
+    const status = msg.includes('기초 데이터에 없습니다') || msg.includes('찾을 수 없습니다') ? 404 : 422;
+    return res.status(status).json({ success: false, message: msg });
+  }
+});
+
 router.post('/by-id/:id/register-missing-drivers', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {
     const result = await registerMissingDrivers(req.user!.companyId, Number(req.params.id));

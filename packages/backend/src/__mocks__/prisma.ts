@@ -33,6 +33,7 @@ export const prisma: MockPrisma = {
   route: createMockModel(),
   schedule: createMockModel(),
   scheduleSlot: createMockModel(),
+  schedulePattern: createMockModel(),
   dayOffRequest: createMockModel(),
   emergencyDrop: createMockModel(),
   notification: createMockModel(),
