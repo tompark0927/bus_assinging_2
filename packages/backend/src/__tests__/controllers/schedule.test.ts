@@ -293,8 +293,9 @@ describe('generateSchedule controller', () => {
 describe('publishSchedule controller', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // 발행 게이트(같은 날 중복 배정 검사) — 기본은 중복 없음
+    // 발행 게이트 — 기본은 중복·법규 위반 없음
     mockPrisma.scheduleSlot.groupBy.mockResolvedValue([]);
+    mockPrisma.scheduleSlot.findMany.mockResolvedValue([]);
   });
 
   it('should publish latest DRAFT (no scheduleId in body) and notify drivers', async () => {
@@ -447,11 +448,11 @@ describe('publishSchedule controller', () => {
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
         success: false,
-        data: {
+        data: expect.objectContaining({
           duplicates: expect.arrayContaining([
             expect.objectContaining({ driverName: '김영수', date: '2026-03-05' }),
           ]),
-        },
+        }),
       }),
     );
     expect(mockPrisma.schedule.update).not.toHaveBeenCalled();
@@ -478,6 +479,39 @@ describe('publishSchedule controller', () => {
         }),
       }),
     );
+  });
+
+  it('중복이 없어도 연속근무 초과(E3)가 있으면 409로 차단한다', async () => {
+    const req = createAuthReq({ params: { year: '2026', month: '3' } });
+    const res = createMockRes();
+    mockPrisma.schedule.findFirst
+      .mockResolvedValueOnce({ id: 1, year: 2026, month: 3, status: 'DRAFT', companyId: 1 })
+      .mockResolvedValueOnce(null);
+    // 김영수 3/1~3/7 연속 7일 종일 근무
+    mockPrisma.scheduleSlot.findMany.mockResolvedValue(
+      Array.from({ length: 7 }, (_, i) => ({
+        driverId: 42,
+        date: new Date(`2026-03-0${i + 1}T00:00:00.000Z`),
+        shift: 'FULL_DAY',
+        driver: { name: '김영수' },
+      })),
+    );
+    mockPrisma.user.findMany.mockResolvedValue([]);
+
+    await publishSchedule(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('연속근무 초과'),
+        data: expect.objectContaining({
+          violations: expect.arrayContaining([
+            expect.objectContaining({ rule: 'E3', driverName: '김영수' }),
+          ]),
+        }),
+      }),
+    );
+    expect(mockPrisma.schedule.update).not.toHaveBeenCalled();
   });
 
   it('force=true 면 발행하되 감사 로그에 강제 발행을 남긴다', async () => {
