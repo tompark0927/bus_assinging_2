@@ -17,7 +17,7 @@ import {
   renameSchedule,
 } from '../controllers/scheduleController';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-import { saveEngineDraft, getPostingView } from '../services/engineScheduleService';
+import { saveEngineDraft, getPostingView, DraftOverwriteConflict } from '../services/engineScheduleService';
 import {
   OVERRIDE_CODES, getCellCandidates, setCellDriver, type OverrideCode,
 } from '../services/cellEditService';
@@ -236,15 +236,24 @@ router.post(
  */
 router.post('/from-engine', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {
-    const { year, month, name, cells } = req.body ?? {};
+    const { year, month, name, cells, confirmOverwrite } = req.body ?? {};
     if (!Number.isInteger(year) || !Number.isInteger(month) || !cells || typeof cells !== 'object') {
       return res.status(400).json({ success: false, message: 'year, month, cells 가 필요합니다.' });
     }
     const result = await saveEngineDraft(req.user!.companyId, req.user!.id, {
       year, month, name, cells,
+      confirmOverwrite: confirmOverwrite === true,
     });
     return res.json({ success: true, data: result });
   } catch (error) {
+    // 같은 이름 초안 덮어쓰기 확인 필요 — 삭제될 내용을 프론트에 알려준다
+    if (error instanceof DraftOverwriteConflict) {
+      return res.status(409).json({
+        success: false,
+        message: error.message,
+        data: { existingDraft: error.details },
+      });
+    }
     const msg = error instanceof Error ? error.message : '저장에 실패했습니다.';
     logger.error(`[schedules/from-engine] ${msg}`);
     // 매칭 실패처럼 사용자가 고칠 수 있는 문제는 원문을 그대로 보여준다
