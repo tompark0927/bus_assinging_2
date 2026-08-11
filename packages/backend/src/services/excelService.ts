@@ -60,9 +60,15 @@ export async function generateScheduleExcel(
     }
   }
 
-  const drivers = Array.from(driverMap.entries()).sort((a, b) =>
-    a[1].name.localeCompare(b[1].name, 'ko')
-  );
+  // 배차표 행 순서: 스페어(예비) 기사는 무조건 맨 아래로. 같은 유형 안에서는 이름순.
+  // driverType 컬럼 기준의 단순 정렬 — 화면(SchedulePage)은 실제 탑승 이력에서
+  // 고정기사를 추정해 노선·차량순으로 세우므로 완전히 같지는 않다.
+  const spareRank = (t: string | null) => (t === 'SPARE' ? 1 : 0);
+  const drivers = Array.from(driverMap.entries()).sort((a, b) => {
+    const byType = spareRank(a[1].driverType) - spareRank(b[1].driverType);
+    if (byType !== 0) return byType;
+    return a[1].name.localeCompare(b[1].name, 'ko');
+  });
 
   // Title
   overviewSheet.mergeCells(1, 1, 1, daysInMonth + 3);
