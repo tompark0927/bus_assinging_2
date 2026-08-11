@@ -200,6 +200,11 @@ export async function setCellDriver(
     }),
   ]);
   if (!schedule) throw new Error('배차표를 찾을 수 없습니다.');
+  // 발행본을 여기서 고치면 기사가 이미 본 배차가 알림 없이 바뀐다 —
+  // 다른 모든 수정 경로와 같은 규칙으로 막는다.
+  if (schedule.status !== 'DRAFT') {
+    throw new Error('발행된 배차표는 셀을 수정할 수 없습니다. 먼저 초안으로 되돌려주세요.');
+  }
   if (!bus) throw new Error(`차량 ${params.vehicle} 을(를) 찾을 수 없습니다.`);
 
   const existing = await prisma.scheduleSlot.findFirst({
