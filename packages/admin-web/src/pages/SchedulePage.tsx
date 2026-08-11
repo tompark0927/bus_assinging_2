@@ -36,6 +36,8 @@ import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
 import PageHeader from '../components/PageHeader';
 import PostingScheduleGrid, { type PostingView } from '../components/PostingScheduleGrid';
+import VehicleScheduleGrid, { type BusGroupMap } from '../components/VehicleScheduleGrid';
+import DailyDispatchGrid from '../components/DailyDispatchGrid';
 import CellEditModal, { type CellTarget } from '../components/CellEditModal';
 import { engineApi } from '../services/api';
 import SectionHeader from '../components/SectionHeader';
@@ -115,6 +117,8 @@ interface Route {
 interface Bus {
   id: number;
   busNumber: string;
+  groupType?: string | null; // 출발 그룹 (차량별 보기 블록 구분)
+  orderInGroup?: number | null;
 }
 
 interface Driver {
@@ -315,10 +319,34 @@ export default function SchedulePage() {
     enabled: !!schedule?.id,
     retry: 0,
   });
-  const hasPosting = (postingView?.groups?.length ?? 0) > 0;
+  // 게시 양식은 순번(로테이션) 데이터가 실제로 있을 때만.
+  // 수동 감차가 만든 패턴 행(displaySlot null)만으로는 켜지 않는다 —
+  // 순번 없는 배차표에 빈 게시 양식 탭이 뜨는 오동작 방지.
+  const hasPosting = useMemo(() => {
+    if (!postingView?.groups?.length) return false;
+    for (const byVehicle of Object.values(postingView.cells ?? {})) {
+      for (const cell of Object.values(byVehicle)) {
+        if (cell.slot != null) return true;
+      }
+    }
+    return false;
+  }, [postingView]);
   // 순번 데이터가 있으면 게시 양식이 기본 — 현장이 보던 그 표
-  const [viewMode, setViewMode] = useState<'posting' | 'driver'>('posting');
+  const [viewMode, setViewMode] = useState<'posting' | 'driver' | 'vehicle' | 'daily'>('posting');
   const showPosting = hasPosting && viewMode === 'posting';
+  const showVehicle = viewMode === 'vehicle';
+  // 토글 하이라이트용 — 순번 데이터가 없으면 'posting' 선택은 기사별로 폴백된다
+  const effectiveViewMode = showPosting ? 'posting' : viewMode === 'posting' ? 'driver' : viewMode;
+
+  // 일일배차 날짜 — 이 달을 벗어나면 오늘(이 달이면) 또는 1일로 되돌린다
+  const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
+  const [dailyDate, setDailyDate] = useState('');
+  const todayKey = format(new Date(), 'yyyy-MM-dd');
+  const effectiveDailyDate = dailyDate.startsWith(monthPrefix)
+    ? dailyDate
+    : todayKey.startsWith(monthPrefix)
+      ? todayKey
+      : `${monthPrefix}-01`;
   // 게시 양식에서 셀을 눌렀을 때 열리는 편집 대상
   const [editCell, setEditCell] = useState<CellTarget | null>(null);
 
@@ -340,10 +368,13 @@ export default function SchedulePage() {
   const registerMissing = useMutation({
     mutationFn: () => schedulesApi.registerMissingDrivers(schedule!.id),
     onSuccess: (res) => {
-      const d = res.data.data as { created: unknown[]; filledCells: number };
+      const d = res.data.data as { created: unknown[]; filledCells: number; skippedCells?: number };
       queryClient.invalidateQueries({ queryKey: ['schedule-posting'] });
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
-      toast.success(`기사 ${d.created.length}명 등록 — 배차 ${d.filledCells}칸이 채워졌습니다.`);
+      const skipped = d.skippedCells
+        ? ` (${d.skippedCells}칸은 이미 배정이 있어 건너뜀)`
+        : '';
+      toast.success(`기사 ${d.created.length}명 등록 — 배차 ${d.filledCells}칸이 채워졌습니다.${skipped}`);
     },
     onError: (err: { response?: { data?: { message?: string } } }) =>
       toast.error(err?.response?.data?.message ?? '등록에 실패했습니다.'),
@@ -358,6 +389,71 @@ export default function SchedulePage() {
     queryKey: ['buses', 'all'],
     queryFn: () => busesApi.list({ limit: '100' }).then((r) => r.data.data),
   });
+
+  // 차량별 보기의 출발 그룹 블록 — 기초 데이터의 버스 구분(groupType/orderInGroup)
+  const busGroupMap = useMemo<BusGroupMap>(() => {
+    const m: BusGroupMap = {};
+    for (const b of buses) {
+      m[b.busNumber] = { group: b.groupType ?? null, order: b.orderInGroup ?? null };
+    }
+    return m;
+  }, [buses]);
+
+  // 감차(휴차) — SchedulePattern.operating 이 원본. 게시 양식·일일배차 엑셀과
+  // 같은 값을 읽으므로 화면과 인쇄물이 어긋날 수 없다.
+  const vehicleOffSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const [date, byVehicle] of Object.entries(postingView?.cells ?? {})) {
+      for (const [vehicle, cell] of Object.entries(byVehicle)) {
+        if (cell.operating === false) s.add(`${date}|${vehicle}`);
+      }
+    }
+    return s;
+  }, [postingView]);
+
+  const vehicleOffMutation = useMutation({
+    mutationFn: (p: { busNumber: string; date: string; off: boolean }) =>
+      schedulesApi.setVehicleOff(schedule!.id, p),
+    onSuccess: (_res, p) => {
+      queryClient.invalidateQueries({ queryKey: ['schedule-posting'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      toast.success(p.off ? `${p.busNumber}호 ${p.date} 감차 처리` : `${p.busNumber}호 ${p.date} 감차 해제`);
+    },
+    // 배정이 남아 있으면 서버가 기사 이름을 담아 거부한다 — 그대로 보여준다
+    onError: (err: { response?: { data?: { message?: string } } }) =>
+      toast.error(err?.response?.data?.message ?? '감차 변경에 실패했습니다.', { duration: 6000 }),
+  });
+
+  // 같은 날 같은 기사 중복 배정 — 엑셀 배차총괄의 중복 조건부서식에 대응.
+  // 휴무/드랍/결근은 제외: 실제로 두 번 "운행"하는 경우만 경고한다.
+  const duplicateInfo = useMemo(() => {
+    const byKey = new Map<string, Slot[]>();
+    for (const s of schedule?.slots ?? []) {
+      if (s.isRestDay || s.status === 'DROPPED' || s.status === 'ABSENT') continue;
+      const key = `${s.driver.id}|${s.date.split('T')[0]}`;
+      const arr = byKey.get(key) ?? [];
+      arr.push(s);
+      byKey.set(key, arr);
+    }
+    const slotIds = new Set<number>();
+    const groups: { name: string; date: string; slots: Slot[] }[] = [];
+    for (const arr of byKey.values()) {
+      if (arr.length < 2) continue;
+      for (const s of arr) slotIds.add(s.id);
+      groups.push({ name: arr[0].driver.name, date: arr[0].date.split('T')[0], slots: arr });
+    }
+    groups.sort((a, b) => (a.date === b.date ? a.name.localeCompare(b.name, 'ko') : a.date.localeCompare(b.date)));
+    return { slotIds, groups };
+  }, [schedule?.slots]);
+
+  // 일일배차: 게시 순번 (게시 양식 패턴이 있을 때만 그 값 사용)
+  const postingSlotNo = useMemo(() => {
+    const cellsForDate = postingView?.cells?.[effectiveDailyDate];
+    if (!cellsForDate) return undefined;
+    const m: Record<string, number | null> = {};
+    for (const [vehicle, cell] of Object.entries(cellsForDate)) m[vehicle] = cell.slot;
+    return m;
+  }, [postingView, effectiveDailyDate]);
 
   const { data: allUsersList = [] } = useQuery<Driver[]>({
     queryKey: ['users-drivers'],
@@ -458,6 +554,7 @@ export default function SchedulePage() {
       })).data.data as {
         scheduleId: number; slotCount: number;
         unmatched: { vehicles: string[]; drivers: string[] };
+        autoRegistered: { created: { name: string }[]; filledCells: number } | null;
       };
       return { draft, saved };
     },
@@ -465,13 +562,20 @@ export default function SchedulePage() {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-posting'] });
+      // 엑셀에만 있던 기사가 자동 등록됐을 수 있다 — 기사 목록 갱신
+      if (saved.autoRegistered?.created.length) {
+        queryClient.invalidateQueries({ queryKey: ['users-drivers'] });
+      }
       setSelectedScheduleId(saved.scheduleId);
       setEngineUnmatched(saved.unmatched);
       setShowGenerateModal(false);
       setNewDraftName('');
       setEngineFile(null);
+      const registeredNote = saved.autoRegistered?.created.length
+        ? `, 신규 기사 ${saved.autoRegistered.created.length}명 자동 등록`
+        : '';
       toast.success(
-        `${year}년 ${month}월 초안 생성 완료 — 배정 ${saved.slotCount}건` +
+        `${year}년 ${month}월 초안 생성 완료 — 배정 ${saved.slotCount}건${registeredNote}` +
         (draft.audit.ok ? ', 제약 위반 0건' : `, 위반 ${draft.audit.violations.length}건 확인 필요`)
       );
     },
@@ -523,18 +627,31 @@ export default function SchedulePage() {
     generateMutation.mutate();
   };
 
+  // 발행 게이트에 걸린 중복 배정 목록 (409 응답) — 강제 발행 확인 UI용
+  const [publishBlockedDups, setPublishBlockedDups] = useState<
+    { driverName: string; date: string }[] | null
+  >(null);
+
   const publishMutation = useMutation({
-    mutationFn: () => schedulesApi.publish(year, month, schedule?.id),
+    mutationFn: (opts?: { force?: boolean }) =>
+      schedulesApi.publish(year, month, schedule?.id, opts?.force),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
       toast.success('배차표가 발행되었습니다. 모든 기사님께 알림이 발송됩니다.');
       setShowPublishConfirm(false);
+      setPublishBlockedDups(null);
     },
     onError: (err: unknown) => {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-        || '발행 중 오류가 발생했습니다.';
-      toast.error(msg);
+      const resp = (err as {
+        response?: { status?: number; data?: { message?: string; data?: { duplicates?: { driverName: string; date: string }[] } } };
+      })?.response;
+      // 발행 게이트: 같은 날 중복 배정 — 목록을 보여주고 강제 발행 여부를 묻는다
+      if (resp?.status === 409 && resp.data?.data?.duplicates) {
+        setPublishBlockedDups(resp.data.data.duplicates);
+        return;
+      }
+      toast.error(resp?.data?.message || '발행 중 오류가 발생했습니다.');
     },
   });
 
@@ -718,6 +835,34 @@ export default function SchedulePage() {
       return a.name.localeCompare(b.name, 'ko');
     });
   }, [schedule?.slots]);
+
+  // 근무일수 중앙값 — 엑셀 배차총괄의 "목표(22일) 대비 차이" 열에 대응.
+  // 회사마다 목표가 달라 고정값 대신 중앙값을 기준으로 편차를 보여준다.
+  const workDayMedian = useMemo(() => {
+    const counts = allDrivers
+      .map((d) =>
+        Array.from((driverSlotMap.get(d.id) ?? new Map<string, Slot>()).values()).filter(
+          (s) => !s.isRestDay,
+        ).length,
+      )
+      .filter((n) => n > 0)
+      .sort((a, b) => a - b);
+    if (counts.length === 0) return 0;
+    const mid = Math.floor(counts.length / 2);
+    return counts.length % 2 ? counts[mid] : Math.round((counts[mid - 1] + counts[mid]) / 2);
+  }, [allDrivers, driverSlotMap]);
+
+  // 일일배차: 그날 배정 없는 스페어 기사 — 엑셀 sp칸(대기 명단)
+  const spareStandby = useMemo(() => {
+    const names: string[] = [];
+    for (const d of allDrivers) {
+      if (d.driverType !== 'SPARE') continue;
+      const slot = driverSlotMap.get(d.id)?.get(effectiveDailyDate);
+      const working = slot && !slot.isRestDay && slot.status !== 'DROPPED' && slot.status !== 'ABSENT';
+      if (!working) names.push(d.name);
+    }
+    return names.sort((a, b) => a.localeCompare(b, 'ko'));
+  }, [allDrivers, driverSlotMap, effectiveDailyDate]);
 
   const filteredDrivers = useMemo(() => {
     let result = allDrivers;
@@ -1034,26 +1179,20 @@ export default function SchedulePage() {
       };
     }
     const statusColors = SLOT_COLORS[slot.status as keyof typeof SLOT_COLORS] || SLOT_COLORS.SCHEDULED;
-    const shiftLabel = SHIFT_LABELS[slot.shift] || '';
-    const routeNum = slot.route?.routeNumber || '';
-    const busNum = slot.bus?.busNumber || '';
 
+    // 셀에는 오전/오후만 — 노선·차번은 툴팁과 차량별 보기에서 확인한다.
+    // (예전엔 "3-2 석/1161"처럼 다 넣었더니 칸이 빽빽해 한눈에 안 읽혔다)
     let label = '';
     if (slot.status === 'DROPPED') {
       label = '드랍';
     } else if (slot.status === 'ABSENT') {
       label = '결근';
     } else {
-      label = routeNum || shiftLabel;
+      label =
+        slot.shift === 'MORNING' ? '오전' : slot.shift === 'AFTERNOON' ? '오후' : '종일';
     }
 
-    let sub = '';
-    if (slot.status !== 'DROPPED' && slot.status !== 'ABSENT') {
-      if (routeNum && shiftLabel) sub = shiftLabel;
-      if (busNum) sub = sub ? `${sub}/${busNum}` : busNum;
-    }
-
-    return { label, sub, colors: statusColors, isEmpty: false };
+    return { label, sub: '', colors: statusColors, isEmpty: false };
   }, []);
 
 // ─── 상태 뱃지 ───
@@ -1475,18 +1614,20 @@ export default function SchedulePage() {
           <h2 className="text-xl font-bold text-black">{year}년 {month}월 배차표</h2>
         </div>
       )}
-      {/* ─── 뷰 전환 (순번 데이터가 있을 때만 노출) ─── */}
-      {hasPosting && (
+      {/* ─── 뷰 전환 — 게시 양식은 순번 데이터가 있을 때만 노출 ─── */}
+      {schedule && (
         <div className="flex items-center gap-2 print:hidden">
           {([
-            ['posting', '게시 양식 (차량·순번)'],
-            ['driver', '기사별 보기'],
-          ] as const).map(([mode, label]) => (
+            ...(hasPosting ? [['posting', '게시 양식 (차량·순번)'] as const] : []),
+            ['driver', '기사별 보기'] as const,
+            ['vehicle', '차량별 보기'] as const,
+            ['daily', '일일배차'] as const,
+          ]).map(([mode, label]) => (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
               className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
-                viewMode === mode
+                effectiveViewMode === mode
                   ? 'bg-blue-600 text-white'
                   : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'
               }`}
@@ -1494,6 +1635,33 @@ export default function SchedulePage() {
               {label}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* ─── 중복 배정 경고 — 같은 날 같은 기사가 두 칸 이상 (엑셀 중복 검사에 대응) ─── */}
+      {schedule && duplicateInfo.groups.length > 0 && (
+        <div className="rounded-lg border border-red-300 bg-red-50 p-3 print:hidden dark:border-red-800 dark:bg-red-900/20">
+          <p className="text-sm font-semibold text-red-800 dark:text-red-300">
+            ⚠ 같은 날 두 번 배정된 기사 {duplicateInfo.groups.length}건 — 운행 사고로 이어질 수 있어 반드시
+            확인이 필요합니다
+          </p>
+          <ul className="mt-1 space-y-0.5 text-xs text-red-700 dark:text-red-400">
+            {duplicateInfo.groups.slice(0, 8).map((g) => (
+              <li key={`${g.name}-${g.date}`}>
+                <span className="font-semibold">{g.name}</span> — {g.date.slice(5).replace('-', '/')}{' '}
+                {g.slots
+                  .map(
+                    (s) =>
+                      `${SHIFT_LABELS[s.shift] ?? s.shift}/${s.bus?.busNumber ?? '차량미배정'}(${s.route?.routeNumber ?? '-'}번)`,
+                  )
+                  .join(' + ')}
+              </li>
+            ))}
+            {duplicateInfo.groups.length > 8 && <li>… 외 {duplicateInfo.groups.length - 8}건</li>}
+          </ul>
+          <p className="mt-1 text-xs text-red-600/80 dark:text-red-400/70">
+            차량별 보기에서 해당 칸이 빨간 테두리로 표시됩니다. 이름을 눌러 한쪽 배정을 바꾸거나 삭제하세요.
+          </p>
         </div>
       )}
 
@@ -1553,8 +1721,111 @@ export default function SchedulePage() {
         />
       )}
 
+      {/* ─── 차량별 배차표 (행=차번, 날짜당 오전/오후) — 순번 없이 항상 동작 ─── */}
+      {!isLoading && !isError && schedule && showVehicle && (
+        <VehicleScheduleGrid
+          slots={
+            filterRouteId
+              ? schedule.slots.filter((s) => s.route?.id === filterRouteId)
+              : schedule.slots
+          }
+          busGroups={busGroupMap}
+          year={year}
+          month={month}
+          daysInMonth={daysInMonth}
+          editable={schedule.status === 'DRAFT'}
+          onSlotClick={openSlotForEdit}
+          vehicleOff={vehicleOffSet}
+          onToggleVehicleOff={
+            schedule.status === 'DRAFT'
+              ? (busNumber, date, off) => vehicleOffMutation.mutate({ busNumber, date, off })
+              : undefined
+          }
+          duplicateSlotIds={duplicateInfo.slotIds}
+        />
+      )}
+
+      {/* ─── 일일배차표 (엑셀 일일배차/프린터용 시트의 화면판) ─── */}
+      {!isLoading && !isError && schedule && effectiveViewMode === 'daily' && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2 print:hidden">
+            <button
+              onClick={() => {
+                const d = new Date(`${effectiveDailyDate}T00:00:00`);
+                if (d.getDate() > 1) setDailyDate(format(new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1), 'yyyy-MM-dd'));
+              }}
+              disabled={effectiveDailyDate.endsWith('-01')}
+              className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              aria-label="전날"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <input
+              type="date"
+              value={effectiveDailyDate}
+              min={`${monthPrefix}-01`}
+              max={`${monthPrefix}-${String(daysInMonth).padStart(2, '0')}`}
+              onChange={(e) => e.target.value && setDailyDate(e.target.value)}
+              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+            />
+            <button
+              onClick={() => {
+                const d = new Date(`${effectiveDailyDate}T00:00:00`);
+                if (d.getDate() < daysInMonth) setDailyDate(format(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), 'yyyy-MM-dd'));
+              }}
+              disabled={effectiveDailyDate.endsWith(`-${String(daysInMonth).padStart(2, '0')}`)}
+              className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              aria-label="다음날"
+            >
+              <ChevronRight size={16} />
+            </button>
+            {todayKey.startsWith(monthPrefix) && (
+              <button
+                onClick={() => setDailyDate(todayKey)}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              >
+                오늘
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                try {
+                  const res = await schedulesApi.exportDaily(schedule.id, effectiveDailyDate);
+                  const url = URL.createObjectURL(res.data as Blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `일일배차표_${effectiveDailyDate}.xlsx`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                } catch {
+                  toast.error('내려받기에 실패했습니다.');
+                }
+              }}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+            >
+              <Download size={14} /> 엑셀 받기
+            </button>
+          </div>
+          <DailyDispatchGrid
+            slots={
+              filterRouteId
+                ? schedule.slots.filter((s) => s.route?.id === filterRouteId)
+                : schedule.slots
+            }
+            date={effectiveDailyDate}
+            busGroups={busGroupMap}
+            vehicleOff={vehicleOffSet}
+            postingSlotNo={postingSlotNo}
+            spareStandby={spareStandby}
+            editable={schedule.status === 'DRAFT'}
+            onSlotClick={openSlotForEdit}
+            duplicateSlotIds={duplicateInfo.slotIds}
+          />
+        </div>
+      )}
+
       {/* ─── 캘린더/그리드 배차표 (기사별) ─── */}
-      {!isLoading && !isError && schedule && !showPosting && (
+      {!isLoading && !isError && schedule && effectiveViewMode === 'driver' && (
         <div className="card p-0 overflow-hidden dark:bg-gray-800">
           <div className="overflow-x-auto">
             <table
@@ -1738,6 +2009,22 @@ export default function SchedulePage() {
                       >
                         <div className="text-base font-bold text-blue-700 dark:text-blue-400">{driverWorkCount}일</div>
                         <div className="text-sm text-gray-400 dark:text-gray-500">{driverRestCount}휴</div>
+                        {/* 중앙값 대비 편차 — 엑셀 배차총괄의 목표 대비 차이 열 */}
+                        {workDayMedian > 0 && driverWorkCount > 0 && (
+                          <div
+                            title={`근무일수 중앙값 ${workDayMedian}일 대비`}
+                            className={`text-xs font-semibold ${
+                              driverWorkCount - workDayMedian > 0
+                                ? 'text-sky-600 dark:text-sky-400'
+                                : driverWorkCount - workDayMedian < 0
+                                  ? 'text-red-600 dark:text-red-400'
+                                  : 'text-gray-400 dark:text-gray-500'
+                            }`}
+                          >
+                            {driverWorkCount - workDayMedian > 0 ? '+' : ''}
+                            {driverWorkCount - workDayMedian === 0 ? '±0' : driverWorkCount - workDayMedian}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -2392,7 +2679,7 @@ export default function SchedulePage() {
               취소
             </button>
             <button
-              onClick={() => publishMutation.mutate()}
+              onClick={() => publishMutation.mutate({})}
               disabled={publishMutation.isPending}
               className="flex-1 text-base py-3 min-h-[52px] bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium disabled:opacity-50 inline-flex items-center justify-center gap-2"
             >
@@ -2405,6 +2692,46 @@ export default function SchedulePage() {
                   <Send size={20} /> 발행하기
                 </>
               )}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 발행 게이트 — 같은 날 중복 배정이 있어 발행이 차단됨 */}
+      {publishBlockedDups && (
+        <Modal onClose={() => setPublishBlockedDups(null)} title="발행 차단 — 중복 배정" maxWidth="max-w-md">
+          <div className="py-2">
+            <AlertTriangle size={48} className="mx-auto text-red-500 mb-4" />
+            <p className="text-base text-gray-700 dark:text-gray-300 mb-3 text-center">
+              <strong>같은 날 두 번 배정된 기사가 {publishBlockedDups.length}건</strong> 있습니다.
+              <br />
+              이대로 발행하면 기사앱에는 한 배정만 보여서, 나머지 근무는 아무도 모르게 됩니다.
+            </p>
+            <ul className="max-h-40 overflow-y-auto rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 space-y-1">
+              {publishBlockedDups.slice(0, 10).map((d, i) => (
+                <li key={i}>
+                  <strong>{d.driverName}</strong> — {d.date.slice(5).replace('-', '/')}
+                </li>
+              ))}
+              {publishBlockedDups.length > 10 && <li>… 외 {publishBlockedDups.length - 10}건</li>}
+            </ul>
+            <p className="mt-3 text-sm text-gray-500 dark:text-gray-400 text-center">
+              차량별 보기에서 빨간 테두리 칸을 눌러 중복을 해소한 뒤 다시 발행해주세요.
+            </p>
+          </div>
+          <div className="flex gap-3 mt-4">
+            <button
+              onClick={() => setPublishBlockedDups(null)}
+              className="btn-primary flex-1 text-base py-3 min-h-[52px]"
+            >
+              돌아가서 수정하기
+            </button>
+            <button
+              onClick={() => publishMutation.mutate({ force: true })}
+              disabled={publishMutation.isPending}
+              className="flex-1 text-base py-3 min-h-[52px] rounded-lg border border-red-300 text-red-600 hover:bg-red-50 transition-colors font-medium disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+            >
+              {publishMutation.isPending ? '발행 중…' : '위험을 알고 강제 발행'}
             </button>
           </div>
         </Modal>

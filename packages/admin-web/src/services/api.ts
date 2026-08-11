@@ -315,6 +315,9 @@ export const schedulesApi = {
     api.get(`/schedules/by-id/${scheduleId}/export-daily`, {
       params: { date }, responseType: 'blob', timeout: 60000,
     }),
+  // 감차(휴차) 표기 토글 — (날짜×차량) "이 차는 이 날 안 나간다"
+  setVehicleOff: (scheduleId: number, body: { busNumber: string; date: string; off: boolean }) =>
+    api.put(`/schedules/by-id/${scheduleId}/vehicle-off`, body),
   // 엑셀엔 있는데 기초 데이터에 없는 기사 일괄 등록 + 빈 칸 메우기
   registerMissingDrivers: (scheduleId: number) =>
     api.post(`/schedules/by-id/${scheduleId}/register-missing-drivers`, {}, { timeout: 120000 }),
@@ -344,8 +347,12 @@ export const schedulesApi = {
     api.post('/schedules/slots', data),
   overrideSlot: (slotId: number, data: Record<string, unknown>) =>
     api.put(`/schedules/slots/${slotId}/override`, data),
-  publish: (year: number, month: number, scheduleId?: number) =>
-    api.put(`/schedules/${year}/${month}/publish`, scheduleId ? { scheduleId } : undefined),
+  publish: (year: number, month: number, scheduleId?: number, force?: boolean) =>
+    api.put(`/schedules/${year}/${month}/publish`, {
+      ...(scheduleId ? { scheduleId } : {}),
+      // 같은 날 중복 배정이 있어도 발행 — 서버가 감사 로그에 기록한다
+      ...(force ? { force: true } : {}),
+    }),
   delete: (year: number, month: number, scheduleId?: number) =>
     api.delete(`/schedules/${year}/${month}`, { params: scheduleId ? { scheduleId } : undefined }),
   exportExcel: (year: number, month: number, scheduleId?: number) =>
