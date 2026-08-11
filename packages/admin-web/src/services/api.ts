@@ -307,6 +307,8 @@ export const schedulesApi = {
   saveFromEngine: (data: {
     year: number; month: number; name?: string;
     cells: Record<string, Record<string, unknown>>;
+    /** 같은 이름 초안 덮어쓰기 승인 — 없으면 409 + 삭제될 내용 반환 */
+    confirmOverwrite?: boolean;
   }) => engineClient.post('/schedules/from-engine', data, { timeout: 180000 }),
   // 게시 양식 조회 (행=차량, 열=날짜 → 순번|오전|오후)
   posting: (scheduleId: number) => api.get(`/schedules/by-id/${scheduleId}/posting`),

@@ -535,26 +535,42 @@ export default function SchedulePage() {
   const [engineUnmatched, setEngineUnmatched] = useState<{ vehicles: string[]; drivers: string[] } | null>(null);
   const engineFileRef = useRef<HTMLInputElement>(null);
 
+  // 덮어쓰기 확인 대기 중인 엔진 초안 — 엔진을 다시 돌리지 않고 저장만 재시도한다
+  const pendingEngineDraftRef = useRef<{
+    cells: Record<string, Record<string, unknown>>;
+    audit: { ok: boolean; violations: unknown[] };
+    warnings: string[];
+  } | null>(null);
+  const [overwriteConfirm, setOverwriteConfirm] = useState<{
+    name: string; slotCount: number; manualOverrideCount: number; vehicleOffCount: number;
+  } | null>(null);
+
   const engineGenerateMutation = useMutation({
-    mutationFn: async () => {
-      if (!engineFile) throw new Error('과거 배차표 엑셀을 선택해 주세요.');
-      const form = new FormData();
-      form.append('file', engineFile);
-      form.append('year', String(year));
-      form.append('month', String(month));
-      const draft = (await engineApi.generate(form)).data as {
-        cells: Record<string, Record<string, unknown>>;
-        audit: { ok: boolean; violations: unknown[] };
-        warnings: string[];
-      };
+    mutationFn: async (opts?: { confirmOverwrite?: boolean }) => {
+      let draft = opts?.confirmOverwrite ? pendingEngineDraftRef.current : null;
+      if (!draft) {
+        if (!engineFile) throw new Error('과거 배차표 엑셀을 선택해 주세요.');
+        const form = new FormData();
+        form.append('file', engineFile);
+        form.append('year', String(year));
+        form.append('month', String(month));
+        draft = (await engineApi.generate(form)).data as {
+          cells: Record<string, Record<string, unknown>>;
+          audit: { ok: boolean; violations: unknown[] };
+          warnings: string[];
+        };
+        pendingEngineDraftRef.current = draft;
+      }
       const saved = (await schedulesApi.saveFromEngine({
         year, month,
         name: newDraftName.trim() || undefined,
         cells: draft.cells,
+        confirmOverwrite: opts?.confirmOverwrite,
       })).data.data as {
         scheduleId: number; slotCount: number;
         unmatched: { vehicles: string[]; drivers: string[] };
         autoRegistered: { created: { name: string }[]; filledCells: number } | null;
+        ambiguousNames: { name: string; candidates: { employeeId: string }[] }[];
       };
       return { draft, saved };
     },
@@ -569,6 +585,8 @@ export default function SchedulePage() {
       setSelectedScheduleId(saved.scheduleId);
       setEngineUnmatched(saved.unmatched);
       setShowGenerateModal(false);
+      setOverwriteConfirm(null);
+      pendingEngineDraftRef.current = null;
       setNewDraftName('');
       setEngineFile(null);
       const registeredNote = saved.autoRegistered?.created.length
@@ -578,11 +596,36 @@ export default function SchedulePage() {
         `${year}년 ${month}월 초안 생성 완료 — 배정 ${saved.slotCount}건${registeredNote}` +
         (draft.audit.ok ? ', 제약 위반 0건' : `, 위반 ${draft.audit.violations.length}건 확인 필요`)
       );
+      // 동명이인 — 추측 배정하지 않고 보류했다. 담당자가 구분해줘야 채워진다.
+      if (saved.ambiguousNames?.length) {
+        const list = saved.ambiguousNames
+          .slice(0, 3)
+          .map((a) => `${a.name}(${a.candidates.map((c) => c.employeeId).join('/')})`)
+          .join(', ');
+        toast(
+          `동명이인 ${saved.ambiguousNames.length}명은 배정을 보류했습니다: ${list}${saved.ambiguousNames.length > 3 ? ' 외' : ''} — ` +
+          '기초 데이터에서 이름을 구분(예: 김영수A)한 뒤 다시 생성하거나 셀을 직접 채워주세요.',
+          { icon: '⚠️', duration: 10000 },
+        );
+      }
     },
     onError: (err: unknown) => {
+      const resp = (err as {
+        response?: {
+          status?: number;
+          data?: {
+            detail?: string; message?: string;
+            data?: { existingDraft?: { name: string; slotCount: number; manualOverrideCount: number; vehicleOffCount: number } };
+          };
+        };
+      })?.response;
+      // 같은 이름 초안 존재 — 삭제될 내용을 보여주고 덮어쓰기 확인을 받는다
+      if (resp?.status === 409 && resp.data?.data?.existingDraft) {
+        setOverwriteConfirm(resp.data.data.existingDraft);
+        return;
+      }
       const msg =
-        (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data?.detail ||
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        resp?.data?.detail || resp?.data?.message ||
         (err as Error)?.message ||
         '배차표 생성 중 오류가 발생했습니다.';
       toast.error(msg);
@@ -627,28 +670,53 @@ export default function SchedulePage() {
     generateMutation.mutate();
   };
 
-  // 발행 게이트에 걸린 중복 배정 목록 (409 응답) — 강제 발행 확인 UI용
-  const [publishBlockedDups, setPublishBlockedDups] = useState<
-    { driverName: string; date: string }[] | null
-  >(null);
+  // 발행 게이트에 걸린 문제 목록 (409 응답) — 강제 발행 확인 UI용
+  interface PublishBlockInfo {
+    duplicates: { driverName: string; date: string }[];
+    violations: { rule: string; driverName: string; date: string; message: string }[];
+    warnings: { rule: string; message: string }[];
+  }
+  const [publishBlocked, setPublishBlocked] = useState<PublishBlockInfo | null>(null);
 
   const publishMutation = useMutation({
     mutationFn: (opts?: { force?: boolean }) =>
       schedulesApi.publish(year, month, schedule?.id, opts?.force),
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
       toast.success('배차표가 발행되었습니다. 모든 기사님께 알림이 발송됩니다.');
+      // 발행은 됐지만 알아둘 경고 (짧은 휴식 등) — 법 제44조의6 관련
+      const warns = (res.data as { warnings?: { message: string }[] })?.warnings;
+      if (warns?.length) {
+        toast(
+          `주의: 짧은 휴식(오후→다음날 오전) ${warns.length}건이 있습니다. 기사별 보기에서 확인하세요.`,
+          { icon: '⚠️', duration: 8000 },
+        );
+      }
       setShowPublishConfirm(false);
-      setPublishBlockedDups(null);
+      setPublishBlocked(null);
     },
     onError: (err: unknown) => {
       const resp = (err as {
-        response?: { status?: number; data?: { message?: string; data?: { duplicates?: { driverName: string; date: string }[] } } };
+        response?: {
+          status?: number;
+          data?: {
+            message?: string;
+            data?: {
+              duplicates?: { driverName: string; date: string }[];
+              violations?: { rule: string; driverName: string; date: string; message: string }[];
+              warnings?: { rule: string; message: string }[];
+            };
+          };
+        };
       })?.response;
-      // 발행 게이트: 같은 날 중복 배정 — 목록을 보여주고 강제 발행 여부를 묻는다
-      if (resp?.status === 409 && resp.data?.data?.duplicates) {
-        setPublishBlockedDups(resp.data.data.duplicates);
+      // 발행 게이트: 중복 배정·연속근무 초과 — 목록을 보여주고 강제 발행 여부를 묻는다
+      if (resp?.status === 409 && resp.data?.data && (resp.data.data.duplicates || resp.data.data.violations)) {
+        setPublishBlocked({
+          duplicates: resp.data.data.duplicates ?? [],
+          violations: resp.data.data.violations ?? [],
+          warnings: resp.data.data.warnings ?? [],
+        });
         return;
       }
       toast.error(resp?.data?.message || '발행 중 오류가 발생했습니다.');
@@ -2630,7 +2698,7 @@ export default function SchedulePage() {
               취소
             </button>
             <button
-              onClick={() => engineGenerateMutation.mutate()}
+              onClick={() => engineGenerateMutation.mutate({})}
               disabled={engineGenerateMutation.isPending || !engineFile}
               className="btn-primary flex-1 text-base py-3 min-h-[52px] inline-flex items-center justify-center gap-2 disabled:opacity-40"
             >
@@ -2697,31 +2765,92 @@ export default function SchedulePage() {
         </Modal>
       )}
 
-      {/* 발행 게이트 — 같은 날 중복 배정이 있어 발행이 차단됨 */}
-      {publishBlockedDups && (
-        <Modal onClose={() => setPublishBlockedDups(null)} title="발행 차단 — 중복 배정" maxWidth="max-w-md">
+      {/* 재생성 덮어쓰기 확인 — 같은 이름 초안의 작업물이 삭제됨 */}
+      {overwriteConfirm && (
+        <Modal onClose={() => setOverwriteConfirm(null)} title="초안 덮어쓰기 확인" maxWidth="max-w-md">
           <div className="py-2">
-            <AlertTriangle size={48} className="mx-auto text-red-500 mb-4" />
+            <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
             <p className="text-base text-gray-700 dark:text-gray-300 mb-3 text-center">
-              <strong>같은 날 두 번 배정된 기사가 {publishBlockedDups.length}건</strong> 있습니다.
+              같은 이름의 초안 <strong>&ldquo;{overwriteConfirm.name}&rdquo;</strong> 이 이미 있습니다.
               <br />
-              이대로 발행하면 기사앱에는 한 배정만 보여서, 나머지 근무는 아무도 모르게 됩니다.
+              덮어쓰면 아래 작업물이 <strong className="text-red-600 dark:text-red-400">모두 삭제</strong>되고 되돌릴 수 없습니다.
             </p>
-            <ul className="max-h-40 overflow-y-auto rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 space-y-1">
-              {publishBlockedDups.slice(0, 10).map((d, i) => (
-                <li key={i}>
-                  <strong>{d.driverName}</strong> — {d.date.slice(5).replace('-', '/')}
-                </li>
-              ))}
-              {publishBlockedDups.length > 10 && <li>… 외 {publishBlockedDups.length - 10}건</li>}
+            <ul className="rounded-lg bg-amber-50 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-300 space-y-1">
+              <li>· 배정 {overwriteConfirm.slotCount}건</li>
+              <li>· 수동 수정 {overwriteConfirm.manualOverrideCount}건</li>
+              <li>· 감차 표기 {overwriteConfirm.vehicleOffCount}건</li>
             </ul>
             <p className="mt-3 text-sm text-gray-500 dark:text-gray-400 text-center">
-              차량별 보기에서 빨간 테두리 칸을 눌러 중복을 해소한 뒤 다시 발행해주세요.
+              보존하려면 취소 후 초안 이름을 다르게 지정해 생성하세요.
             </p>
           </div>
           <div className="flex gap-3 mt-4">
             <button
-              onClick={() => setPublishBlockedDups(null)}
+              onClick={() => setOverwriteConfirm(null)}
+              className="btn-primary flex-1 text-base py-3 min-h-[52px]"
+            >
+              취소 (기존 초안 보존)
+            </button>
+            <button
+              onClick={() => engineGenerateMutation.mutate({ confirmOverwrite: true })}
+              disabled={engineGenerateMutation.isPending}
+              className="flex-1 text-base py-3 min-h-[52px] rounded-lg border border-red-300 text-red-600 hover:bg-red-50 transition-colors font-medium disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+            >
+              {engineGenerateMutation.isPending ? '저장 중…' : '삭제하고 덮어쓰기'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 발행 게이트 — 중복 배정·연속근무 초과가 있어 발행이 차단됨 */}
+      {publishBlocked && (
+        <Modal onClose={() => setPublishBlocked(null)} title="발행 차단 — 안전 검사" maxWidth="max-w-md">
+          <div className="py-2">
+            <AlertTriangle size={48} className="mx-auto text-red-500 mb-4" />
+            <p className="text-base text-gray-700 dark:text-gray-300 mb-3 text-center">
+              {publishBlocked.duplicates.length > 0 && (
+                <>
+                  <strong>같은 날 두 번 배정된 기사 {publishBlocked.duplicates.length}건</strong>
+                  <br />
+                </>
+              )}
+              {publishBlocked.violations.length > 0 && (
+                <>
+                  <strong>연속근무 한도(6일) 초과 {publishBlocked.violations.length}건</strong>
+                  <br />
+                </>
+              )}
+              이대로 발행하면 과로·이중 배정 상태가 그대로 기사에게 전달됩니다.
+            </p>
+            <ul className="max-h-48 overflow-y-auto rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 space-y-1">
+              {publishBlocked.duplicates.slice(0, 6).map((d, i) => (
+                <li key={`d${i}`}>
+                  중복 — <strong>{d.driverName}</strong> {d.date.slice(5).replace('-', '/')}
+                </li>
+              ))}
+              {publishBlocked.duplicates.length > 6 && (
+                <li>… 중복 외 {publishBlocked.duplicates.length - 6}건</li>
+              )}
+              {publishBlocked.violations.slice(0, 6).map((v, i) => (
+                <li key={`v${i}`}>{v.message}</li>
+              ))}
+              {publishBlocked.violations.length > 6 && (
+                <li>… 연속근무 외 {publishBlocked.violations.length - 6}건</li>
+              )}
+            </ul>
+            {publishBlocked.warnings.length > 0 && (
+              <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                참고: 짧은 휴식(오후→다음날 오전) {publishBlocked.warnings.length}건도 있습니다 —
+                발행을 막지는 않지만 확인을 권합니다.
+              </p>
+            )}
+            <p className="mt-3 text-sm text-gray-500 dark:text-gray-400 text-center">
+              차량별·기사별 보기에서 해당 배정을 고친 뒤 다시 발행해주세요.
+            </p>
+          </div>
+          <div className="flex gap-3 mt-4">
+            <button
+              onClick={() => setPublishBlocked(null)}
               className="btn-primary flex-1 text-base py-3 min-h-[52px]"
             >
               돌아가서 수정하기
