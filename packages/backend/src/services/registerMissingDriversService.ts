@@ -84,6 +84,11 @@ export async function registerMissingDrivers(
     select: { name: true },
   });
   const alreadySet = new Set(already.map((u) => u.name));
+  // 동명이인 — 어느 계정인지 추측할 수 없으므로 생성도 배정도 하지 않는다.
+  // (첫 계정으로 채우면 한 명은 과다 배차, 다른 한 명은 배차표에서 소멸)
+  const nameCount = new Map<string, number>();
+  for (const u of already) nameCount.set(u.name, (nameCount.get(u.name) ?? 0) + 1);
+  const ambiguousSet = new Set([...nameCount.entries()].filter(([, c]) => c > 1).map(([n]) => n));
   const toCreate = names.filter((n) => !alreadySet.has(n));
 
   const ids = await nextEmployeeIds(companyId, toCreate.length);
@@ -160,7 +165,7 @@ export async function registerMissingDrivers(
     const driverId = driverByName.get(name);
     const bus = busByNumber.get(vehicle);
     const routeId = bus?.routeId ?? fallbackRouteId;
-    if (!driverId || !bus || routeId == null) {
+    if (!driverId || !bus || routeId == null || ambiguousSet.has(name)) {
       stillUnmatched[key] = name;
       continue;
     }

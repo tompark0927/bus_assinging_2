@@ -33,6 +33,31 @@ export interface EngineDraftPayload {
   name?: string;
   /** { "2026-08-01": { "6159": EngineCell } } */
   cells: Record<string, Record<string, EngineCell>>;
+  /** 같은 이름 초안이 있을 때 덮어쓰기 승인 — 없으면 DraftOverwriteConflict */
+  confirmOverwrite?: boolean;
+}
+
+/**
+ * 같은 이름의 초안이 이미 있어 덮어쓰기 확인이 필요할 때 던진다.
+ * 이름이 기본값('AI 엔진 초안')이라 충돌이 오히려 일반적인 경우인데,
+ * 확인 없이 진행하면 그 달의 감차 표기·수동 수정이 한 번에 사라진다.
+ */
+export class DraftOverwriteConflict extends Error {
+  constructor(
+    public readonly details: {
+      existingDraftId: number;
+      name: string;
+      slotCount: number;
+      manualOverrideCount: number;
+      vehicleOffCount: number;
+    },
+  ) {
+    super(
+      `같은 이름의 초안 "${details.name}" 이(가) 이미 있습니다. ` +
+        `덮어쓰면 배정 ${details.slotCount}건이 삭제됩니다.`,
+    );
+    this.name = 'DraftOverwriteConflict';
+  }
 }
 
 export interface SaveResult {
@@ -47,6 +72,8 @@ export interface SaveResult {
   };
   /** 엑셀에만 있던 기사를 자동 등록한 결과 (없으면 null) */
   autoRegistered: RegisterResult | null;
+  /** 동명이인이라 배정을 보류한 이름 — 담당자가 사번으로 구분해야 한다 */
+  ambiguousNames: { name: string; candidates: { id: number; employeeId: string }[] }[];
 }
 
 /** 엔진이 기사명 자리에 넣는 비-기사 토큰 (휴무·결행 표기) */
@@ -73,6 +100,35 @@ export async function saveEngineDraft(
   const { year, month, cells } = payload;
   const name = payload.name?.trim() || 'AI 엔진 초안';
 
+  // ── 0. 같은 이름 초안 덮어쓰기 확인 게이트 ──
+  // 아래 트랜잭션은 동명 초안을 통째로 삭제한다. 담당자가 쌓아둔 감차
+  // 표기·수동 수정이 클릭 한 번에 사라지는 사고를 막기 위해, 명시적
+  // 승인(confirmOverwrite) 없이는 삭제될 내용을 알려주며 중단한다.
+  if (!payload.confirmOverwrite) {
+    const existingDraft = await prisma.schedule.findFirst({
+      where: { companyId, year, month, name, status: 'DRAFT' },
+      select: { id: true },
+    });
+    if (existingDraft) {
+      const [slotCount, manualOverrideCount, vehicleOffCount] = await Promise.all([
+        prisma.scheduleSlot.count({ where: { scheduleId: existingDraft.id } }),
+        prisma.scheduleSlot.count({
+          where: { scheduleId: existingDraft.id, isManualOverride: true },
+        }),
+        prisma.schedulePattern.count({
+          where: { scheduleId: existingDraft.id, operating: false },
+        }),
+      ]);
+      throw new DraftOverwriteConflict({
+        existingDraftId: existingDraft.id,
+        name,
+        slotCount,
+        manualOverrideCount,
+        vehicleOffCount,
+      });
+    }
+  }
+
   // ── 1. 등장하는 차량번호·기사명 수집 ──
   const vehicleNumbers = new Set<string>();
   const driverNames = new Set<string>();
@@ -92,26 +148,36 @@ export async function saveEngineDraft(
     }),
     prisma.user.findMany({
       where: { companyId, name: { in: [...driverNames] } },
-      select: { id: true, name: true },
+      select: { id: true, name: true, employeeId: true },
     }),
   ]);
 
   const busByNumber = new Map(buses.map((b) => [b.busNumber, b]));
-  // 동명이인은 첫 번째만 사용하고 경고 — 이름으로만 매칭하는 구조적 한계
-  const driverByName = new Map<string, number>();
-  const duplicateNames: string[] = [];
+  // 동명이인은 **배정하지 않는다**. 첫 계정으로 추측 배정하면 김영수 A는
+  // 과다 배차되고 김영수 B는 배차표·급여에서 사라지는데, 둘 다 조용히
+  // 일어난다. 대신 그 이름의 셀을 미매칭으로 남겨 화면에 주황으로 드러내고,
+  // 후보 사번 목록을 함께 돌려줘 담당자가 구분(개명·사번 표기)하게 한다.
+  const byName = new Map<string, { id: number; employeeId: string }[]>();
   for (const d of drivers) {
-    if (driverByName.has(d.name)) duplicateNames.push(d.name);
-    else driverByName.set(d.name, d.id);
+    const list = byName.get(d.name) ?? [];
+    list.push({ id: d.id, employeeId: d.employeeId });
+    byName.set(d.name, list);
   }
-  if (duplicateNames.length) {
+  const driverByName = new Map<string, number>();
+  const ambiguousNames: { name: string; candidates: { id: number; employeeId: string }[] }[] = [];
+  for (const [n, list] of byName) {
+    if (list.length === 1) driverByName.set(n, list[0].id);
+    else ambiguousNames.push({ name: n, candidates: list });
+  }
+  if (ambiguousNames.length) {
     logger.warn(
-      `[engineSchedule] 동명이인 발견 — 첫 계정으로 배정: ${duplicateNames.join(', ')}`,
+      `[engineSchedule] 동명이인 ${ambiguousNames.length}명 — 배정 보류(미매칭 처리): ` +
+        ambiguousNames.map((a) => a.name).join(', '),
     );
   }
 
   const unmatchedVehicles = [...vehicleNumbers].filter((v) => !busByNumber.has(v));
-  const unmatchedDrivers = [...driverNames].filter((n) => !driverByName.has(n));
+  const unmatchedDrivers = [...driverNames].filter((n) => !driverByName.has(n) && !byName.has(n));
 
   // 매칭된 차량이 하나도 없으면 저장해봐야 빈 배차표다 — 원인을 알려주고 중단
   if (busByNumber.size === 0) {
@@ -196,6 +262,8 @@ export async function saveEngineDraft(
           source: 'engine',
           unmatchedCells,
           unmatchedDrivers: unmatchedDrivers.slice(0, 200),
+          // 동명이인 — registerMissingDrivers 가 추측으로 채우지 않도록 기록
+          ambiguousNames: ambiguousNames.map((a) => a.name),
         }),
       },
       select: { id: true },
@@ -246,6 +314,7 @@ export async function saveEngineDraft(
     slotCount: slotRows.length + (autoRegistered?.filledCells ?? 0),
     unmatched: { vehicles: unmatchedVehicles, drivers: remainingDrivers },
     autoRegistered,
+    ambiguousNames,
   };
 }
 

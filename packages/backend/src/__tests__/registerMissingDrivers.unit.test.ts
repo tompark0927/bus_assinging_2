@@ -134,6 +134,25 @@ describe('registerMissingDrivers — 멱등성·이중 배정 방지', () => {
     expect(saved.otherMeta).toBe('keep-me');
   });
 
+  it('동명이인은 생성도 배정도 하지 않고 미매칭으로 남긴다', async () => {
+    arrange({
+      unmatchedCells: { '2026-08-01|2292|MORNING': '김영수' },
+      // 회사에 김영수가 두 명 — 어느 쪽인지 추측 금지
+      existingUsers: [
+        { id: 41, name: '김영수' },
+        { id: 42, name: '김영수' },
+      ],
+    });
+    const r = await registerMissingDrivers(1, 7);
+    expect(r.created).toHaveLength(0);
+    expect(r.filledCells).toBe(0);
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
+    expect(mockPrisma.scheduleSlot.createMany).not.toHaveBeenCalled();
+    // 셀은 여전히 미매칭으로 남아 화면에 주황으로 드러난다
+    const saved = JSON.parse(mockPrisma.schedule.update.mock.calls[0][0].data.notes);
+    expect(saved.unmatchedCells).toEqual({ '2026-08-01|2292|MORNING': '김영수' });
+  });
+
   it('발행된 배차표는 거부한다', async () => {
     jest.clearAllMocks();
     mockPrisma.schedule.findFirst.mockResolvedValue({
