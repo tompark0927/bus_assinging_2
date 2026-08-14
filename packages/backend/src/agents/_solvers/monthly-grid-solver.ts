@@ -490,9 +490,28 @@ function pickDriver(args: PickArgs): PickResult {
     { list: emergencyCandidates, familiarity: 'CROSS_ROUTE', isEmergency: true },
   ];
 
-  for (const tier of tiers) {
-    const ranked = rankCandidates(tier.list, slot, ctx, policy);
-    for (const cand of ranked) {
+  // 2단 통과 — 1차는 "연속 근무 블록의 시프트를 지키는 후보"만 본다.
+  //
+  // 티어(HOME > SAME_ROUTE > ...)가 하드 우선순위라, 짝꿍이 쉬는 날 홈 기사가
+  // 한 명만 남으면 그 사람이 자기 블록 시프트와 무관하게 먼저 처리되는 슬롯
+  // (오전)에 들어간다 — 비용을 아무리 높여도 같은 티어에 경쟁자가 없어
+  // 소용이 없었다. 그래서 "블록 유지"를 티어보다 앞선 기준으로 올린다.
+  // 현장 방식과도 같다: 짝꿍이 쉬면 그 자리를 스페어가 메우고, 남은 기사는
+  // 자기 시프트를 그대로 간다.
+  // 1차에서 아무도 못 찾으면 2차에서 조건을 풀어 미배정을 만들지 않는다.
+  // 정렬은 티어당 한 번만 — candidateCost 가 비싸 2단 통과가 두 번 정렬하면
+  // 솔버 실행 시간이 배로 뛴다.
+  const rankedTiers = tiers.map((t) => ({ ...t, ranked: rankCandidates(t.list, slot, ctx, policy) }));
+  for (const keepBlock of [true, false]) {
+  for (const tier of rankedTiers) {
+    for (const cand of tier.ranked) {
+      // 블록 시프트 유지 — 어제 근무했다면 같은 시프트여야 한다
+      if (keepBlock) {
+        const prev = ctx.driverSlots
+          .get(cand.id)
+          ?.find((s) => s.date === previousDate(slot.date));
+        if (prev && prev.shift !== slot.shift) continue;
+      }
       // 계획 휴무
       if (restPlan.restDays.get(cand.id)?.has(slot.date)) continue;
       // 헌법 + restCycle 룰 검증
@@ -509,6 +528,7 @@ function pickDriver(args: PickArgs): PickResult {
         reason: tier.isEmergency ? 'EMERGENCY_FALLBACK' : 'OK',
       };
     }
+  }
   }
 
   return {
@@ -530,6 +550,20 @@ function rankCandidates(
 }
 
 /** 후보 비용 — 작을수록 우선. 정책 기반. */
+/** 다음날 (YYYY-MM-DD) */
+function nextDate(date: string): string {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** 전날 (YYYY-MM-DD) — 연속 근무 블록 판정용 */
+function previousDate(date: string): string {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 function candidateCost(
   driver: SolverDriver,
   slot: { date: string; shift: ShiftSlot; routeId: number },
@@ -555,7 +589,11 @@ function candidateCost(
   } else if (projectedEval.tier === 'ACCEPTABLE_HIGH') {
     workloadCost = 50;
   } else if (projectedEval.exempted) {
-    workloadCost = 100;
+    // 스페어(하한 면제) — 예전엔 일률적으로 100 이라 0일짜리와 17일짜리가
+    // 같은 값이었다. 그래서 스페어끼리 부하가 전혀 분산되지 않고 누구는 4일,
+    // 누구는 21일이 됐다. 고정기사보다는 뒤에 두되(+40), 스페어끼리는
+    // 적게 일한 사람이 먼저 뽑히도록 현재 부하에 비례시킨다.
+    workloadCost = 40 + current;
   } else if (projectedEval.tier === 'SWEET_SPOT') {
     // sweet 안 — current 를 sweet 중심에서 약간 우선 (underloaded 미세 선호)
     const center = (sweet.min + sweet.max) / 2;
@@ -565,6 +603,15 @@ function candidateCost(
     // 현재 workload 가 작을수록 비용 낮음 (가장 부족한 운전자 먼저 채움)
     workloadCost = current; // 0 → 0, 5일 → 5, 10일 → 10
   }
+
+  // 2-a) 연속 근무 블록 안에서는 시프트를 바꾸지 않는다.
+  //      현장은 "5일 내리 오후" 처럼 한 블록을 같은 시프트로 간다. 중간에
+  //      오전이 끼면 오후→다음날 오전(휴식 8시간 미만)이 만들어지고, 기사도
+  //      생활 리듬이 깨진다. 휴무로 블록이 끊긴 뒤에는 자유롭게 바꾼다.
+  const prevDaySlot = ctx.driverSlots
+    .get(driver.id)
+    ?.find((s) => s.date === previousDate(slot.date));
+  const blockShiftCost = prevDaySlot && prevDaySlot.shift !== slot.shift ? 300 : 0;
 
   // 2) 주간 슬롯 일관성 — 이번 주에 이미 다른 슬롯 한 적 있으면 페널티
   const weekSlots = sameWeekSlots(ctx, driver.id, slot.date);
@@ -595,7 +642,8 @@ function candidateCost(
     ? 2 // 약한 타이브레이커 — 근무일 밴드 결정을 뒤집지 않도록 작게 유지 (12→2)
     : 0;
 
-  return workloadCost + consistencyCost + alternationCost + fatigueCost + weekendCost + preferenceCost;
+  return workloadCost + blockShiftCost + consistencyCost + alternationCost
+    + fatigueCost + weekendCost + preferenceCost;
 }
 
 function sameWeekSlots(
@@ -883,10 +931,12 @@ function localSearch(
     const sb = slots[b];
     if (sa.driverId === sb.driverId) continue;
 
-    // 다양한 swap 종류 허용 (이전: 같은 routeId + 같은 shift 만):
-    //   - 기본: 같은 노선 (familiarity 보존)
-    //   - 시프트는 다를 수 있음 (TWO_SHIFT 의 AM↔PM 도 한 노선 내라면 허용)
+    // 같은 노선 안에서만 교환 (familiarity 보존)
     if (sa.routeId !== sb.routeId) continue;
+    // 시프트가 다른 슬롯끼리는 바꾸지 않는다 — Phase B 가 맞춰 놓은 연속 근무
+    // 블록의 시프트(5일 내리 오후)를 지역 탐색이 되돌려 놓기 때문이다.
+    // 근무일수 균형은 같은 시프트 안에서의 교환·REASSIGN 으로도 충분히 잡힌다.
+    if (sa.shift !== sb.shift) continue;
 
     if (!canSwap(ctx, sa, sb, restCycle, policy, monthStart, monthEnd)) continue;
 
