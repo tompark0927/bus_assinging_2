@@ -22,7 +22,7 @@ import {
   OVERRIDE_CODES, getCellCandidates, setCellDriver, type OverrideCode,
 } from '../services/cellEditService';
 import { explainCell } from '../services/explainCellService';
-import { registerMissingDrivers } from '../services/registerMissingDriversService';
+import { rematchUnmatchedCells } from '../services/rematchDriversService';
 import { setVehicleOff } from '../services/vehicleOffService';
 import { buildDailyPostingXlsx } from '../services/dailyPostingExport';
 import logger from '../utils/logger';
@@ -329,10 +329,13 @@ router.get('/by-id/:id/export-daily', async (req: AuthRequest, res) => {
 
 /**
  * @swagger
- * /schedules/by-id/{id}/register-missing-drivers:
+ * /schedules/by-id/{id}/rematch-drivers:
  *   post:
- *     summary: 엑셀엔 있는데 기초 데이터에 없는 기사를 일괄 등록하고 빈 칸을 메운다
- *     description: 계정(로그인)은 만들지 않는다 — 배차에 필요한 건 사람 레코드지 로그인이 아니다.
+ *     summary: 기초 데이터와 다시 맞추기 — 지금 등록된 기사의 칸만 채운다
+ *     description: >
+ *       기사 계정을 만들지 않는다. 배차는 회사가 기초 데이터에 등록한 사람으로만
+ *       짜야 하므로, 엑셀에만 있던 이름은 담당자가 기초 데이터에 등록한 뒤
+ *       이 API 를 호출해야 채워진다.
  *     tags: [Schedules]
  */
 /**
@@ -362,13 +365,13 @@ router.put('/by-id/:id/vehicle-off', requireRole('DISPATCH'), async (req: AuthRe
   }
 });
 
-router.post('/by-id/:id/register-missing-drivers', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+router.post('/by-id/:id/rematch-drivers', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {
-    const result = await registerMissingDrivers(req.user!.companyId, Number(req.params.id));
+    const result = await rematchUnmatchedCells(req.user!.companyId, Number(req.params.id));
     return res.json({ success: true, data: result });
   } catch (error) {
-    const msg = error instanceof Error ? error.message : '등록에 실패했습니다.';
-    logger.error(`[schedules/register-missing] ${msg}`);
+    const msg = error instanceof Error ? error.message : '다시 맞추기에 실패했습니다.';
+    logger.error(`[schedules/rematch] ${msg}`);
     return res.status(422).json({ success: false, message: msg });
   }
 });

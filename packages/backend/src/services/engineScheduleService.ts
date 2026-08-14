@@ -1,7 +1,6 @@
 import { Prisma, ShiftType } from '@prisma/client';
 import { prisma } from '../utils/prisma';
 import logger from '../utils/logger';
-import { registerMissingDrivers, RegisterResult } from './registerMissingDriversService';
 
 /**
  * 배차 엔진(Python) 생성 결과를 DB 배차표로 영속화한다.
@@ -70,8 +69,6 @@ export interface SaveResult {
     /** DB에 없는 기사 이름 — 자동 등록까지 실패한 잔여분 */
     drivers: string[];
   };
-  /** 엑셀에만 있던 기사를 자동 등록한 결과 (없으면 null) */
-  autoRegistered: RegisterResult | null;
   /** 동명이인이라 배정을 보류한 이름 — 담당자가 사번으로 구분해야 한다 */
   ambiguousNames: { name: string; candidates: { id: number; employeeId: string }[] }[];
 }
@@ -284,36 +281,22 @@ export async function saveEngineDraft(
       `미매칭(차량 ${unmatchedVehicles.length}/기사 ${unmatchedDrivers.length})`,
   );
 
-  // ── 5. 미등록 기사 자동 등록 + 빈칸 메우기 ──
-  // 배차표는 기초 데이터로부터 완성된 상태로 태어나야 한다. 엑셀에만 있던
-  // 이름을 주황색 경고로 남겨두면 "표가 30% 비어 보이는" 반쪽짜리 초안이 되므로,
-  // 저장 직후 바로 사람 레코드를 만들어(로그인 수단 없이) 칸을 채운다.
-  // 실패해도 저장 자체는 유효 — 기존처럼 미매칭 경고로 내려보낸다.
-  let autoRegistered: RegisterResult | null = null;
-  let remainingDrivers = unmatchedDrivers;
-  if (Object.keys(unmatchedCells).length > 0) {
-    try {
-      autoRegistered = await registerMissingDrivers(companyId, scheduleId);
-      const resolved = new Set([
-        ...autoRegistered.created.map((c) => c.name),
-        ...autoRegistered.skipped,
-      ]);
-      remainingDrivers = unmatchedDrivers.filter((n) => !resolved.has(n));
-      logger.info(
-        `[engineSchedule] 미등록 기사 자동 등록 — ${autoRegistered.created.length}명, ` +
-          `${autoRegistered.filledCells}칸 채움`,
-      );
-    } catch (e) {
-      logger.error(`[engineSchedule] 자동 등록 실패: ${e instanceof Error ? e.message : e}`);
-    }
-  }
+  // 기사 계정은 여기서 만들지 않는다.
+  //
+  // 배차는 **기초 데이터에 등록된 사람으로만** 짜야 한다. 엑셀에 적힌 이름을
+  // 근거로 사람 레코드를 자동 생성하면, 회사가 등록한 적 없는 기사가 배차표에
+  // 들어가고 그 사람 앞으로 근무·급여·기사앱 계정이 생긴다. 오타 하나가
+  // 새 직원이 되기도 한다. 시스템이 사람을 만들어낼 권한은 없다.
+  //
+  // 그래서 매칭 실패는 조용히 메우지 않고 그대로 드러낸다: 셀은 미등록
+  // (주황)으로 남고, 발행 게이트(E2/UNREGISTERED)가 발행을 막는다. 담당자가
+  // 기초 데이터에 정식으로 등록하거나 이름을 고쳐야 해소된다.
 
   return {
     scheduleId,
     patternCount: patternRows.length,
-    slotCount: slotRows.length + (autoRegistered?.filledCells ?? 0),
-    unmatched: { vehicles: unmatchedVehicles, drivers: remainingDrivers },
-    autoRegistered,
+    slotCount: slotRows.length,
+    unmatched: { vehicles: unmatchedVehicles, drivers: unmatchedDrivers },
     ambiguousNames,
   };
 }
