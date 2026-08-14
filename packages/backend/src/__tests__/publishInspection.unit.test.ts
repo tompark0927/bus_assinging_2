@@ -31,10 +31,22 @@ function run(driverId: number, name: string, startDay: number, n: number) {
 }
 
 describe('inspectScheduleForPublish', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // 기본: 패턴(운행 계획) 없음 → E2 검사 대상 아님
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([]);
+    mockPrisma.schedule.findUnique.mockResolvedValue({ notes: null });
+  });
 
   const arrange = (slots: unknown[]) =>
     mockPrisma.scheduleSlot.findMany.mockResolvedValue(slots);
+
+  /** 운행 차량 패턴 */
+  const pattern = (date: string, busId: number, busNumber: string) => ({
+    date: new Date(`${date}T00:00:00.000Z`),
+    busId,
+    bus: { busNumber },
+  });
 
   it('7일 연속 근무 → E3 오류 1건 (시작일 기준)', async () => {
     arrange(run(1, '김영수', 1, 7));
@@ -107,6 +119,75 @@ describe('inspectScheduleForPublish', () => {
         }),
       }),
     );
+  });
+
+  // ── E2 빈 자리 (공석) — 버스가 나갈 수 없는 칸 ──
+
+  it('운행 차량인데 오전·오후가 비면 공석 2칸으로 잡는다', async () => {
+    arrange([]);
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([pattern('2026-09-01', 10, '2292')]);
+    const r = await inspectScheduleForPublish(5);
+    expect(r.counts.vacant).toBe(2);
+    expect(r.counts.unregistered).toBe(0);
+    expect(r.errors.filter((e) => e.rule === 'E2')).toHaveLength(2);
+    expect(r.errors[0]).toMatchObject({ rule: 'E2', kind: 'VACANT', vehicle: '2292' });
+  });
+
+  it('오전만 배정되면 오후 1칸만 공석', async () => {
+    arrange([slot(1, '김영수', '2026-09-01', 'MORNING')].map((s) => ({ ...s, busId: 10 })));
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([pattern('2026-09-01', 10, '2292')]);
+    const r = await inspectScheduleForPublish(5);
+    expect(r.counts.vacant).toBe(1);
+    expect(r.errors[0].shift).toBe('AFTERNOON');
+  });
+
+  it('종일 근무는 오전·오후를 모두 채운 것으로 본다', async () => {
+    arrange([{ ...slot(1, '김영수', '2026-09-01', 'FULL_DAY'), busId: 10 }]);
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([pattern('2026-09-01', 10, '2292')]);
+    const r = await inspectScheduleForPublish(5);
+    expect(r.counts.vacant).toBe(0);
+  });
+
+  it('감차(operating=false) 차량은 빈 칸이어도 공석이 아니다 — 조회에서 제외', async () => {
+    arrange([]);
+    await inspectScheduleForPublish(5);
+    expect(mockPrisma.schedulePattern.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { scheduleId: 5, operating: true } }),
+    );
+  });
+
+  it('엑셀엔 이름이 있는데 미등록이라 저장 못 한 칸은 UNREGISTERED 로 구분한다', async () => {
+    arrange([]);
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([pattern('2026-09-01', 10, '2292')]);
+    mockPrisma.schedule.findUnique.mockResolvedValue({
+      notes: JSON.stringify({
+        unmatchedCells: { '2026-09-01|2292|MORNING': '홍길동' },
+      }),
+    });
+    const r = await inspectScheduleForPublish(5);
+    expect(r.counts.unregistered).toBe(1);
+    expect(r.counts.vacant).toBe(1); // 오후는 이름조차 없음
+    const un = r.errors.find((e) => e.kind === 'UNREGISTERED');
+    expect(un?.message).toContain('홍길동');
+    expect(un?.message).toContain('미등록');
+  });
+
+  it('패턴이 없는 옛 배차표는 공석 검사를 하지 않는다 (오탐 방지)', async () => {
+    arrange([]);
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([]);
+    const r = await inspectScheduleForPublish(5);
+    expect(r.counts.vacant).toBe(0);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it('목록은 상한을 두되 전체 건수는 counts 로 정확히 보고한다', async () => {
+    arrange([]);
+    mockPrisma.schedulePattern.findMany.mockResolvedValue(
+      Array.from({ length: 60 }, (_, i) => pattern('2026-09-01', i + 1, `${2000 + i}`)),
+    );
+    const r = await inspectScheduleForPublish(5);
+    expect(r.counts.vacant).toBe(120);
+    expect(r.errors.length).toBeLessThanOrEqual(50);
   });
 
   it('기사 여러 명이 섞여도 각자 따로 계산한다', async () => {
