@@ -34,6 +34,7 @@ import {
 } from '../agents/_solvers/types';
 import { uniqueScheduleName } from './scheduleService';
 import { buildOperatingPlan, persistRestingVehicles } from './operatingPlanService';
+import { fillVacancies } from './vacancyFillService';
 
 // ─────────────────────────────────────────────
 // 순수 헬퍼 — 선호 노선 정렬
@@ -709,6 +710,10 @@ export async function persistSolverOutput(args: PersistArgs): Promise<{
 export interface GenerateScheduleV2Result {
   scheduleId: number;
   slotsCreated: number;
+  /** 솔버가 못 채운 칸을 사후에 메운 수 */
+  vacancyFilled: number;
+  /** 안전 규칙상 채울 수 없어 남은 공석 */
+  stillVacant: number;
   output: SolverOutput;
   policyUsed: PolicyPreset | 'CUSTOM';
   elapsedMs: number;
@@ -802,9 +807,24 @@ export async function generateMonthlyScheduleV2(args: {
     logger.info(`[SolverDispatch] 감차 ${restingSaved}건 기록 (운행 칸 ${plan.totalCells})`);
   }
 
+  // 솔버가 못 채운 칸을 남은 인력으로 메운다. 공석 = 그 버스가 안 나간다는
+  // 뜻이라 배차표로서 미완성이다. 안전 규칙(이중배정·연속근무·짧은휴식)을
+  // 어겨야만 채울 수 있는 칸은 비워둔 채 보고한다.
+  let vacancyFilled = 0;
+  let stillVacant = 0;
+  try {
+    const f = await fillVacancies(args.companyId, persisted.scheduleId);
+    vacancyFilled = f.filled;
+    stillVacant = f.stillVacant.length;
+  } catch (e) {
+    logger.error(`[SolverDispatch] 공석 채우기 실패: ${(e as Error).message}`);
+  }
+
   return {
     scheduleId: persisted.scheduleId,
-    slotsCreated: persisted.slotsCreated,
+    slotsCreated: persisted.slotsCreated + vacancyFilled,
+    vacancyFilled,
+    stillVacant,
     output,
     policyUsed: policy.preset ?? 'CUSTOM',
     elapsedMs: Date.now() - start,
