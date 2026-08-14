@@ -70,6 +70,59 @@ const nextDay = (key: string) => {
   return dateKey(d);
 };
 
+/**
+ * 그날 운행해야 하는 (날짜×차량) 목록.
+ *
+ * 1순위는 SchedulePattern(엔진이 만든 운행 계획, 감차 = operating:false).
+ * 패턴이 없는 배차표(솔버 생성분)는 "감차로 지정하지 않은 모든 차량은 매일
+ * 오전·오후 각 1명씩 나간다"는 현장 규칙을 그대로 적용한다 — 활성 차량 ×
+ * 그 달 전체 날짜. 이 기준이 없으면 솔버 배차표의 빈 칸이 검사를 통째로
+ * 빠져나가 '버스가 못 나가는 배차표'가 그대로 발행된다.
+ */
+async function operatingCells(
+  scheduleId: number,
+): Promise<{ date: Date; busId: number; busNumber: string }[]> {
+  const patterns = await prisma.schedulePattern.findMany({
+    where: { scheduleId, operating: true },
+    select: { date: true, busId: true, bus: { select: { busNumber: true } } },
+  });
+  if (patterns.length > 0) {
+    return patterns.map((p) => ({
+      date: p.date,
+      busId: p.busId,
+      busNumber: p.bus?.busNumber ?? `#${p.busId}`,
+    }));
+  }
+
+  // 패턴 없음 → 활성 차량 × 그 달 날짜에서, 명시적 감차만 제외
+  const schedule = await prisma.schedule.findUnique({
+    where: { id: scheduleId },
+    select: { companyId: true, year: true, month: true },
+  });
+  if (!schedule) return [];
+  const [buses, off] = await Promise.all([
+    prisma.bus.findMany({
+      where: { companyId: schedule.companyId, isActive: true, NOT: { routeId: null } },
+      select: { id: true, busNumber: true },
+    }),
+    prisma.schedulePattern.findMany({
+      where: { scheduleId, operating: false },
+      select: { date: true, busId: true },
+    }),
+  ]);
+  const offSet = new Set(off.map((o) => `${dateKey(o.date)}|${o.busId}`));
+  const daysInMonth = new Date(Date.UTC(schedule.year, schedule.month, 0)).getUTCDate();
+  const out: { date: Date; busId: number; busNumber: string }[] = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = new Date(Date.UTC(schedule.year, schedule.month - 1, d));
+    for (const b of buses) {
+      if (offSet.has(`${dateKey(date)}|${b.id}`)) continue;
+      out.push({ date, busId: b.id, busNumber: b.busNumber });
+    }
+  }
+  return out;
+}
+
 export async function inspectScheduleForPublish(scheduleId: number): Promise<PublishInspection> {
   // 실제로 운행하는 슬롯만 — 휴무·드랍·결근은 근무가 아니다
   // (발행 게이트의 중복 검사와 같은 술어. 드랍/결근 칸은 E2 에서 '빈 칸'으로 잡힌다)
@@ -88,11 +141,8 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
         driver: { select: { name: true } },
       },
     }),
-    // 운행 여부의 근거는 SchedulePattern.operating (감차 = false)
-    prisma.schedulePattern.findMany({
-      where: { scheduleId, operating: true },
-      select: { date: true, busId: true, bus: { select: { busNumber: true } } },
-    }),
+    // 그날 운행해야 하는 (날짜×차량) — 패턴 우선, 없으면 활성 차량×전일
+    operatingCells(scheduleId),
     prisma.schedule.findUnique({ where: { id: scheduleId }, select: { notes: true } }),
   ]);
 
@@ -121,13 +171,11 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
   }
 
   // ── E2 빈 자리 — 운행 차량인데 기사가 없는 칸 ──
-  // 패턴(운행 계획)이 없는 옛 배차표는 "어느 차가 그날 나가야 하는지"를 알 수
-  // 없어 검사하지 않는다. 없는 근거로 발행을 막으면 오탐이 된다.
   const meta = parseScheduleMeta(schedule?.notes ?? null);
   const unmatchedCells = (meta.unmatchedCells ?? {}) as Record<string, string>;
   for (const p of patterns) {
     const dk = dateKey(p.date);
-    const busNo = p.bus?.busNumber ?? `#${p.busId}`;
+    const busNo = p.busNumber;
     for (const sh of ['MORNING', 'AFTERNOON'] as const) {
       if (filledCell.has(`${dk}|${p.busId}|${sh}`)) continue;
       const pendingName = unmatchedCells[`${dk}|${busNo}|${sh}`];

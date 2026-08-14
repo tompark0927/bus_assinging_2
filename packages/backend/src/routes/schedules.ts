@@ -17,7 +17,9 @@ import {
   renameSchedule,
 } from '../controllers/scheduleController';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-import { saveEngineDraft, getPostingView, DraftOverwriteConflict } from '../services/engineScheduleService';
+import {
+  saveEngineDraft, getPostingView, DraftOverwriteConflict, RosterMismatchError,
+} from '../services/engineScheduleService';
 import {
   OVERRIDE_CODES, getCellCandidates, setCellDriver, type OverrideCode,
 } from '../services/cellEditService';
@@ -236,16 +238,25 @@ router.post(
  */
 router.post('/from-engine', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {
-    const { year, month, name, cells, confirmOverwrite } = req.body ?? {};
+    const { year, month, name, cells, confirmOverwrite, confirmMismatch } = req.body ?? {};
     if (!Number.isInteger(year) || !Number.isInteger(month) || !cells || typeof cells !== 'object') {
       return res.status(400).json({ success: false, message: 'year, month, cells 가 필요합니다.' });
     }
     const result = await saveEngineDraft(req.user!.companyId, req.user!.id, {
       year, month, name, cells,
       confirmOverwrite: confirmOverwrite === true,
+      confirmMismatch: confirmMismatch === true,
     });
     return res.json({ success: true, data: result });
   } catch (error) {
+    // 파일 명단이 기초 데이터와 안 맞음 — 다른 회사·철 지난 파일 방어
+    if (error instanceof RosterMismatchError) {
+      return res.status(409).json({
+        success: false,
+        message: error.message,
+        data: { rosterMismatch: error.details },
+      });
+    }
     // 같은 이름 초안 덮어쓰기 확인 필요 — 삭제될 내용을 프론트에 알려준다
     if (error instanceof DraftOverwriteConflict) {
       return res.status(409).json({

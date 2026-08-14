@@ -594,10 +594,15 @@ export default function SchedulePage() {
   const [overwriteConfirm, setOverwriteConfirm] = useState<{
     name: string; slotCount: number; manualOverrideCount: number; vehicleOffCount: number;
   } | null>(null);
+  // 업로드 파일 명단이 기초 데이터와 안 맞을 때 (다른 회사·철 지난 파일 방어)
+  const [rosterMismatch, setRosterMismatch] = useState<{
+    totalNames: number; matchedNames: number; unmatchedNames: string[];
+    unmatchedRate: number; totalVehicles: number; unmatchedVehicles: string[];
+  } | null>(null);
 
   const engineGenerateMutation = useMutation({
-    mutationFn: async (opts?: { confirmOverwrite?: boolean }) => {
-      let draft = opts?.confirmOverwrite ? pendingEngineDraftRef.current : null;
+    mutationFn: async (opts?: { confirmOverwrite?: boolean; confirmMismatch?: boolean }) => {
+      let draft = (opts?.confirmOverwrite || opts?.confirmMismatch) ? pendingEngineDraftRef.current : null;
       if (!draft) {
         if (!engineFile) throw new Error('배차표 엑셀을 선택해 주세요.');
         const form = new FormData();
@@ -629,6 +634,7 @@ export default function SchedulePage() {
         name: newDraftName.trim() || undefined,
         cells: draft.cells,
         confirmOverwrite: opts?.confirmOverwrite,
+        confirmMismatch: opts?.confirmMismatch,
       })).data.data as {
         scheduleId: number; slotCount: number;
         unmatched: { vehicles: string[]; drivers: string[] };
@@ -644,6 +650,7 @@ export default function SchedulePage() {
       setEngineUnmatched(saved.unmatched);
       setShowGenerateModal(false);
       setOverwriteConfirm(null);
+      setRosterMismatch(null);
       pendingEngineDraftRef.current = null;
       setNewDraftName('');
       setEngineFile(null);
@@ -674,10 +681,21 @@ export default function SchedulePage() {
           status?: number;
           data?: {
             detail?: string; message?: string;
-            data?: { existingDraft?: { name: string; slotCount: number; manualOverrideCount: number; vehicleOffCount: number } };
+            data?: {
+              existingDraft?: { name: string; slotCount: number; manualOverrideCount: number; vehicleOffCount: number };
+              rosterMismatch?: {
+                totalNames: number; matchedNames: number; unmatchedNames: string[];
+                unmatchedRate: number; totalVehicles: number; unmatchedVehicles: string[];
+              };
+            };
           };
         };
       })?.response;
+      // 파일 명단이 기초 데이터와 안 맞음 — 잘못된 파일인지 먼저 확인시킨다
+      if (resp?.status === 409 && resp.data?.data?.rosterMismatch) {
+        setRosterMismatch(resp.data.data.rosterMismatch);
+        return;
+      }
       // 같은 이름 초안 존재 — 삭제될 내용을 보여주고 덮어쓰기 확인을 받는다
       if (resp?.status === 409 && resp.data?.data?.existingDraft) {
         setOverwriteConfirm(resp.data.data.existingDraft);
@@ -2893,6 +2911,55 @@ export default function SchedulePage() {
               )}
             </button>
           </div>
+        </Modal>
+      )}
+
+      {/* 업로드 파일 명단 대조 — 다른 회사·철 지난 파일이 아닌지 먼저 확인 */}
+      {rosterMismatch && (
+        <Modal onClose={() => setRosterMismatch(null)} title="이 파일이 맞나요?" maxWidth="max-w-md">
+          <div className="py-2">
+            <AlertTriangle size={48} className="mx-auto text-red-500 mb-4" />
+            <p className="text-center text-base text-gray-700 dark:text-gray-300">
+              파일에 있는 기사 <strong>{rosterMismatch.totalNames}명</strong> 중{' '}
+              <strong className="text-red-600 dark:text-red-400">
+                {rosterMismatch.unmatchedNames.length}명({Math.round(rosterMismatch.unmatchedRate * 100)}%)
+              </strong>
+              이 기초 데이터에 없습니다.
+            </p>
+            <p className="mt-2 text-center text-sm text-gray-500 dark:text-gray-400">
+              <strong>다른 회사 배차표</strong>이거나 <strong>오래된 파일</strong>일 가능성이 높습니다.
+              배차는 기초 데이터에 등록된 기사로만 짤 수 있습니다.
+            </p>
+            <div className="mt-3 max-h-32 overflow-y-auto rounded-lg bg-red-50 p-3 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300">
+              {rosterMismatch.unmatchedNames.slice(0, 30).join(', ')}
+              {rosterMismatch.unmatchedNames.length > 30 &&
+                ` 외 ${rosterMismatch.unmatchedNames.length - 30}명`}
+            </div>
+            {rosterMismatch.unmatchedVehicles.length > 0 && (
+              <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                기초 데이터에 없는 차량도 {rosterMismatch.unmatchedVehicles.length}대 있습니다:{' '}
+                {rosterMismatch.unmatchedVehicles.slice(0, 10).join(', ')}
+              </p>
+            )}
+          </div>
+          <div className="mt-4 flex gap-3">
+            <button
+              onClick={() => setRosterMismatch(null)}
+              className="btn-primary flex-1 min-h-[52px] py-3 text-base"
+            >
+              다른 파일 선택
+            </button>
+            <button
+              onClick={() => engineGenerateMutation.mutate({ confirmMismatch: true })}
+              disabled={engineGenerateMutation.isPending}
+              className="flex-1 min-h-[52px] rounded-lg border border-red-300 py-3 text-base font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+            >
+              {engineGenerateMutation.isPending ? '저장 중…' : '맞는 파일입니다, 진행'}
+            </button>
+          </div>
+          <p className="mt-2 text-center text-xs text-gray-400">
+            진행하면 그 {rosterMismatch.unmatchedNames.length}명의 칸은 비어 있게 되고 발행할 수 없습니다.
+          </p>
         </Modal>
       )}
 
