@@ -323,7 +323,7 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
   // ── Phase C: 로컬 서치 ───
   const iterations = input.localSearchIterations ?? 1000;
   const searchRng = createRng(input.randomSeed ?? DEFAULT_SOLVER_SEED);
-  const swaps = localSearch(ctx, slots, unfilled, input.drivers, weights, restCycle, policy, iterations, monthStart, searchRng, monthEnd);
+  const swaps = localSearch(ctx, slots, unfilled, input.drivers, weights, restCycle, policy, iterations, monthStart, searchRng, monthEnd, restPlan);
 
   // ── 메트릭 ───
   const violations = validateFullGrid(input.drivers, slots, monthStart, monthEnd, policy);
@@ -913,6 +913,8 @@ function localSearch(
   monthStart: Date,
   rng: Rng,
   monthEnd: Date,
+  /** Phase A 가 세운 휴무 계획 — 5일 근무/2일 휴무 블록의 근거 */
+  restPlan: RestPlan,
 ): number {
   let swaps = 0;
   let currentObj = objective(slots, drivers, weights, policy, unfilled.length);
@@ -970,11 +972,17 @@ function localSearch(
       }
 
       // Filter to feasible: all hard constraints + grid-level rules (shared predicate)
-      const feasible = drivers.filter(
+      const allFeasible = drivers.filter(
         (d) =>
           routeDriverSet.has(d.id) &&
           canAssignFill(ctx, d.id, U.date, U.shift, U.routeId, restCycle, policy, monthStart, monthEnd),
       );
+      // 계획 휴무일에는 넣지 않는다 — Phase A 가 세운 5일 근무/2일 휴무 블록을
+      // 지키기 위함이다. 이 걸러내기가 없으면 빈자리 메우기가 휴무 블록을 잘라
+      // "3일 일하고 하루 쉬고 또…" 처럼 근무가 잘게 부서진다.
+      // 다만 아무도 없으면 미배정(운영 사고)보다는 낫기에 허용한다.
+      const offPlanFeasible = allFeasible.filter((d) => !restPlan.restDays.get(d.id)?.has(U.date));
+      const feasible = offPlanFeasible.length > 0 ? offPlanFeasible : allFeasible;
       if (feasible.length === 0) continue;
 
       // Pick most under-loaded driver; tie-break by id asc (deterministic)
@@ -1091,6 +1099,8 @@ function localSearch(
       const bSweetMin = bEval.appliedSweetRange.min;
       // Recipient: must be under-loaded (below sweet min)
       if (bCount >= bSweetMin) continue;
+      // 계획 휴무일에는 재배치하지 않는다 (휴무 블록 보존)
+      if (restPlan.restDays.get(B.id)?.has(S.date)) continue;
       // Must pass all hard constraints with S.date/shift/routeId
       if (!canAssignFill(ctx, B.id, S.date, S.shift, S.routeId, restCycle, policy, monthStart, monthEnd)) continue;
       // Pick the most under-loaded (fewest slots); tie-break by id asc
