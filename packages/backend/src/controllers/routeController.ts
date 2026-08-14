@@ -4,6 +4,10 @@ import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { getPagination, paginatedResponse } from '../utils/pagination';
 
+/** 운행 대수 — 빈 문자열/undefined 는 "미설정(null)"으로 본다 */
+const nullableCount = (v: unknown): number | null | undefined =>
+  v === undefined ? undefined : v === null || v === '' ? null : parseInt(String(v), 10);
+
 export const getRoutes = async (req: AuthRequest, res: Response) => {
   try {
     const where = { companyId: req.user!.companyId };
@@ -57,10 +61,17 @@ export const getRouteById = async (req: AuthRequest, res: Response) => {
 
 export const createRoute = async (req: AuthRequest, res: Response) => {
   try {
-    const { routeNumber, name, description, startPoint, endPoint } = req.body;
+    const { routeNumber, name, description, startPoint, endPoint,
+            weekdayBuses, saturdayBuses, holidayBuses } = req.body;
 
     const route = await prisma.route.create({
-      data: { companyId: req.user!.companyId, routeNumber, name, description, startPoint, endPoint },
+      data: {
+        companyId: req.user!.companyId, routeNumber, name, description, startPoint, endPoint,
+        // 요일별 운행 대수 — 빈 값은 "전 차량 운행"(null)
+        weekdayBuses: nullableCount(weekdayBuses),
+        saturdayBuses: nullableCount(saturdayBuses),
+        holidayBuses: nullableCount(holidayBuses),
+      },
     });
 
     return res.status(201).json({ success: true, data: route });
@@ -72,7 +83,8 @@ export const createRoute = async (req: AuthRequest, res: Response) => {
 
 export const updateRoute = async (req: AuthRequest, res: Response) => {
   try {
-    const { routeNumber, name, description, startPoint, endPoint, isActive } = req.body;
+    const { routeNumber, name, description, startPoint, endPoint, isActive,
+            weekdayBuses, saturdayBuses, holidayBuses } = req.body;
     const routeId = parseInt(req.params.id);
 
     const existing = await prisma.route.findFirst({ where: { id: routeId, companyId: req.user!.companyId } });
@@ -82,7 +94,12 @@ export const updateRoute = async (req: AuthRequest, res: Response) => {
 
     const route = await prisma.route.update({
       where: { id: routeId },
-      data: { routeNumber, name, description, startPoint, endPoint, isActive },
+      data: {
+        routeNumber, name, description, startPoint, endPoint, isActive,
+        weekdayBuses: nullableCount(weekdayBuses),
+        saturdayBuses: nullableCount(saturdayBuses),
+        holidayBuses: nullableCount(holidayBuses),
+      },
     });
 
     return res.json({ success: true, data: route });

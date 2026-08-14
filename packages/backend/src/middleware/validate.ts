@@ -359,6 +359,12 @@ export const routeValidation = {
     optionalString('description', '설명'),
     optionalString('startPoint', '출발지', { max: 100 }),
     optionalString('endPoint', '도착지', { max: 100 }),
+    // 요일별 운행 대수 — 빈 값은 '미설정'이라 허용한다
+    ...(['weekdayBuses', 'saturdayBuses', 'holidayBuses'] as const).map((f) =>
+      body(f)
+        .custom((v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 999))
+        .withMessage('운행 대수는 0~999 범위여야 합니다.'),
+    ),
   ]),
 
   update: validate([
@@ -368,6 +374,12 @@ export const routeValidation = {
     optionalString('description', '설명'),
     optionalString('startPoint', '출발지', { max: 100 }),
     optionalString('endPoint', '도착지', { max: 100 }),
+    // 요일별 운행 대수 — 빈 값은 '미설정'이라 허용한다
+    ...(['weekdayBuses', 'saturdayBuses', 'holidayBuses'] as const).map((f) =>
+      body(f)
+        .custom((v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 999))
+        .withMessage('운행 대수는 0~999 범위여야 합니다.'),
+    ),
     body('isActive')
       .optional()
       .isBoolean().withMessage('활성 상태는 boolean이어야 합니다.'),

@@ -61,6 +61,11 @@ interface Route {
   startPoint?: string | null;
   endPoint?: string | null;
   isActive: boolean;
+  // 요일별 실제 운행 대수 — 등록 차량 전부가 매일 나가지는 않는다.
+  // 비우면 "등록 차량 전부 운행"으로 본다.
+  weekdayBuses?: number | null;
+  saturdayBuses?: number | null;
+  holidayBuses?: number | null;
 }
 
 /* ────────────────────────────────────────────
@@ -544,6 +549,7 @@ function RoutesTab() {
                 <Th>이름</Th>
                 <Th>기점</Th>
                 <Th>종점</Th>
+                <Th>운행 대수 (평일/토/휴일)</Th>
                 <Th>상태</Th>
                 <Th align="right">액션</Th>
               </tr>
@@ -555,6 +561,15 @@ function RoutesTab() {
                   <Td>{r.name}</Td>
                   <Td>{r.startPoint || '-'}</Td>
                   <Td>{r.endPoint || '-'}</Td>
+                  <Td>
+                    {r.weekdayBuses == null && r.saturdayBuses == null && r.holidayBuses == null ? (
+                      <span className="text-amber-600 dark:text-amber-500">전 차량 매일</span>
+                    ) : (
+                      <span className="font-mono">
+                        {r.weekdayBuses ?? '-'} / {r.saturdayBuses ?? '-'} / {r.holidayBuses ?? '-'}
+                      </span>
+                    )}
+                  </Td>
                   <Td><Badge color={r.isActive ? 'green' : 'gray'}>{r.isActive ? '운행' : '운휴'}</Badge></Td>
                   <Td align="right">
                     <div className="inline-flex gap-1">
@@ -589,6 +604,10 @@ function RouteFormModal({ initial, onClose, onSaved }: { initial: Route | null; 
   const [startPoint, setStartPoint] = useState(initial?.startPoint || '');
   const [endPoint, setEndPoint] = useState(initial?.endPoint || '');
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
+  const num = (v?: number | null) => (v == null ? '' : String(v));
+  const [weekdayBuses, setWeekdayBuses] = useState(num(initial?.weekdayBuses));
+  const [saturdayBuses, setSaturdayBuses] = useState(num(initial?.saturdayBuses));
+  const [holidayBuses, setHolidayBuses] = useState(num(initial?.holidayBuses));
 
   const save = useMutation({
     mutationFn: () => {
@@ -598,6 +617,9 @@ function RouteFormModal({ initial, onClose, onSaved }: { initial: Route | null; 
         startPoint: startPoint.trim() || null,
         endPoint: endPoint.trim() || null,
         isActive,
+        weekdayBuses: weekdayBuses === '' ? null : parseInt(weekdayBuses, 10),
+        saturdayBuses: saturdayBuses === '' ? null : parseInt(saturdayBuses, 10),
+        holidayBuses: holidayBuses === '' ? null : parseInt(holidayBuses, 10),
       };
       return isEdit ? routesApi.update(initial!.id, payload) : routesApi.create(payload);
     },
@@ -615,6 +637,21 @@ function RouteFormModal({ initial, onClose, onSaved }: { initial: Route | null; 
         <FormField label="기점"><Input value={startPoint} onChange={setStartPoint} placeholder="가좌동" /></FormField>
         <FormField label="종점"><Input value={endPoint} onChange={setEndPoint} placeholder="동춘동" /></FormField>
       </div>
+      <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 dark:border-blue-800 dark:bg-blue-900/20">
+        <p className="mb-2 text-[15px] font-semibold text-gray-800 dark:text-gray-200">
+          요일별 운행 대수
+        </p>
+        <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
+          등록 차량 중 실제로 몇 대가 나가는지 입력하세요. 나머지는 자동으로 감차 처리됩니다.
+          비워두면 등록 차량 전부가 매일 운행합니다. <strong>공휴일은 일요일과 같게</strong> 적용됩니다.
+        </p>
+        <div className="grid grid-cols-3 gap-3">
+          <FormField label="평일 (월~금)"><Input value={weekdayBuses} onChange={setWeekdayBuses} placeholder="12" /></FormField>
+          <FormField label="토요일"><Input value={saturdayBuses} onChange={setSaturdayBuses} placeholder="11" /></FormField>
+          <FormField label="일요일·공휴일"><Input value={holidayBuses} onChange={setHolidayBuses} placeholder="10" /></FormField>
+        </div>
+      </div>
+
       <label className="flex items-center gap-2 text-[15px] text-gray-700 dark:text-gray-300">
         <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
         운행 중

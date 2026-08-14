@@ -300,6 +300,12 @@ model Route {
   startPoint    String?
   endPoint      String?
   shiftOffset   Int? // 순환 조율 기준 오프셋 (차량 순번 순환용)
+  /// 요일별 실제 운행 대수 — 등록 대수 전부가 매일 나가지는 않는다.
+  /// (성민버스 예: 등록 14대 중 평일 12 / 토 11 / 일·공휴일 10)
+  /// null 이면 "등록된 활성 차량 전부 운행"으로 본다.
+  weekdayBuses  Int? // 월~금
+  saturdayBuses Int? // 토
+  holidayBuses  Int? // 일요일 + 법정 공휴일
   fatigueScore  Int      @default(3) // 피로도 가중치 (1=꿀노선 ~ 5=기피노선)
   fatigueReason String? // 피로도 사유 (예: "상습 정체구간", "장거리")
   isActive      Boolean  @default(true)

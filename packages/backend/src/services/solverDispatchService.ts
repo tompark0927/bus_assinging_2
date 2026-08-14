@@ -33,6 +33,7 @@ import {
   type WorkdayBandsPolicy,
 } from '../agents/_solvers/types';
 import { uniqueScheduleName } from './scheduleService';
+import { buildOperatingPlan, persistRestingVehicles } from './operatingPlanService';
 
 // ─────────────────────────────────────────────
 // 순수 헬퍼 — 선호 노선 정렬
@@ -755,11 +756,17 @@ export async function generateMonthlyScheduleV2(args: {
     }
   }
 
+  // 노선 설정의 요일별 운행 대수 → 차량별 운행 날짜.
+  // 이걸 넘기지 않으면 솔버가 "전 차량 매일 운행"으로 보고, 실제로는 없는
+  // 근무를 한 달에 수백 칸 만들어낸다 (그만큼 인력이 모자란 것처럼 보인다).
+  const plan = await buildOperatingPlan(args.companyId, args.year, args.month);
+
   const input = await buildSolverInputFromDb({
     companyId: args.companyId,
     year: args.year,
     month: args.month,
     policy,
+    busOperatingDates: plan.unconfigured ? undefined : plan.busOperatingDates,
     newHireDriverIds: args.newHireDriverIds ? new Set(args.newHireDriverIds) : undefined,
     blockedRouteIdsByDriver: blockedRouteIdsByDriver.size > 0 ? blockedRouteIdsByDriver : undefined,
   });
@@ -785,6 +792,15 @@ export async function generateMonthlyScheduleV2(args: {
     output,
     name: args.name,
   });
+
+  // 감차 차량을 패턴으로 남긴다 — 화면·인쇄물·발행 검사가 "원래 안 나가는
+  // 날"과 "사람이 없어 빈 칸"을 구분할 수 있게 하는 유일한 근거다.
+  const restingSaved = plan.unconfigured
+    ? 0
+    : await persistRestingVehicles(persisted.scheduleId, plan.restingByDate);
+  if (restingSaved > 0) {
+    logger.info(`[SolverDispatch] 감차 ${restingSaved}건 기록 (운행 칸 ${plan.totalCells})`);
+  }
 
   return {
     scheduleId: persisted.scheduleId,
