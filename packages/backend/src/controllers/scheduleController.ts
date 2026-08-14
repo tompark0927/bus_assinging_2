@@ -459,9 +459,12 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
         driverName: nameOf.get(g.driverId) ?? `기사#${g.driverId}`,
         date: g.date.toISOString().slice(0, 10),
       }));
+      const c = inspection.counts;
       const parts = [
         dupGroups.length > 0 ? `같은 날 중복 배정 ${dupGroups.length}건` : null,
-        inspection.errors.length > 0 ? `연속근무 초과 ${inspection.errors.length}건` : null,
+        c.vacant > 0 ? `공석 ${c.vacant}칸(버스가 나갈 수 없음)` : null,
+        c.unregistered > 0 ? `미등록 기사 칸 ${c.unregistered}칸` : null,
+        c.consecutive > 0 ? `연속근무 초과 ${c.consecutive}건` : null,
       ].filter(Boolean);
       return res.status(409).json({
         success: false,
@@ -470,6 +473,7 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
           duplicates,
           violations: inspection.errors,
           warnings: inspection.warnings,
+          counts: inspection.counts,
         },
       });
     }
@@ -492,8 +496,13 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
         ...(dupGroups.length > 0
           ? { forcedDuplicates: { old: null, new: dupGroups.length } }
           : {}),
-        ...(inspection.errors.length > 0
-          ? { forcedViolations: { old: null, new: inspection.errors.length } }
+        ...(inspection.counts.vacant + inspection.counts.unregistered + inspection.counts.consecutive > 0
+          ? {
+              forcedViolations: {
+                old: null,
+                new: `공석${inspection.counts.vacant}/미등록${inspection.counts.unregistered}/연속근무${inspection.counts.consecutive}`,
+              },
+            }
           : {}),
       },
     });

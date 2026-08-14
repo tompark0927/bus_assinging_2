@@ -293,9 +293,12 @@ describe('generateSchedule controller', () => {
 describe('publishSchedule controller', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // 발행 게이트 — 기본은 중복·법규 위반 없음
+    // 발행 게이트 — 기본은 중복·공석·법규 위반 없음
     mockPrisma.scheduleSlot.groupBy.mockResolvedValue([]);
     mockPrisma.scheduleSlot.findMany.mockResolvedValue([]);
+    // 공석(E2) 검사: 운행 패턴 없음 = 검사 대상 아님, notes 도 비어 있음
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([]);
+    mockPrisma.schedule.findUnique.mockResolvedValue({ notes: null });
   });
 
   it('should publish latest DRAFT (no scheduleId in body) and notify drivers', async () => {
@@ -512,6 +515,34 @@ describe('publishSchedule controller', () => {
       }),
     );
     expect(mockPrisma.schedule.update).not.toHaveBeenCalled();
+  });
+
+  it('공석(운행 차량인데 기사 없음)이 있으면 409로 차단한다 — 버스가 못 나가는 배차표', async () => {
+    const req = createAuthReq({ params: { year: '2026', month: '3' } });
+    const res = createMockRes();
+    mockPrisma.schedule.findFirst
+      .mockResolvedValueOnce({ id: 1, year: 2026, month: 3, status: 'DRAFT', companyId: 1 })
+      .mockResolvedValueOnce(null);
+    // 2292호가 3/1 운행 예정인데 배정 슬롯이 없다
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([
+      { date: new Date('2026-03-01T00:00:00.000Z'), busId: 10, bus: { busNumber: '2292' } },
+    ]);
+    mockPrisma.user.findMany.mockResolvedValue([]);
+
+    await publishSchedule(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('공석 2칸'),
+        data: expect.objectContaining({
+          counts: expect.objectContaining({ vacant: 2 }),
+        }),
+      }),
+    );
+    expect(mockPrisma.schedule.update).not.toHaveBeenCalled();
+    const { sendBulkPushNotifications } = jest.requireMock('../../services/notificationService');
+    expect(sendBulkPushNotifications).not.toHaveBeenCalled();
   });
 
   it('force=true 면 발행하되 감사 로그에 강제 발행을 남긴다', async () => {
