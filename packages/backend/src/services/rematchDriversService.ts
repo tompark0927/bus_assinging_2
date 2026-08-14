@@ -3,21 +3,25 @@ import { prisma } from '../utils/prisma';
 import logger from '../utils/logger';
 
 /**
- * 엑셀엔 있는데 기초 데이터엔 없는 기사를 일괄 등록하고,
- * 그 때문에 비어 있던 배차 칸을 곧바로 메운다.
+ * 기초 데이터와 다시 맞추기 — 엑셀에만 있던 이름 중 **지금은 기초 데이터에
+ * 등록된** 기사의 칸만 채운다.
  *
- * 왜 필요한가: 엔진은 모든 칸을 채우는데, 저장 단계에서 이름을 사람 계정에
- * 붙이지 못하면 그 칸이 빈다. 담당자 눈에는 '배차표가 30% 비어 있음'으로
- * 보이고, 그 상태로는 무엇을 보여줘도 미완성으로 읽힌다. 한 번에 해소한다.
+ * 기사 계정은 절대 만들지 않는다. 배차는 회사가 등록한 사람으로만 짜야 한다.
+ * 엑셀에 적힌 이름을 근거로 사람을 만들어내면, 등록한 적 없는 기사가 배차표에
+ * 들어가고 그 사람 앞으로 근무·급여·기사앱 계정이 생긴다 — 오타 하나가 새
+ * 직원이 되기도 한다. 시스템에는 그럴 권한이 없다.
  *
- * 계정은 만들되 **로그인 수단은 만들지 않는다** (email/password 없음).
- * 배차에 필요한 건 '사람 레코드'지 로그인이 아니고, 임의 계정을 열어두는 건
- * 위험하다. 앱을 쓸 사람만 관리자가 나중에 계정 정보를 넣으면 된다.
+ * 그래서 흐름은 이렇게 된다:
+ *   1) 배차표를 저장하면 매칭 안 된 이름이 주황색으로 남고 발행이 막힌다
+ *   2) 담당자가 기초 데이터에서 그 기사를 정식으로 등록한다(사번·형태 직접 입력)
+ *   3) 이 함수를 호출하면 이제 매칭되는 칸만 채워진다
  */
 
 export interface RegisterResult {
-  created: { name: string; employeeId: string; driverType: string | null }[];
-  skipped: string[];      // 이미 있던 이름
+  /** 기초 데이터에 등록되어 이번에 배정된 이름 */
+  matched: string[];
+  /** 아직 기초 데이터에 없어 채우지 못한 이름 (동명이인 포함) */
+  unmatchedNames: string[];
   filledCells: number;    // 새로 채워진 배차 칸
   /** 이미 배정이 있거나(수기 수정 보호) 그 기사가 같은 날 다른 칸에 있어 건너뛴 칸 수 */
   skippedCells: number;
@@ -29,21 +33,7 @@ const SHIFT_MAP: Record<string, ShiftType> = {
   FULL_DAY: ShiftType.FULL_DAY,
 };
 
-/** 회사 안에서 겹치지 않는 사번을 만든다 (AI001, AI002 …) */
-async function nextEmployeeIds(companyId: number, count: number): Promise<string[]> {
-  const existing = await prisma.user.findMany({
-    where: { companyId, employeeId: { startsWith: 'AI' } },
-    select: { employeeId: true },
-  });
-  let max = 0;
-  for (const e of existing) {
-    const m = /^AI(\d+)$/.exec(e.employeeId);
-    if (m) max = Math.max(max, Number(m[1]));
-  }
-  return Array.from({ length: count }, (_, i) => `AI${String(max + i + 1).padStart(3, '0')}`);
-}
-
-export async function registerMissingDrivers(
+export async function rematchUnmatchedCells(
   companyId: number,
   scheduleId: number,
 ): Promise<RegisterResult> {
@@ -54,7 +44,7 @@ export async function registerMissingDrivers(
   if (!schedule) throw new Error('배차표를 찾을 수 없습니다.');
   // 발행본에 슬롯을 끼워 넣으면 기사가 이미 본 배차가 알림 없이 바뀐다
   if (schedule.status !== 'DRAFT') {
-    throw new Error('발행된 배차표에는 기사를 등록할 수 없습니다. 먼저 초안으로 되돌려주세요.');
+    throw new Error('발행된 배차표는 수정할 수 없습니다. 먼저 초안으로 되돌려주세요.');
   }
 
   let unmatchedCells: Record<string, string> = {};
@@ -62,62 +52,29 @@ export async function registerMissingDrivers(
     const meta = schedule.notes ? JSON.parse(schedule.notes) : null;
     unmatchedCells = meta?.unmatchedCells ?? {};
   } catch {
-    throw new Error('이 배차표에는 미등록 기사 정보가 없습니다 (AI 엔진으로 생성한 배차표만 가능).');
+    throw new Error('이 배차표에는 미등록 기사 정보가 없습니다 (엑셀에서 만든 배차표만 가능).');
   }
   const entries = Object.entries(unmatchedCells);
   if (entries.length === 0) {
-    return { created: [], skipped: [], filledCells: 0, skippedCells: 0 };
+    return { matched: [], unmatchedNames: [], filledCells: 0, skippedCells: 0 };
   }
 
-  // ── 이름별로 어떤 차량을 몇 번 탔는지 집계 → 고정/예비 판별 ──
-  const rideCount = new Map<string, Map<string, number>>();
-  for (const [key, name] of entries) {
-    const [, vehicle] = key.split('|');
-    const m = rideCount.get(name) ?? new Map<string, number>();
-    m.set(vehicle, (m.get(vehicle) ?? 0) + 1);
-    rideCount.set(name, m);
-  }
-
-  const names = [...rideCount.keys()];
+  const names = [...new Set(entries.map(([, name]) => name))];
+  // 기초 데이터 조회 — 여기서 만들지 않는다. 지금 등록되어 있는 사람만 쓴다.
   const already = await prisma.user.findMany({
-    where: { companyId, name: { in: names } },
+    where: { companyId, name: { in: names }, role: 'DRIVER', isActive: true },
     select: { name: true },
   });
-  const alreadySet = new Set(already.map((u) => u.name));
-  // 동명이인 — 어느 계정인지 추측할 수 없으므로 생성도 배정도 하지 않는다.
+  // 동명이인 — 어느 계정인지 추측할 수 없으므로 배정하지 않는다.
   // (첫 계정으로 채우면 한 명은 과다 배차, 다른 한 명은 배차표에서 소멸)
   const nameCount = new Map<string, number>();
   for (const u of already) nameCount.set(u.name, (nameCount.get(u.name) ?? 0) + 1);
   const ambiguousSet = new Set([...nameCount.entries()].filter(([, c]) => c > 1).map(([n]) => n));
-  const toCreate = names.filter((n) => !alreadySet.has(n));
-
-  const ids = await nextEmployeeIds(companyId, toCreate.length);
-  const created: RegisterResult['created'] = [];
-
-  for (let i = 0; i < toCreate.length; i++) {
-    const name = toCreate[i];
-    const rides = rideCount.get(name)!;
-    let home: string | null = null, best = 0, total = 0;
-    for (const [v, c] of rides) { total += c; if (c > best) { best = c; home = v; } }
-    // 한 차량에 절반 이상 몰렸으면 고정, 여기저기 흩어졌으면 예비
-    const driverType = total > 0 && best / total >= 0.5 ? 'MAIN' : 'SPARE';
-
-    await prisma.user.create({
-      data: {
-        companyId, name, employeeId: ids[i], role: 'DRIVER',
-        driverType: driverType as 'MAIN' | 'SPARE',
-        assignedBusNumber: driverType === 'MAIN' ? home : null,
-        isActive: true,
-        // email/password 없음 — 로그인은 관리자가 나중에 열어준다
-      },
-    });
-    created.push({ name, employeeId: ids[i], driverType });
-  }
 
   // ── 비어 있던 칸 메우기 ──
   const [drivers, buses, existingSlots] = await Promise.all([
     prisma.user.findMany({
-      where: { companyId, name: { in: names } },
+      where: { companyId, name: { in: names }, role: 'DRIVER', isActive: true },
       select: { id: true, name: true },
     }),
     prisma.bus.findMany({
@@ -206,10 +163,16 @@ export async function registerMissingDrivers(
     });
   }, { timeout: 60_000 });
 
+  const stillNames = [...new Set(Object.values(stillUnmatched))];
   logger.info(
-    `[registerMissing] schedule=${scheduleId} 기사 ${created.length}명 등록, ` +
-      `${rows.length}칸 채움, ${skippedCells}칸 건너뜀 (남은 미매칭 ${Object.keys(stillUnmatched).length})`,
+    `[rematch] schedule=${scheduleId} ${rows.length}칸 채움, ` +
+      `${skippedCells}칸 건너뜀, 아직 기초 데이터에 없는 이름 ${stillNames.length}명`,
   );
 
-  return { created, skipped: [...alreadySet], filledCells: rows.length, skippedCells };
+  return {
+    matched: names.filter((n) => !stillNames.includes(n)),
+    unmatchedNames: stillNames,
+    filledCells: rows.length,
+    skippedCells,
+  };
 }

@@ -327,9 +327,9 @@ export const schedulesApi = {
   // 감차(휴차) 표기 토글 — (날짜×차량) "이 차는 이 날 안 나간다"
   setVehicleOff: (scheduleId: number, body: { busNumber: string; date: string; off: boolean }) =>
     api.put(`/schedules/by-id/${scheduleId}/vehicle-off`, body),
-  // 엑셀엔 있는데 기초 데이터에 없는 기사 일괄 등록 + 빈 칸 메우기
-  registerMissingDrivers: (scheduleId: number) =>
-    api.post(`/schedules/by-id/${scheduleId}/register-missing-drivers`, {}, { timeout: 120000 }),
+  // 기초 데이터와 다시 맞추기 — 지금 등록된 기사의 칸만 채운다 (계정 생성 없음)
+  rematchDrivers: (scheduleId: number) =>
+    api.post(`/schedules/by-id/${scheduleId}/rematch-drivers`, {}, { timeout: 120000 }),
   // "왜 이 기사가 이 칸인가" — 저장된 배차표에서 근거 재구성
   cellExplain: (scheduleId: number, p: { date: string; vehicle: string; shift: string }) =>
     api.get(`/schedules/by-id/${scheduleId}/cell-explain`, { params: p }),

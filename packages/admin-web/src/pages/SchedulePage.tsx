@@ -401,18 +401,27 @@ export default function SchedulePage() {
   }, [postingView]);
 
   const registerMissing = useMutation({
-    mutationFn: () => schedulesApi.registerMissingDrivers(schedule!.id),
+    mutationFn: () => schedulesApi.rematchDrivers(schedule!.id),
     onSuccess: (res) => {
-      const d = res.data.data as { created: unknown[]; filledCells: number; skippedCells?: number };
+      const d = res.data.data as {
+        matched: string[]; unmatchedNames: string[]; filledCells: number; skippedCells?: number;
+      };
       queryClient.invalidateQueries({ queryKey: ['schedule-posting'] });
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
-      const skipped = d.skippedCells
-        ? ` (${d.skippedCells}칸은 이미 배정이 있어 건너뜀)`
-        : '';
-      toast.success(`기사 ${d.created.length}명 등록 — 배차 ${d.filledCells}칸이 채워졌습니다.${skipped}`);
+      if (d.filledCells === 0 && d.unmatchedNames.length > 0) {
+        toast(
+          `아직 기초 데이터에 없는 기사 ${d.unmatchedNames.length}명 — ` +
+          `기초 데이터 › 기사에서 먼저 등록해주세요: ${d.unmatchedNames.slice(0, 5).join(', ')}`,
+          { icon: '⚠️', duration: 9000 },
+        );
+        return;
+      }
+      const skipped = d.skippedCells ? ` (${d.skippedCells}칸은 이미 배정이 있어 건너뜀)` : '';
+      const left = d.unmatchedNames.length ? `, ${d.unmatchedNames.length}명은 아직 미등록` : '';
+      toast.success(`배차 ${d.filledCells}칸이 채워졌습니다${left}.${skipped}`);
     },
     onError: (err: { response?: { data?: { message?: string } } }) =>
-      toast.error(err?.response?.data?.message ?? '등록에 실패했습니다.'),
+      toast.error(err?.response?.data?.message ?? '다시 맞추기에 실패했습니다.'),
   });
 
   const { data: routes = [] } = useQuery<Route[]>({
@@ -623,7 +632,6 @@ export default function SchedulePage() {
       })).data.data as {
         scheduleId: number; slotCount: number;
         unmatched: { vehicles: string[]; drivers: string[] };
-        autoRegistered: { created: { name: string }[]; filledCells: number } | null;
         ambiguousNames: { name: string; candidates: { employeeId: string }[] }[];
       };
       return { draft, saved };
@@ -632,10 +640,6 @@ export default function SchedulePage() {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-posting'] });
-      // 엑셀에만 있던 기사가 자동 등록됐을 수 있다 — 기사 목록 갱신
-      if (saved.autoRegistered?.created.length) {
-        queryClient.invalidateQueries({ queryKey: ['users-drivers'] });
-      }
       setSelectedScheduleId(saved.scheduleId);
       setEngineUnmatched(saved.unmatched);
       setShowGenerateModal(false);
@@ -643,11 +647,12 @@ export default function SchedulePage() {
       pendingEngineDraftRef.current = null;
       setNewDraftName('');
       setEngineFile(null);
-      const registeredNote = saved.autoRegistered?.created.length
-        ? `, 신규 기사 ${saved.autoRegistered.created.length}명 자동 등록`
+      // 기초 데이터에 없는 이름은 자동 등록하지 않는다 — 몇 명인지만 알린다
+      const unmatchedNote = saved.unmatched.drivers.length
+        ? `, 기초 데이터에 없는 기사 ${saved.unmatched.drivers.length}명 확인 필요`
         : '';
       toast.success(
-        `${year}년 ${month}월 초안 생성 완료 — 배정 ${saved.slotCount}건${registeredNote}` +
+        `${year}년 ${month}월 초안 생성 완료 — 배정 ${saved.slotCount}건${unmatchedNote}` +
         (draft.audit.ok ? ', 제약 위반 0건' : `, 위반 ${draft.audit.violations.length}건 확인 필요`)
       );
       // 동명이인 — 추측 배정하지 않고 보류했다. 담당자가 구분해줘야 채워진다.
@@ -1794,28 +1799,35 @@ export default function SchedulePage() {
               (이전엔 게시 양식일 때만 떠서, 차량별·일일배차에서 빈 칸의
                원인을 알 수 없었다) ─── */}
       {missingDrivers.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 print:hidden dark:border-amber-800 dark:bg-amber-900/20">
-          <div className="min-w-0 text-sm text-amber-800 dark:text-amber-300">
-            <p className="font-semibold">
-              기초 데이터에 없는 기사 {missingDrivers.length}명 — 배차 {vacancy.unregistered}칸이 저장되지
-              못했습니다 (표에 주황색)
-            </p>
-            <p className="mt-0.5 text-xs">
-              {missingDrivers.slice(0, 8).join(', ')}
-              {missingDrivers.length > 8 && ` 외 ${missingDrivers.length - 8}명`}
-            </p>
-            <p className="mt-0.5 text-xs opacity-80">
-              등록하면 그 칸이 곧바로 채워지고 기사앱에도 배차가 전달됩니다.
-            </p>
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 print:hidden dark:border-amber-800 dark:bg-amber-900/20">
+          <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+            기초 데이터에 없는 이름 {missingDrivers.length}명 — 배차 {vacancy.unregistered}칸이 비어 있습니다
+          </p>
+          <p className="mt-0.5 text-xs text-amber-800/90 dark:text-amber-300/90">
+            {missingDrivers.slice(0, 8).join(', ')}
+            {missingDrivers.length > 8 && ` 외 ${missingDrivers.length - 8}명`}
+          </p>
+          <p className="mt-1.5 text-xs text-amber-700 dark:text-amber-400">
+            배차는 <strong>기초 데이터에 등록된 기사</strong>로만 짤 수 있습니다. 시스템이 이름만 보고
+            기사를 만들지는 않습니다 — 실제 직원이면 기초 데이터에서 사번과 함께 등록한 뒤 아래
+            [다시 맞추기]를 누르시고, 엑셀 오타라면 이름을 고쳐 다시 가져오세요.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              onClick={() => navigate('/dashboard/data?tab=drivers')}
+              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700"
+            >
+              기초 데이터에서 기사 등록
+            </button>
+            <button
+              onClick={() => registerMissing.mutate()}
+              disabled={registerMissing.isPending || schedule?.status !== 'DRAFT'}
+              title={schedule?.status !== 'DRAFT' ? '초안 상태에서만 가능합니다' : undefined}
+              className="rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:bg-transparent dark:text-amber-300"
+            >
+              {registerMissing.isPending ? '맞추는 중…' : '기초 데이터와 다시 맞추기'}
+            </button>
           </div>
-          <button
-            onClick={() => registerMissing.mutate()}
-            disabled={registerMissing.isPending || schedule?.status !== 'DRAFT'}
-            title={schedule?.status !== 'DRAFT' ? '초안 상태에서만 등록할 수 있습니다' : undefined}
-            className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:opacity-50"
-          >
-            {registerMissing.isPending ? '등록 중…' : `${missingDrivers.length}명 등록하고 칸 채우기`}
-          </button>
         </div>
       )}
 

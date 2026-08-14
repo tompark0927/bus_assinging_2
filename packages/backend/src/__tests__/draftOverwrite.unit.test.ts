@@ -8,11 +8,6 @@
  */
 
 jest.mock('../utils/prisma');
-jest.mock('../services/registerMissingDriversService', () => ({
-  registerMissingDrivers: jest.fn().mockResolvedValue({
-    created: [], skipped: [], filledCells: 0, skippedCells: 0,
-  }),
-}));
 
 import { prisma } from '../utils/prisma';
 import { saveEngineDraft, DraftOverwriteConflict } from '../services/engineScheduleService';
