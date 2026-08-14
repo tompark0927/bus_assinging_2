@@ -126,6 +126,8 @@ interface Driver {
   name: string;
   driverType: string;
   employeeId: string;
+  /** 기초 데이터의 담당 차량 — 같은 차번을 가진 두 메인 기사가 '짝꿍' */
+  assignedBusNumber?: string | null;
   licenseExpiresAt?: string | null;
   qualificationExpiresAt?: string | null;
 }
@@ -935,9 +937,24 @@ export default function SchedulePage() {
       }
     }
     // ── 배차표 행 순서 ──
-    // 실제 배차표는 "짝꿍이 위아래로 붙어" 있어야 담당자가 한눈에 본다.
-    // 그래서 이름순이 아니라 (노선 → 차량 → 이름) 순으로 세운다. 같은 차량을
-    // 쓰는 두 고정기사가 자연히 인접한다. 스페어(예비)는 차량이 없으므로 맨 아래.
+    // 실물 배차표의 규칙 두 가지를 그대로 따른다.
+    //   1) 스페어(예비)는 **무조건 맨 아래**
+    //   2) 메인은 짝꿍(같은 담당 차량의 정·부)이 **바로 아래 붙는다**
+    // 그래서 3단으로 나눈다: 담당차량 있는 메인 → 담당차량 없는 메인 → 스페어.
+    // (예전엔 '담당 차량이 불분명한 메인'이 스페어와 한 덩어리로 묶여 이름순
+    //  정렬되는 바람에 스페어가 메인 위로 올라오는 일이 있었다.)
+    //
+    // 짝꿍의 근거는 기초 데이터의 담당 차번(assignedBusNumber)이 1순위다 —
+    // 그 달 배차 실적으로 추정하면 대타가 많이 낀 달에 짝이 어긋난다.
+    const assignedOf = new Map<number, string>();
+    for (const u of allUsersList) {
+      if (u.assignedBusNumber) assignedOf.set(u.id, u.assignedBusNumber);
+    }
+    const routeOfBus = new Map<string, string>();
+    for (const slot of schedule.slots) {
+      if (slot.bus) routeOfBus.set(slot.bus.busNumber, slot.route?.routeNumber ?? '');
+    }
+
     const homeOf = new Map<number, { route: string; bus: string; count: number }>();
     const tally = new Map<number, Map<string, number>>();
     for (const slot of schedule.slots) {
@@ -968,21 +985,36 @@ export default function SchedulePage() {
       const m = /^(\d+)(?:-(\d+))?$/.exec(r ?? '');
       return m ? Number(m[1]) * 100 + Number(m[2] ?? 0) : Number.MAX_SAFE_INTEGER;
     };
+    /** 담당 차량 — 기초 데이터 우선, 없으면 그 달 실적으로 추정 */
+    const homeBusOf = (id: number): { route: string; bus: string } | null => {
+      const assigned = assignedOf.get(id);
+      if (assigned) return { route: routeOfBus.get(assigned) ?? '', bus: assigned };
+      if (isFixed(id)) {
+        const h = homeOf.get(id)!;
+        return { route: h.route, bus: h.bus };
+      }
+      return null;
+    };
+    /** 0 = 담당차량 있는 메인, 1 = 담당차량 없는 메인, 2 = 스페어(항상 맨 아래) */
+    const tierOf = (d: Slot['driver']): number => {
+      if (d.driverType === 'SPARE') return 2;
+      return homeBusOf(d.id) ? 0 : 1;
+    };
+
     return Array.from(seen.values()).sort((a, b) => {
-      const aFixed = isFixed(a.id) && a.driverType !== 'SPARE';
-      const bFixed = isFixed(b.id) && b.driverType !== 'SPARE';
-      if (aFixed !== bFixed) return aFixed ? -1 : 1;   // 고정 먼저, 스페어 아래
-      if (aFixed && bFixed) {
-        const ha = homeOf.get(a.id)!, hb = homeOf.get(b.id)!;
+      const ta = tierOf(a), tb = tierOf(b);
+      if (ta !== tb) return ta - tb;
+      if (ta === 0) {
+        const ha = homeBusOf(a.id)!, hb = homeBusOf(b.id)!;
         const byRoute = routeKey(ha.route) - routeKey(hb.route);
         if (byRoute !== 0) return byRoute;
-        if (ha.bus !== hb.bus) return ha.bus.localeCompare(hb.bus, 'ko');
-        // 같은 차량 = 짝꿍. 오전 담당이 위로 오도록 이름순으로 안정 정렬
+        // 같은 차량 = 짝꿍 → 바로 위아래로 붙는다
+        if (ha.bus !== hb.bus) return ha.bus.localeCompare(hb.bus, undefined, { numeric: true });
         return a.name.localeCompare(b.name, 'ko');
       }
       return a.name.localeCompare(b.name, 'ko');
     });
-  }, [schedule?.slots]);
+  }, [schedule?.slots, allUsersList]);
 
   // 근무일수 중앙값 — 엑셀 배차총괄의 "목표(22일) 대비 차이" 열에 대응.
   // 회사마다 목표가 달라 고정값 대신 중앙값을 기준으로 편차를 보여준다.
