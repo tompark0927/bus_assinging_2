@@ -130,8 +130,18 @@ export async function fillVacancies(
         continue;
       }
 
-      // 근무일수가 가장 적은 기사 → 공석 메우기가 한 사람에게 쏠리지 않는다
+      // ① 연속 근무 블록의 시프트를 지키는 사람 먼저 (전날 같은 시프트로 근무)
+      //    현장은 한 블록을 같은 시프트로 간다 — 공석을 메운다고 그 리듬을
+      //    깨면 기사 입장에서는 갑자기 근무 시간대가 뒤집히는 셈이다.
+      // ② 그다음 근무일수가 적은 사람 (쏠림 방지)
+      const keepsBlock = (id: number) => {
+        const prev = shiftsOn.get(`${id}|${shiftDay(dk, -1)}`);
+        if (!prev) return 1;                    // 전날 휴무 → 새 블록 시작, 자유
+        return prev.has(shift) ? 0 : 2;         // 같은 시프트 유지 0 · 바뀜 2
+      };
       candidates.sort((a, b) => {
+        const ka = keepsBlock(a.id), kb = keepsBlock(b.id);
+        if (ka !== kb) return ka - kb;
         const na = workDays.get(a.id)?.size ?? 0;
         const nb = workDays.get(b.id)?.size ?? 0;
         return na !== nb ? na - nb : a.id - b.id;
