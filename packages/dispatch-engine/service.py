@@ -297,6 +297,78 @@ async def inspect_endpoint(
     return {"sheets": names, "reports": reports}
 
 
+@app.post("/import")
+async def import_endpoint(
+    file: UploadFile = File(...),
+    division: str = Form(""),
+    sheets: str = Form(""),          # 비우면 마지막(가장 최근) 월 시트
+):
+    """그대로 가져오기 — 이미 짜 놓은 배차표를 solver 없이 읽어 cells 로 돌려준다.
+
+    엔진으로 새로 짜기를 원치 않는 회사를 위한 경로다. 파일을 읽어 그대로
+    돌려주면 백엔드가 /schedules/from-engine 로 저장하고, 그때부터 일일배차·
+    차량별·기사별·게시 양식·기사앱·발행 안전검사가 전부 똑같이 동작한다.
+
+    /generate 와 달리 과거 월(로테이션 이월)이 필요 없다 — 짜는 게 아니라
+    읽는 것이므로 파일 한 장이면 된다.
+    """
+    path = _save_upload(file)
+    names = [s.strip() for s in sheets.split(",") if s.strip()] or _month_sheets(path)[-1:]
+    if not names:
+        raise HTTPException(400, "가져올 월 시트를 찾지 못했습니다")
+    try:
+        rosters = _load_rosters(path, division, names)
+    except HTTPException:
+        raise
+    except Exception as ex:
+        raise HTTPException(422, f"파싱 실패: {ex}")
+    if not rosters:
+        raise HTTPException(422, "시트에서 배차 데이터를 읽지 못했습니다")
+
+    roster = rosters[-1]
+    cells: dict = defaultdict(dict)
+    filled = 0
+    for (d, v), e in sorted(roster.entries.items()):
+        # 시트가 앞뒤 달을 걸쳐 있는 경우가 많다(게시용 주간표는 전월 말일부터
+        # 시작). 그 달 것만 가져와야 5/31 이 6월 배차표에 감차로 섞이지 않는다.
+        if (d.year, d.month) != (roster.year, roster.month):
+            continue
+        g = roster.group_of(v)
+        am = e.am.driver or ""
+        pm = e.pm.driver or ""
+        # 감차 판정은 순번(slot_index) 유무로 하지 않는다 — 월간배차 양식은
+        # 순번이 노선 고정값이라 휴차인 날도 값이 남아 있다. 그날 두 칸 모두
+        # 기사가 없으면 안 나간 것으로 본다 (주간·월간 양식 모두에서 옳다).
+        operating = bool(am or pm)
+        if am:
+            filled += 1
+        if pm:
+            filled += 1
+        cells[d.isoformat()][v] = {
+            "slot": e.slot_label,
+            "display_slot": e.slot_index,
+            # 그대로 가져온 표에는 언더라잉 로테이션 정보가 없다 — 표시 순번을 쓴다
+            "am": am or e.am.raw,
+            "pm": pm or e.pm.raw,
+            "underlying": e.slot_index,
+            "operating": operating,
+            "group": g.name if g else None,
+        }
+
+    return {
+        "year": roster.year,
+        "month": roster.month,
+        "sheets": names,
+        "groups": [{"name": g.name, "vehicles": g.vehicles} for g in roster.groups],
+        # 집계는 실제로 가져온(그 달) 범위 기준이어야 화면 숫자와 맞는다
+        "vehicles": len({v for by in cells.values() for v in by}),
+        "dates": len(cells),
+        "filled_cells": filled,
+        "drivers": sorted(roster.drivers()),
+        "cells": cells,
+    }
+
+
 @app.post("/backtest")
 async def backtest_endpoint(
     file: UploadFile = File(...),

@@ -264,6 +264,13 @@ export const engineApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 120000,
     }),
+  // 그대로 가져오기 — 이미 짜 놓은 배차표를 솔버 없이 읽어 cells 로 받는다
+  // (엔진으로 새로 짜지 않는 회사용. 과거 월 없이 파일 한 장이면 된다)
+  importAsIs: (form: FormData) =>
+    engineClient.post('/engine/import', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    }),
   // 배차 초안 생성 — CP-SAT 솔버 실행 (기본 3분 제한이라 타임아웃 크게)
   generate: (form: FormData) =>
     engineClient.post('/engine/generate', form, {

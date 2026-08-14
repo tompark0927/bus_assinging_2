@@ -567,6 +567,12 @@ export default function SchedulePage() {
   // 엔진은 과거 배차표에서 로테이션·감차·짝궁 규칙을 이어받으므로 직전 월이
   // 포함된 엑셀이 필요하다. 규칙 자체는 [AI 엔진 설정]의 정책을 따른다.
   const [engineFile, setEngineFile] = useState<File | null>(null);
+  /**
+   * generate = 엔진이 새로 짠다 (과거 배차표에서 규칙을 이어받음)
+   * import   = 이미 짜 놓은 배차표를 그대로 읽어온다 (솔버 미실행)
+   * 엔진을 쓰지 않는 회사도 화면·인쇄물·기사앱·안전검사를 그대로 쓰게 하는 경로.
+   */
+  const [engineMode, setEngineMode] = useState<'generate' | 'import'>('generate');
   const [engineUnmatched, setEngineUnmatched] = useState<{ vehicles: string[]; drivers: string[] } | null>(null);
   const engineFileRef = useRef<HTMLInputElement>(null);
 
@@ -584,16 +590,29 @@ export default function SchedulePage() {
     mutationFn: async (opts?: { confirmOverwrite?: boolean }) => {
       let draft = opts?.confirmOverwrite ? pendingEngineDraftRef.current : null;
       if (!draft) {
-        if (!engineFile) throw new Error('과거 배차표 엑셀을 선택해 주세요.');
+        if (!engineFile) throw new Error('배차표 엑셀을 선택해 주세요.');
         const form = new FormData();
         form.append('file', engineFile);
         form.append('year', String(year));
         form.append('month', String(month));
-        draft = (await engineApi.generate(form)).data as {
-          cells: Record<string, Record<string, unknown>>;
-          audit: { ok: boolean; violations: unknown[] };
-          warnings: string[];
-        };
+        if (engineMode === 'import') {
+          // 그대로 가져오기 — 솔버를 돌리지 않고 파일 내용을 그대로 읽는다.
+          // 저장 이후 경로(미등록 기사 자동 등록·안전 검사·발행 게이트)는 동일.
+          const res = (await engineApi.importAsIs(form)).data as {
+            cells: Record<string, Record<string, unknown>>;
+            vehicles: number; dates: number; filled_cells: number; drivers: string[];
+          };
+          draft = { cells: res.cells, audit: { ok: true, violations: [] }, warnings: [] };
+          toast.success(
+            `엑셀에서 ${res.vehicles}대 · ${res.dates}일 · 배정 ${res.filled_cells}칸을 읽었습니다.`,
+          );
+        } else {
+          draft = (await engineApi.generate(form)).data as {
+            cells: Record<string, Record<string, unknown>>;
+            audit: { ok: boolean; violations: unknown[] };
+            warnings: string[];
+          };
+        }
         pendingEngineDraftRef.current = draft;
       }
       const saved = (await schedulesApi.saveFromEngine({
@@ -2615,14 +2634,47 @@ export default function SchedulePage() {
           icon={<Sparkles size={24} className="text-blue-600" />}
         >
           <div className="space-y-5">
-            {/* AI 엔진 생성 — 과거 배차표에서 로테이션을 이어받는다 */}
+            {/* 만드는 방식 — 엔진이 짜기 / 이미 짠 표 그대로 가져오기 */}
+            <div className="flex gap-2">
+              {([
+                ['generate', 'AI 엔진으로 짜기', '과거 배차표에서 규칙을 이어받아 새로 생성'],
+                ['import', '엑셀 그대로 가져오기', '이미 짜 놓은 배차표를 그대로 읽어옴'],
+              ] as const).map(([mode, label, desc]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setEngineMode(mode)}
+                  className={`flex-1 rounded-lg border p-3 text-left transition ${
+                    engineMode === mode
+                      ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-900/30'
+                      : 'border-gray-200 bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800'
+                  }`}
+                >
+                  <span className="block text-sm font-semibold text-gray-800 dark:text-gray-100">{label}</span>
+                  <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">{desc}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* 엑셀 업로드 — 모드에 따라 요구하는 파일이 다르다 */}
             <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-800 dark:bg-blue-900/20">
               <label className="block text-base font-semibold text-gray-800 dark:text-gray-200 mb-1">
-                과거 배차표 엑셀 <span className="text-red-500">*</span>
+                {engineMode === 'import' ? '가져올 배차표 엑셀' : '과거 배차표 엑셀'}{' '}
+                <span className="text-red-500">*</span>
               </label>
               <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
-                직전 월({month === 1 ? year - 1 : year}년 {month === 1 ? 12 : month - 1}월)이 포함된 파일을 올려주세요.
-                순번 로테이션·주말 감차·짝궁 교대를 그대로 이어받습니다.
+                {engineMode === 'import' ? (
+                  <>
+                    이미 완성해 둔 <strong>{year}년 {month}월</strong> 배차표를 올려주세요. 새로 짜지 않고
+                    그대로 읽어 옵니다 — 일일배차·차량별·기사별 화면, 인쇄물, 기사앱, 안전 검사가 모두
+                    그대로 동작합니다. 월간배차·게시용 두 양식 모두 자동 인식합니다.
+                  </>
+                ) : (
+                  <>
+                    직전 월({month === 1 ? year - 1 : year}년 {month === 1 ? 12 : month - 1}월)이 포함된 파일을 올려주세요.
+                    순번 로테이션·주말 감차·짝궁 교대를 그대로 이어받습니다.
+                  </>
+                )}
               </p>
               <input
                 ref={engineFileRef}
@@ -2764,7 +2816,14 @@ export default function SchedulePage() {
             >
               {engineGenerateMutation.isPending ? (
                 <>
-                  <Loader2 size={20} className="animate-spin" /> AI가 최적 배차를 계산하고 있습니다... (최대 3분)
+                  <Loader2 size={20} className="animate-spin" />{' '}
+                  {engineMode === 'import'
+                    ? '엑셀을 읽어 배차표로 저장하고 있습니다…'
+                    : 'AI가 최적 배차를 계산하고 있습니다... (최대 3분)'}
+                </>
+              ) : engineMode === 'import' ? (
+                <>
+                  <Upload size={20} /> 엑셀 그대로 가져오기
                 </>
               ) : (
                 <>
