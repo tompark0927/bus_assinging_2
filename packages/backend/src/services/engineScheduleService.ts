@@ -34,6 +34,8 @@ export interface EngineDraftPayload {
   cells: Record<string, Record<string, EngineCell>>;
   /** 같은 이름 초안이 있을 때 덮어쓰기 승인 — 없으면 DraftOverwriteConflict */
   confirmOverwrite?: boolean;
+  /** 명단 불일치를 알고도 진행 — 없으면 RosterMismatchError */
+  confirmMismatch?: boolean;
 }
 
 /**
@@ -58,6 +60,37 @@ export class DraftOverwriteConflict extends Error {
     this.name = 'DraftOverwriteConflict';
   }
 }
+
+/**
+ * 업로드한 파일의 기사 명단이 기초 데이터와 너무 안 맞을 때 던진다.
+ *
+ * 다른 회사 배차표나 오래된 파일을 올리면 그 안의 이름들이 우리 회사에 없는
+ * 사람이라 배차가 통째로 비어버린다. 저장한 뒤에 알려주면 이미 늦다 —
+ * 담당자는 "배차표가 만들어졌다"고 믿고, 남의 회사 명단이 우리 배차표 자리에
+ * 앉아 있게 된다. 그래서 저장 전에 멈추고 근거를 보여준다.
+ */
+export class RosterMismatchError extends Error {
+  constructor(
+    public readonly details: {
+      totalNames: number;
+      matchedNames: number;
+      unmatchedNames: string[];
+      unmatchedRate: number;   // 0~1
+      totalVehicles: number;
+      unmatchedVehicles: string[];
+    },
+  ) {
+    super(
+      `파일의 기사 ${details.totalNames}명 중 ${details.unmatchedNames.length}명` +
+        `(${Math.round(details.unmatchedRate * 100)}%)이 기초 데이터에 없습니다. ` +
+        '다른 회사 파일이거나 오래된 파일이 아닌지 확인해 주세요.',
+    );
+    this.name = 'RosterMismatchError';
+  }
+}
+
+/** 이 비율을 넘으면 저장을 막는다 — 사람 몇 명 누락과 '남의 회사 파일'을 가르는 선 */
+const MISMATCH_BLOCK_RATE = 0.15;
 
 export interface SaveResult {
   scheduleId: number;
@@ -182,6 +215,24 @@ export async function saveEngineDraft(
       `차량번호가 하나도 일치하지 않습니다 (예: ${[...vehicleNumbers].slice(0, 5).join(', ')}). ` +
         '기초 데이터의 차량번호가 엑셀과 같은지 확인해 주세요.',
     );
+  }
+
+  // ── 명단 대조 게이트 ──
+  // 배차는 기초 데이터에 등록된 사람으로만 짜야 한다. 파일에 있는 이름이라도
+  // 우리 회사 사람이 아니면 쓸 수 없으므로, 안 맞는 비율이 높으면 "잘못된
+  // 파일"로 보고 저장 전에 멈춘다. (다른 회사 배차표·철 지난 파일 방어)
+  const unresolvedNames = [...unmatchedDrivers, ...ambiguousNames.map((a) => a.name)];
+  const totalNames = driverNames.size;
+  const unmatchedRate = totalNames > 0 ? unresolvedNames.length / totalNames : 0;
+  if (!payload.confirmMismatch && unmatchedRate > MISMATCH_BLOCK_RATE) {
+    throw new RosterMismatchError({
+      totalNames,
+      matchedNames: totalNames - unresolvedNames.length,
+      unmatchedNames: unresolvedNames.slice(0, 100),
+      unmatchedRate,
+      totalVehicles: vehicleNumbers.size,
+      unmatchedVehicles: unmatchedVehicles.slice(0, 50),
+    });
   }
 
   // 노선은 차량에 붙은 것을 쓴다. 차량에 노선이 없으면 회사의 첫 노선으로 대체
