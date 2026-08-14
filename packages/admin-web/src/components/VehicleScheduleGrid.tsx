@@ -88,6 +88,7 @@ export default function VehicleScheduleGrid({
   vehicleOff,
   onToggleVehicleOff,
   duplicateSlotIds,
+  unregisteredAt,
 }: {
   slots: VehicleSlot[];
   /** 기초 데이터의 출발 그룹 지정 — 없으면 노선당 한 블록 */
@@ -104,6 +105,12 @@ export default function VehicleScheduleGrid({
   onToggleVehicleOff?: (busNumber: string, date: string, off: boolean) => void;
   /** 같은 날 같은 기사 중복 배정 slot id — 빨간 링 경고 */
   duplicateSlotIds?: Set<number>;
+  /**
+   * 기초 데이터에 계정이 없어 슬롯으로 저장되지 못한 기사 이름.
+   * 키 `YYYY-MM-DD|차번|MORNING`. 인쇄물은 이 이름을 찍으므로 화면에서
+   * 빈칸으로 두면 종이와 어긋난다 — 주황 점선으로 표시한다.
+   */
+  unregisteredAt?: Record<string, string>;
 }) {
   const groups = useMemo<RouteGroup[]>(() => {
     const byRoute = new Map<string, Map<string, Map<string, DayPair>>>();
@@ -303,6 +310,8 @@ export default function VehicleScheduleGrid({
                                 : undefined
                             }
                             duplicateSlotIds={duplicateSlotIds}
+                            unregisteredAm={unregisteredAt?.[`${d.key}|${bus}|MORNING`]}
+                            unregisteredPm={unregisteredAt?.[`${d.key}|${bus}|AFTERNOON`]}
                           />
                         ))}
                       </tr>
@@ -362,6 +371,8 @@ function DayCells({
   off,
   onToggleOff,
   duplicateSlotIds,
+  unregisteredAm,
+  unregisteredPm,
 }: {
   pair?: DayPair;
   editable: boolean;
@@ -370,6 +381,8 @@ function DayCells({
   off?: boolean;
   onToggleOff?: (next: boolean) => void;
   duplicateSlotIds?: Set<number>;
+  unregisteredAm?: string;
+  unregisteredPm?: string;
 }) {
   const td = 'border-b border-r border-gray-100 px-0.5 py-0.5 text-center whitespace-nowrap dark:border-gray-700';
   const tdLast = `${td} border-r-2 border-r-gray-300 dark:border-r-gray-600`; // 날짜 경계
@@ -398,8 +411,20 @@ function DayCells({
     );
   }
 
-  const renderSlot = (slot: VehicleSlot | undefined) => {
+  const renderSlot = (slot: VehicleSlot | undefined, pendingName?: string) => {
     if (!slot) {
+      // 엑셀엔 이름이 있는데 계정이 없어 저장 못 한 칸 — 인쇄물은 이 이름을
+      // 찍으므로 화면도 같은 이름을 보여준다 (등록 필요는 점선으로 구분)
+      if (pendingName) {
+        return (
+          <span
+            title={`${pendingName} — 기초 데이터에 없는 기사입니다. 등록하면 정상 배정됩니다.`}
+            className="block truncate rounded px-0.5 text-amber-600/90 underline decoration-dotted underline-offset-2 dark:text-amber-500/90"
+          >
+            {pendingName}
+          </span>
+        );
+      }
       // 빈 칸 — 초안에서는 클릭해 감차로 표기할 수 있다
       if (canToggleOff && !hasSlots) {
         return (
@@ -459,8 +484,8 @@ function DayCells({
 
   return (
     <>
-      <td className={td}>{renderSlot(pair?.am)}</td>
-      <td className={tdLast}>{renderSlot(pair?.pm)}</td>
+      <td className={td}>{renderSlot(pair?.am, unregisteredAm)}</td>
+      <td className={tdLast}>{renderSlot(pair?.pm, unregisteredPm)}</td>
     </>
   );
 }

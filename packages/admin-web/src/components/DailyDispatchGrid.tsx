@@ -59,6 +59,7 @@ export default function DailyDispatchGrid({
   busGroups,
   vehicleOff,
   postingSlotNo,
+  unregisteredAt,
   spareStandby,
   editable,
   onSlotClick,
@@ -72,6 +73,12 @@ export default function DailyDispatchGrid({
   vehicleOff?: Set<string>;
   /** 게시 순번 (차번 → 그날 순번). 게시 양식(패턴) 데이터가 있을 때만 */
   postingSlotNo?: Record<string, number | null>;
+  /**
+   * 기초 데이터에 계정이 없어 슬롯으로 저장되지 못한 기사 이름.
+   * 키 `차번|MORNING`. 인쇄물(dailyPostingExport)은 이 이름을 찍으므로
+   * 화면이 '공석'으로 비워두면 종이와 화면이 어긋난다 — 주황으로 표시한다.
+   */
+  unregisteredAt?: Record<string, string>;
   /** 그날 배정 없는 스페어 기사 — 엑셀 sp칸 */
   spareStandby?: string[];
   editable: boolean;
@@ -225,6 +232,8 @@ export default function DailyDispatchGrid({
                       editable={editable}
                       onSlotClick={onSlotClick}
                       duplicateSlotIds={duplicateSlotIds}
+                      unregisteredAm={unregisteredAt?.[`${row.bus}|MORNING`]}
+                      unregisteredPm={unregisteredAt?.[`${row.bus}|AFTERNOON`]}
                     />
                   ))}
                 </tbody>
@@ -246,7 +255,9 @@ export default function DailyDispatchGrid({
 
       <p className="text-xs text-gray-400 print:hidden dark:text-gray-500">
         <span className="rounded bg-gray-100 px-1 text-gray-500 dark:bg-gray-900/40">휴</span> = 감차 ·{' '}
-        <span className="font-semibold text-red-500">공석</span> = 배정 없음 (확인 필요) · 순번은 게시
+        <span className="font-semibold text-red-500">공석</span> = 배정 없음 (버스가 나갈 수 없음) ·{' '}
+        <span className="text-amber-600 underline decoration-dotted">주황 이름</span> = 기초 데이터
+        미등록 (등록하면 정상 배정) · 순번은 게시
         양식(순번 로테이션) 데이터가 있으면 그 값, 없으면 블록 내 순서입니다 · 배차는 사정에 따라 변경될 수
         있으니 매일 확인 바랍니다.
       </p>
@@ -259,15 +270,19 @@ function DailyRow({
   editable,
   onSlotClick,
   duplicateSlotIds,
+  unregisteredAm,
+  unregisteredPm,
 }: {
   row: Row;
   editable: boolean;
   onSlotClick?: (slot: VehicleSlot) => void;
   duplicateSlotIds?: Set<number>;
+  unregisteredAm?: string;
+  unregisteredPm?: string;
 }) {
   const td = 'border-b border-gray-100 px-1 py-1 text-center dark:border-gray-700';
 
-  const renderName = (slot: VehicleSlot | undefined) => {
+  const renderName = (slot: VehicleSlot | undefined, pendingName?: string) => {
     if (row.off) {
       // 감차 행에는 기사 이름을 인쇄하지 않는다 — 벽에 붙는 종이와 화면이
       // 다르면 현장은 종이를 믿는다. 배정이 남은 모순 상태면 경고로 드러낸다.
@@ -281,7 +296,22 @@ function DailyRow({
         </span>
       );
     }
-    if (!slot) return <span className="text-[11px] font-semibold text-red-400">공석</span>;
+    if (!slot) {
+      // 엑셀엔 이름이 있는데 계정이 없어 저장 못 한 칸 — 인쇄물은 이 이름을
+      // 찍는다. '공석'으로 비우면 종이와 화면이 어긋나므로 주황으로 보여주고,
+      // 등록이 필요하다는 사실만 점선으로 구분한다.
+      if (pendingName) {
+        return (
+          <span
+            title={`${pendingName} — 기초 데이터에 없는 기사입니다. 등록하면 정상 배정됩니다.`}
+            className="inline-block rounded px-1.5 py-0.5 text-amber-600 underline decoration-dotted underline-offset-2 dark:text-amber-500"
+          >
+            {pendingName}
+          </span>
+        );
+      }
+      return <span className="text-[11px] font-semibold text-red-500">공석</span>;
+    }
     const tint = STATUS_TINT[slot.status] ?? '';
     const isDup = duplicateSlotIds?.has(slot.id) ?? false;
     const cls = `${tint} ${isDup ? 'ring-2 ring-inset ring-red-500' : ''} ${
@@ -310,8 +340,8 @@ function DailyRow({
       >
         {row.bus}
       </td>
-      <td className={td}>{renderName(row.pair.am)}</td>
-      <td className={td}>{renderName(row.pair.pm)}</td>
+      <td className={td}>{renderName(row.pair.am, unregisteredAm)}</td>
+      <td className={td}>{renderName(row.pair.pm, unregisteredPm)}</td>
     </tr>
   );
 }

@@ -352,6 +352,41 @@ export default function SchedulePage() {
 
   // 엑셀엔 있는데 기초 데이터에 없어 이름만 흐리게 뜨는 기사들.
   // 이게 남아 있으면 배차표가 '미완성'으로 보여 무엇을 보여줘도 신뢰가 안 간다.
+  // 화면·인쇄물이 같은 사실을 보게 하는 두 파생값.
+  //  unregisteredAt — 계정이 없어 슬롯으로 저장되지 못한 기사 이름
+  //                   (키: 날짜|차번|시프트). 일일배차 엑셀은 이 이름을 찍는다.
+  //  vacancy        — 운행 차량인데 아무 이름도 없는 칸 = 버스가 나갈 수 없음
+  const { unregisteredAt, vacancy } = useMemo(() => {
+    const map: Record<string, string> = {};
+    let vacant = 0;
+    let unregistered = 0;
+    for (const [date, byV] of Object.entries(postingView?.cells ?? {})) {
+      for (const [vehicle, cell] of Object.entries(byV)) {
+        if (!cell.operating) continue; // 감차는 빈 칸이 정상
+        for (const [k, shift] of [['am', 'MORNING'], ['pm', 'AFTERNOON']] as const) {
+          const d = cell[k];
+          if (!d) {
+            vacant++;
+          } else if (d.unregistered) {
+            unregistered++;
+            map[`${date}|${vehicle}|${shift}`] = d.name;
+          }
+        }
+      }
+    }
+    return { unregisteredAt: map, vacancy: { vacant, unregistered } };
+  }, [postingView]);
+
+  /** 일일배차용 — 그 날짜만 뽑아 `차번|시프트` 로 키를 줄인다 */
+  const dailyUnregistered = useMemo(() => {
+    const out: Record<string, string> = {};
+    const prefix = `${effectiveDailyDate}|`;
+    for (const [k, v] of Object.entries(unregisteredAt)) {
+      if (k.startsWith(prefix)) out[k.slice(prefix.length)] = v;
+    }
+    return out;
+  }, [unregisteredAt, effectiveDailyDate]);
+
   const missingDrivers = useMemo(() => {
     const names = new Set<string>();
     for (const byV of Object.values(postingView?.cells ?? {})) {
@@ -673,8 +708,9 @@ export default function SchedulePage() {
   // 발행 게이트에 걸린 문제 목록 (409 응답) — 강제 발행 확인 UI용
   interface PublishBlockInfo {
     duplicates: { driverName: string; date: string }[];
-    violations: { rule: string; driverName: string; date: string; message: string }[];
+    violations: { rule: string; driverName?: string; date: string; message: string }[];
     warnings: { rule: string; message: string }[];
+    counts?: { vacant: number; unregistered: number; consecutive: number; shortRest: number };
   }
   const [publishBlocked, setPublishBlocked] = useState<PublishBlockInfo | null>(null);
 
@@ -704,8 +740,9 @@ export default function SchedulePage() {
             message?: string;
             data?: {
               duplicates?: { driverName: string; date: string }[];
-              violations?: { rule: string; driverName: string; date: string; message: string }[];
+              violations?: { rule: string; driverName?: string; date: string; message: string }[];
               warnings?: { rule: string; message: string }[];
+              counts?: { vacant: number; unregistered: number; consecutive: number; shortRest: number };
             };
           };
         };
@@ -716,6 +753,7 @@ export default function SchedulePage() {
           duplicates: resp.data.data.duplicates ?? [],
           violations: resp.data.data.violations ?? [],
           warnings: resp.data.data.warnings ?? [],
+          counts: resp.data.data.counts,
         });
         return;
       }
@@ -1733,25 +1771,45 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* ─── 미등록 기사 안내 ─── */}
-      {showPosting && missingDrivers.length > 0 && (
+      {/* ─── 미등록 기사 안내 — 어느 뷰에서 보고 있든 노출한다.
+              (이전엔 게시 양식일 때만 떠서, 차량별·일일배차에서 빈 칸의
+               원인을 알 수 없었다) ─── */}
+      {missingDrivers.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 print:hidden dark:border-amber-800 dark:bg-amber-900/20">
           <div className="min-w-0 text-sm text-amber-800 dark:text-amber-300">
             <p className="font-semibold">
-              기초 데이터에 없는 기사 {missingDrivers.length}명 — 표에 주황색으로 표시됩니다
+              기초 데이터에 없는 기사 {missingDrivers.length}명 — 배차 {vacancy.unregistered}칸이 저장되지
+              못했습니다 (표에 주황색)
             </p>
             <p className="mt-0.5 text-xs">
               {missingDrivers.slice(0, 8).join(', ')}
               {missingDrivers.length > 8 && ` 외 ${missingDrivers.length - 8}명`}
             </p>
+            <p className="mt-0.5 text-xs opacity-80">
+              등록하면 그 칸이 곧바로 채워지고 기사앱에도 배차가 전달됩니다.
+            </p>
           </div>
           <button
             onClick={() => registerMissing.mutate()}
-            disabled={registerMissing.isPending}
+            disabled={registerMissing.isPending || schedule?.status !== 'DRAFT'}
+            title={schedule?.status !== 'DRAFT' ? '초안 상태에서만 등록할 수 있습니다' : undefined}
             className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:opacity-50"
           >
-            {registerMissing.isPending ? '등록 중…' : `${missingDrivers.length}명 한번에 등록`}
+            {registerMissing.isPending ? '등록 중…' : `${missingDrivers.length}명 등록하고 칸 채우기`}
           </button>
+        </div>
+      )}
+
+      {/* ─── 공석 경고 — 운행 차량인데 아무도 없는 칸. 버스가 못 나간다 ─── */}
+      {vacancy.vacant > 0 && (
+        <div className="rounded-lg border border-red-300 bg-red-50 p-3 print:hidden dark:border-red-800 dark:bg-red-900/20">
+          <p className="text-sm font-semibold text-red-800 dark:text-red-300">
+            ⚠ 공석 {vacancy.vacant}칸 — 배정된 기사가 없어 그 버스는 운행할 수 없습니다
+          </p>
+          <p className="mt-1 text-xs text-red-700 dark:text-red-400">
+            일일배차 보기에서 빨간 <strong>공석</strong> 칸을 눌러 기사를 배정하거나, 실제로 안 내보내는
+            차량이면 차량별 보기에서 <strong>감차</strong>로 표시하세요. 공석이 남아 있으면 발행이 차단됩니다.
+          </p>
         </div>
       )}
 
@@ -1810,6 +1868,7 @@ export default function SchedulePage() {
               : undefined
           }
           duplicateSlotIds={duplicateInfo.slotIds}
+          unregisteredAt={unregisteredAt}
         />
       )}
 
@@ -1884,6 +1943,7 @@ export default function SchedulePage() {
             busGroups={busGroupMap}
             vehicleOff={vehicleOffSet}
             postingSlotNo={postingSlotNo}
+            unregisteredAt={dailyUnregistered}
             spareStandby={spareStandby}
             editable={schedule.status === 'DRAFT'}
             onSlotClick={openSlotForEdit}
@@ -2814,13 +2874,27 @@ export default function SchedulePage() {
                   <br />
                 </>
               )}
-              {publishBlocked.violations.length > 0 && (
+              {(publishBlocked.counts?.vacant ?? 0) > 0 && (
                 <>
-                  <strong>연속근무 한도(6일) 초과 {publishBlocked.violations.length}건</strong>
+                  <strong className="text-red-600 dark:text-red-400">
+                    공석 {publishBlocked.counts!.vacant}칸 — 버스가 나갈 수 없음
+                  </strong>
                   <br />
                 </>
               )}
-              이대로 발행하면 과로·이중 배정 상태가 그대로 기사에게 전달됩니다.
+              {(publishBlocked.counts?.unregistered ?? 0) > 0 && (
+                <>
+                  <strong>미등록 기사 칸 {publishBlocked.counts!.unregistered}칸</strong>
+                  <br />
+                </>
+              )}
+              {(publishBlocked.counts?.consecutive ?? 0) > 0 && (
+                <>
+                  <strong>연속근무 한도(6일) 초과 {publishBlocked.counts!.consecutive}건</strong>
+                  <br />
+                </>
+              )}
+              이대로 발행하면 운행 못 하는 버스·과로·이중 배정이 그대로 기사에게 전달됩니다.
             </p>
             <ul className="max-h-48 overflow-y-auto rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 space-y-1">
               {publishBlocked.duplicates.slice(0, 6).map((d, i) => (
