@@ -185,3 +185,56 @@ export async function persistRestingVehicles(
   const r = await prisma.schedulePattern.createMany({ data: rows, skipDuplicates: true });
   return r.count;
 }
+
+/**
+ * 그날 운행해야 하는 (날짜×차량) 목록.
+ *
+ * 1순위는 SchedulePattern(엔진이 만든 운행 계획, 감차 = operating:false).
+ * 패턴이 없는 배차표(솔버 생성분)는 "감차로 지정하지 않은 모든 차량은 매일
+ * 오전·오후 각 1명씩 나간다"는 현장 규칙을 그대로 적용한다 — 활성 차량 ×
+ * 그 달 전체 날짜. 이 기준이 없으면 솔버 배차표의 빈 칸이 검사를 통째로
+ * 빠져나가 '버스가 못 나가는 배차표'가 그대로 발행된다.
+ */
+export async function operatingCells(
+  scheduleId: number,
+): Promise<{ date: Date; busId: number; busNumber: string }[]> {
+  const patterns = await prisma.schedulePattern.findMany({
+    where: { scheduleId, operating: true },
+    select: { date: true, busId: true, bus: { select: { busNumber: true } } },
+  });
+  if (patterns.length > 0) {
+    return patterns.map((p) => ({
+      date: p.date,
+      busId: p.busId,
+      busNumber: p.bus?.busNumber ?? `#${p.busId}`,
+    }));
+  }
+
+  // 패턴 없음 → 활성 차량 × 그 달 날짜에서, 명시적 감차만 제외
+  const schedule = await prisma.schedule.findUnique({
+    where: { id: scheduleId },
+    select: { companyId: true, year: true, month: true },
+  });
+  if (!schedule) return [];
+  const [buses, off] = await Promise.all([
+    prisma.bus.findMany({
+      where: { companyId: schedule.companyId, isActive: true, NOT: { routeId: null } },
+      select: { id: true, busNumber: true },
+    }),
+    prisma.schedulePattern.findMany({
+      where: { scheduleId, operating: false },
+      select: { date: true, busId: true },
+    }),
+  ]);
+  const offSet = new Set(off.map((o) => `${dateKey(o.date)}|${o.busId}`));
+  const daysInMonth = new Date(Date.UTC(schedule.year, schedule.month, 0)).getUTCDate();
+  const out: { date: Date; busId: number; busNumber: string }[] = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = new Date(Date.UTC(schedule.year, schedule.month - 1, d));
+    for (const b of buses) {
+      if (offSet.has(`${dateKey(date)}|${b.id}`)) continue;
+      out.push({ date, busId: b.id, busNumber: b.busNumber });
+    }
+  }
+  return out;
+}
