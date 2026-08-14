@@ -39,6 +39,7 @@ import {
   type RestCyclePolicy,
   type ShiftSlot,
   type ShiftSystemPolicy,
+  type SolverBus,
   type SolverCrew,
   type SolverDriver,
   type SolverInput,
@@ -249,7 +250,7 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
   // ── Phase A: 운전자별 휴무 패턴 사전 생성 ───
   // restCycle 기반 사이클 (5/2, 6/1 등). 운전자별 시작 offset 을 다르게 해서
   // 같은 차량의 페어가 동시에 휴무 안 되도록 분산.
-  const restPlan = buildRestPlan(input.drivers, days, restCycle);
+  const restPlan = buildRestPlan(input.drivers, days, restCycle, input.buses, monthStart);
 
   // ── Phase B: 일별 슬롯 채우기 ───
   const slots: AssignedSlot[] = [];
@@ -341,6 +342,16 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
 interface RestPlan {
   /** driverId → Set<date(YYYY-MM-DD)> (계획 휴무일) */
   restDays: Map<number, Set<string>>;
+  /**
+   * driverId → date → 그날 맡을 시프트 (담당 차량이 있는 기사만).
+   *
+   * 휴무 패턴을 확정한 뒤 그 위에 시프트를 얹는 2단계의 결과다. 한 근무
+   * 블록은 같은 시프트로 가고, 휴무를 지나면 반대로 바꾼다 — 짝꿍은 서로
+   * 반대 시프트라 한 차의 오전·오후가 자연히 채워진다.
+   * 스페어는 계획을 두지 않는다. 빈자리를 메우는 역할이라 그날 필요한
+   * 시프트를 따라가야 하기 때문이다.
+   */
+  plannedShift: Map<number, Map<string, ShiftSlot>>;
 }
 
 /**
@@ -365,72 +376,197 @@ interface RestPlan {
  *   16 home + 4 spare = 20 → offset 0..6 균등 + 페어 내 cycleLen/2 stride
  *   → 매일 ~3명 휴무, 한 차의 페어 둘이 동시 휴무 X
  */
+/** 수요 기반 휴무 계획의 운전자 상태 */
+interface RestState {
+  runLen: number;   // 현재 연속 근무일
+  restLeft: number; // 남은 연속 휴무일
+  work: number;     // 누적 근무일
+  rest: number;     // 누적 휴무일
+}
+
+/**
+ * 휴무 계획 — "누가 언제 쉬는가".
+ *
+ * 표준 rostering 은 휴무 패턴을 먼저 확정하고 그 위에 시프트를 얹는다
+ * (Er-Rbib et al. 2021 'fixed days off'; Optibus rostering). 여기가 그 1단계다.
+ *
+ * 핵심은 **그날 실제로 필요한 인원에 휴무 인원을 맞추는 것**이다. 요일별
+ * 운행 대수 때문에 하루에 필요한 사람 수가 달라지는데(성민: 평일 72 / 토 66 /
+ * 일 60명), 휴무를 전원 5/2 고정으로 잡으면 슬롯이 적은 날 계획에 없던 사람이
+ * 강제로 쉬게 되고 5일 근무 블록이 3일+1일로 잘린다.
+ *
+ * 규칙:
+ *   · 그날 쉬어야 할 인원 = max(전체 - 필요 인원, 사이클상 반드시 쉬어야 할 사람)
+ *   · 쉴 사람은 연속 근무가 긴 사람부터 (쉴 자격을 먼저 얻은 순서)
+ *   · 짝꿍이 이미 쉬는 날은 피한다 — 한 차의 두 기사가 같이 빠지면 그 차를
+ *     통째로 남에게 맡겨야 한다
+ *   · 한 번 쉬기 시작하면 연속 휴무일을 채운다 (2일 붙여 쉬기)
+ * 운행 계획이 없으면(전 차량 매일 운행) 필요 인원이 무한대가 되어 사이클
+ * 그대로 동작한다 — 기존 동작과 같다.
+ */
 function buildRestPlan(
   drivers: SolverDriver[],
   days: string[],
   restCycle: RestCyclePolicy,
+  buses: SolverBus[] | undefined,
+  monthStart: Date,
 ): RestPlan {
   const cycleLen = restCycle.workDays + restCycle.restDays;
   const restDays = new Map<number, Set<string>>();
+  const plannedShift = new Map<number, Map<string, ShiftSlot>>();
+  const crewIndex = new Map<number, number>(); // driverId → 차량 내 순번(0=정, 1=부)
 
-  // 노선별 그룹화 (homeRouteId 있는 운전자)
-  const byRoute = new Map<number | 'orphan', SolverDriver[]>();
-  for (const d of drivers) {
-    const key = d.homeRouteId ?? 'orphan';
-    const arr = byRoute.get(key) ?? [];
-    arr.push(d);
-    byRoute.set(key, arr);
+  // ── 노선별 일일 필요 인원 = 그날 운행 차량 수 × 2교대 ──
+  const demand = new Map<number, Map<string, number>>();
+  for (const b of buses ?? []) {
+    const per = demand.get(b.routeId) ?? new Map<string, number>();
+    const runs = b.operatingDates ? new Set(b.operatingDates) : null;
+    for (const d of days) {
+      if (runs && !runs.has(d)) continue;
+      per.set(d, (per.get(d) ?? 0) + 2);
+    }
+    demand.set(b.routeId, per);
   }
 
-  for (const [_route, routeDrivers] of byRoute.entries()) {
-    // 노선 내 운전자 정렬:
-    //   1순위: homeBusId 있음 → 없음 (HOME 먼저, spare 뒤)
-    //   2순위: homeBusId asc (같은 차의 페어가 묶이도록)
-    //   3순위: id asc (페어 내 안정 정렬)
-    routeDrivers.sort((a, b) => {
-      const aHasHome = a.homeBusId !== undefined ? 0 : 1;
-      const bHasHome = b.homeBusId !== undefined ? 0 : 1;
-      if (aHasHome !== bHasHome) return aHasHome - bHasHome;
-      if (a.homeBusId !== undefined && b.homeBusId !== undefined) {
-        if (a.homeBusId !== b.homeBusId) return a.homeBusId - b.homeBusId;
+  // ── 노선별 그룹화. 담당 노선이 없는 기사(스페어)는 노선에 고르게 나눠
+  //    붙인다 — 계획 목적일 뿐 실제 배정은 솔버가 자유롭게 한다.
+  const byRoute = new Map<number, SolverDriver[]>();
+  const orphans: SolverDriver[] = [];
+  for (const d of drivers) {
+    if (d.homeRouteId === undefined) { orphans.push(d); continue; }
+    const arr = byRoute.get(d.homeRouteId) ?? [];
+    arr.push(d);
+    byRoute.set(d.homeRouteId, arr);
+  }
+  const routeIds = [...byRoute.keys()].sort((a, b) => a - b);
+  if (routeIds.length === 0 && orphans.length > 0) {
+    byRoute.set(-1, orphans);
+  } else {
+    orphans.sort((a, b) => a.id - b.id);
+    orphans.forEach((d, i) => byRoute.get(routeIds[i % routeIds.length])!.push(d));
+  }
+
+  for (const [routeId, group] of byRoute.entries()) {
+    // 노선 내 정렬: 담당 차량 있는 기사 먼저 → 차량별로 묶여 짝꿍이 인접
+    group.sort((a, b) => {
+      const ah = a.homeBusId !== undefined ? 0 : 1;
+      const bh = b.homeBusId !== undefined ? 0 : 1;
+      if (ah !== bh) return ah - bh;
+      if (a.homeBusId !== undefined && b.homeBusId !== undefined && a.homeBusId !== b.homeBusId) {
+        return a.homeBusId - b.homeBusId;
       }
       return a.id - b.id;
     });
 
-    // 노선 내 균등 offset 분배
-    const N = Math.max(routeDrivers.length, 1);
-    // bus 별 인덱스 추적 (PAIR/TRIO 의 driverIdxInCrew 계산용)
+    const N = group.length;
+    const state = new Map<number, RestState>();
+    const partnerOf = new Map<number, number[]>();
+    for (const d of group) {
+      if (d.homeBusId === undefined) continue;
+      const mates = group.filter((x) => x.homeBusId === d.homeBusId && x.id !== d.id).map((x) => x.id);
+      partnerOf.set(d.id, mates);
+    }
+
+    // 초기 위상 — 첫날부터 휴무가 고르게 흩어지도록. 같은 차의 짝꿍은
+    // 사이클의 절반만큼 어긋나게 해 동시 휴무를 피한다.
     const idxInBus = new Map<number, number>();
-
-    for (let i = 0; i < routeDrivers.length; i++) {
-      const d = routeDrivers[i];
-      // 노선 내 base offset — 각 운전자가 다른 phase 에 위치
-      let offset = Math.floor((i * cycleLen) / N);
-
-      // 같은 bus 의 다른 운전자(PAIR/TRIO)면 stride 적용 — 동시 휴무 회피
+    for (let i = 0; i < N; i++) {
+      const d = group[i];
+      let phase = Math.floor((i * cycleLen) / Math.max(N, 1));
       if (d.homeBusId !== undefined) {
-        const idxInCrew = idxInBus.get(d.homeBusId) ?? 0;
-        idxInBus.set(d.homeBusId, idxInCrew + 1);
-        if (idxInCrew > 0) {
-          // 두 번째 이상의 crew member 는 cycleLen/2 stride 더해서 짝꿍과 분리
-          offset = (offset + Math.floor(cycleLen / 2)) % cycleLen;
+        const k = idxInBus.get(d.homeBusId) ?? 0;
+        idxInBus.set(d.homeBusId, k + 1);
+        if (k > 0) phase = (phase + Math.floor(cycleLen / 2)) % cycleLen;
+        crewIndex.set(d.id, k);
+      }
+      const carry = d.carryOverPattern?.consecutiveWorkDays ?? 0;
+      phase = (phase - carry + cycleLen) % cycleLen;
+      state.set(d.id, {
+        runLen: phase < restCycle.workDays ? phase : 0,
+        restLeft: phase < restCycle.workDays ? 0 : cycleLen - phase,
+        work: 0,
+        rest: 0,
+      });
+      restDays.set(d.id, new Set());
+    }
+
+    const perDayDemand = demand.get(routeId);
+
+    // 짝꿍은 항상 반대 시프트 — 한 차의 오전·오후가 그 차 사람들로 채워진다.
+    // 한 달 안에서는 고정(블록이 100% 같은 시프트), 공평성은 달마다 뒤집어 맞춘다.
+    const monthParity = monthStart.getUTCMonth() % 2;
+    const fixedShift = new Map<number, ShiftSlot>();
+    for (const d of group) {
+      if (d.homeBusId === undefined) continue; // 스페어는 빈자리를 따라간다
+      fixedShift.set(d.id, ((crewIndex.get(d.id) ?? 0) + monthParity) % 2 === 0 ? 'PM' : 'AM');
+    }
+
+    for (const day of days) {
+      // 그날 필요한 인원과 시프트별 정원. 운행 계획이 없으면 무제한.
+      const need = perDayDemand?.get(day);
+      const capAM = need === undefined ? Infinity : Math.ceil(need / 2);
+      const capPM = need === undefined ? Infinity : need - Math.ceil(need / 2);
+
+      // 반드시 쉬는 사람: 승인 휴무 · 연속 근무 한도 도달 · 연속 휴무 진행 중
+      const forced = new Set<number>();
+      for (const d of group) {
+        const st = state.get(d.id)!;
+        if (d.approvedDayOffs.includes(day) || st.runLen >= restCycle.workDays || st.restLeft > 0) {
+          forced.add(d.id);
         }
       }
 
-      const carry = d.carryOverPattern?.consecutiveWorkDays ?? 0;
-      const startOffset = (offset - carry + cycleLen) % cycleLen;
+      // 오래 일한 사람이 쉬도록, 근무는 연속 근무가 짧은 사람부터 채운다
+      const pick = (pool: SolverDriver[], cap: number) =>
+        [...pool]
+          .sort((a, b) => {
+            const sa = state.get(a.id)!, sb = state.get(b.id)!;
+            if (sa.runLen !== sb.runLen) return sa.runLen - sb.runLen;
+            if (sa.work !== sb.work) return sa.work - sb.work;
+            return a.id - b.id;
+          })
+          .slice(0, cap === Infinity ? pool.length : cap);
 
-      const set = new Set<string>();
-      for (let j = 0; j < days.length; j++) {
-        const phase = (startOffset + j) % cycleLen;
-        if (phase >= restCycle.workDays) set.add(days[j]);
+      const free = group.filter((d) => !forced.has(d.id));
+      const workAM = pick(free.filter((d) => fixedShift.get(d.id) === 'AM'), capAM);
+      const workPM = pick(free.filter((d) => fixedShift.get(d.id) === 'PM'), capPM);
+      // 남은 정원은 스페어가 메운다 — 그래서 스페어는 시프트를 고정하지 않는다
+      const gap =
+        need === undefined
+          ? Infinity
+          : capAM - workAM.length + (capPM - workPM.length);
+      const workSpare = pick(free.filter((d) => !fixedShift.has(d.id)), gap);
+
+      const working = new Set([...workAM, ...workPM, ...workSpare].map((d) => d.id));
+
+      for (const d of group) {
+        const st = state.get(d.id)!;
+        if (working.has(d.id)) {
+          st.work++;
+          st.runLen++;
+          st.restLeft = 0;
+        } else {
+          restDays.get(d.id)!.add(day);
+          st.rest++;
+          st.runLen = 0;
+          st.restLeft = st.restLeft > 0 ? st.restLeft - 1 : restCycle.restDays - 1;
+        }
       }
-      for (const off of d.approvedDayOffs) set.add(off);
-      restDays.set(d.id, set);
+    }
+
+    // ── 2단계: 확정된 휴무 패턴 위에 시프트를 얹는다 ──
+    // 위에서 정한 고정 시프트를 근무일에 그대로 깔아준다.
+    for (const d of group) {
+      const fixed = fixedShift.get(d.id);
+      if (!fixed) continue;
+      const rest = restDays.get(d.id)!;
+      const plan = new Map<string, ShiftSlot>();
+      for (const day of days) if (!rest.has(day)) plan.set(day, fixed);
+      plannedShift.set(d.id, plan);
     }
   }
 
-  return { restDays };
+  return { restDays, plannedShift };
 }
 
 // ─────────────────────────────────────────────
@@ -502,11 +638,17 @@ function pickDriver(args: PickArgs): PickResult {
   // 정렬은 티어당 한 번만 — candidateCost 가 비싸 2단 통과가 두 번 정렬하면
   // 솔버 실행 시간이 배로 뛴다.
   const rankedTiers = tiers.map((t) => ({ ...t, ranked: rankCandidates(t.list, slot, ctx, policy) }));
-  for (const keepBlock of [true, false]) {
+  // 3단 통과: ① 계획 시프트 일치 ② 블록 연속성 유지 ③ 자유(미배정 방지)
+  for (const pass of [0, 1, 2]) {
   for (const tier of rankedTiers) {
     for (const cand of tier.ranked) {
-      // 블록 시프트 유지 — 어제 근무했다면 같은 시프트여야 한다
-      if (keepBlock) {
+      // ① 휴무 계획 위에 얹은 블록 시프트를 그대로 따른다
+      if (pass === 0) {
+        const planned = restPlan.plannedShift.get(cand.id)?.get(slot.date);
+        if (planned && planned !== slot.shift) continue;
+      }
+      // ①② 블록 시프트 유지 — 어제 근무했다면 같은 시프트여야 한다
+      if (pass <= 1) {
         const prev = ctx.driverSlots
           .get(cand.id)
           ?.find((s) => s.date === previousDate(slot.date));
@@ -797,6 +939,15 @@ function canAssignFill(
   monthStart: Date,
   monthEnd: Date,
 ): boolean {
+  // 앞뒤 날 근무와 시프트가 어긋나면 안 된다 — 한 블록은 같은 시프트로 간다.
+  // (오후 → 다음날 오전은 법정 휴식 8시간도 위협한다)
+  const mine = ctx.driverSlots.get(driverId);
+  if (mine) {
+    const prev = mine.find((s) => s.date === previousDate(date));
+    if (prev && prev.shift !== shift) return false;
+    const nxt = mine.find((s) => s.date === nextDate(date));
+    if (nxt && nxt.shift !== shift) return false;
+  }
   return (
     checkAssignment(ctx, driverId, date, shift, routeId, policy) === null &&
     !violatesRestCycle(ctx, driverId, date, restCycle, monthStart) &&
