@@ -1044,6 +1044,13 @@ export default function SchedulePage() {
     return names.sort((a, b) => a.localeCompare(b, 'ko'));
   }, [allDrivers, driverSlotMap, effectiveDailyDate]);
 
+  /** driverId → 담당 차량 차번 (기초 데이터). 짝꿍 구분의 근거 */
+  const busOfDriver = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const u of allUsersList) if (u.assignedBusNumber) m.set(u.id, u.assignedBusNumber);
+    return m;
+  }, [allUsersList]);
+
   const filteredDrivers = useMemo(() => {
     let result = allDrivers;
     if (filterDriverType !== 'ALL') {
@@ -2090,13 +2097,23 @@ export default function SchedulePage() {
                   const slotMap = driverSlotMap.get(driver.id) || new Map<string, Slot>();
                   const isEven = idx % 2 === 0;
                   const rowBg = isEven ? 'bg-white dark:bg-gray-800' : 'bg-gray-50/80 dark:bg-gray-750';
+                  // 담당 차량이 바뀌는 지점에 굵은 선 — 같은 차번 두 명이 한 짝이라는
+                  // 경계를 눈으로 구분한다. (실물 승무기사 표와 같은 구조)
+                  const myBus = busOfDriver.get(driver.id);
+                  const prevBus = idx > 0 ? busOfDriver.get(filteredDrivers[idx - 1].id) : undefined;
+                  const busChanged = idx > 0 && myBus !== prevBus;
 
                   // 기사별 통계
                   const driverWorkCount = Array.from(slotMap.values()).filter((s) => !s.isRestDay).length;
                   const driverRestCount = Array.from(slotMap.values()).filter((s) => s.isRestDay).length;
 
                   return (
-                    <tr key={driver.id} className={`${rowBg} hover:bg-blue-50/40 dark:hover:bg-blue-900/20 transition-colors`}>
+                    <tr
+                      key={driver.id}
+                      className={`${rowBg} hover:bg-blue-50/40 dark:hover:bg-blue-900/20 transition-colors ${
+                        busChanged ? 'border-t-2 border-t-gray-300 dark:border-t-gray-600' : ''
+                      }`}
+                    >
                       {/* 기사 정보 (고정 열) — 클릭 시 드릴다운 */}
                       <td
                         className={`sticky left-0 z-10 ${rowBg} px-4 py-2 border-b border-r border-gray-200 dark:border-gray-700`}
@@ -2113,6 +2130,14 @@ export default function SchedulePage() {
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className="text-sm text-gray-500 dark:text-gray-400">{driver.employeeId}</span>
+                              {/* 담당 차량 — 같은 차번 두 명이 짝꿍이다.
+                                  이게 없으면 위아래로 붙어 있다는 이유만으로
+                                  다른 차 기사를 짝꿍으로 오해하게 된다. */}
+                              {busOfDriver.get(driver.id) && (
+                                <span className="inline-flex items-center rounded bg-gray-100 px-1.5 py-0.5 text-xs font-bold tabular-nums text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+                                  {busOfDriver.get(driver.id)}호
+                                </span>
+                              )}
                               <span
                                 className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold ${
                                   driver.driverType === 'MAIN'
