@@ -45,6 +45,9 @@ export interface OperatingPlan {
 
 const dateKey = (d: Date) => d.toISOString().slice(0, 10);
 
+/** 감차는 며칠 붙여서 — 기사 휴무(2일)와 맞물리게 한다 */
+const REST_BLOCK_DAYS = 2;
+
 /** 그날 몇 대가 나가야 하는가 — 공휴일 > 토요일 > 평일 순으로 판정 */
 export function countForDate(
   rule: Pick<RouteOperatingRule, 'weekdayBuses' | 'saturdayBuses' | 'holidayBuses' | 'busIds'>,
@@ -103,10 +106,12 @@ export async function buildOperatingPlan(
   const restingByDate = new Map<string, number[]>();
   let totalCells = 0;
 
-  // 노선별 감차 커서 — 쉰 대수만큼 앞으로 밀어 다음 날은 그다음 차량이 쉰다.
+  // 노선별 감차 커서 — 쉰 차량 수만큼 앞으로 밀어 다음엔 그다음 차가 쉰다.
   // 날짜 인덱스로 회전시키면(offset = day % 14) 차량 수가 7의 배수일 때
   // 요일 주기와 맞물려 특정 차량만 계속 일요일에 쉬는 편향이 생긴다.
   const cursors = new Map<number, number>();
+  /** busId → 감차 블록이 끝나는 날(1-based day). 이틀 붙여 세우기 위함 */
+  const restUntil = new Map<number, number>();
 
   const unconfigured = rules.every(
     (r) => r.weekdayBuses == null && r.saturdayBuses == null && r.holidayBuses == null,
@@ -122,12 +127,37 @@ export async function buildOperatingPlan(
       if (total === 0) continue;
       const need = Math.max(0, Math.min(total, countForDate(rule, date, isHoliday)));
 
-      // 쉴 차량을 커서에서부터 필요한 만큼 집고, 커서를 그만큼 전진시킨다
+      // 감차도 **연속 2일씩 묶어서** 돌린다.
+      //
+      // 하루씩 흩어 감차하면 그 차 기사들의 휴무도 하루씩 조각나서, 5일 근무
+      // 블록이 3일+1일로 부서진다(실측 5일 블록 228→40개). 실물 배차표도
+      // 한 번 세운 차는 이틀 붙여 세운다.
       const restCount = total - need;
-      const cursor = cursors.get(rule.routeId) ?? 0;
       const resting: number[] = [];
-      for (let i = 0; i < restCount; i++) resting.push(rule.busIds[(cursor + i) % total]);
-      cursors.set(rule.routeId, restCount > 0 ? (cursor + restCount) % total : cursor);
+      // ① 진행 중인 감차 블록은 계속
+      for (const busId of rule.busIds) {
+        if ((restUntil.get(busId) ?? -1) >= day) resting.push(busId);
+      }
+      // ② 모자라면 커서에서 새 블록을 시작
+      let cursor = cursors.get(rule.routeId) ?? 0;
+      let guard = 0;
+      while (resting.length < restCount && guard++ < total * 2) {
+        const busId = rule.busIds[cursor % total];
+        cursor++;
+        if (resting.includes(busId)) continue;
+        restUntil.set(busId, day + REST_BLOCK_DAYS - 1);
+        resting.push(busId);
+      }
+      cursors.set(rule.routeId, cursor % total);
+      // ③ 남으면(주말→평일로 필요 대수가 늘 때) 오래 쉰 차부터 복귀시킨다
+      while (resting.length > restCount) {
+        let earliest = 0;
+        for (let i = 1; i < resting.length; i++) {
+          if ((restUntil.get(resting[i]) ?? 0) < (restUntil.get(resting[earliest]) ?? 0)) earliest = i;
+        }
+        restUntil.delete(resting[earliest]);
+        resting.splice(earliest, 1);
+      }
       const restSet = new Set(resting);
       const running = rule.busIds.filter((b) => !restSet.has(b));
 
