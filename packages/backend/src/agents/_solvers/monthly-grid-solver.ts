@@ -26,6 +26,7 @@ import {
   isWeekend,
   parseDate,
   validateFullGrid,
+  wouldViolateGridRules,
   type ConstraintContext,
 } from './constraints';
 import {
@@ -50,6 +51,7 @@ import {
   type UnfilledSlot,
   type WorkloadEvaluation,
 } from './types';
+import { buildCyclicRoster, supportsCyclicRoster } from './cyclic-roster';
 import { createRng, type Rng } from '../../utils/seededRng';
 
 // ─────────────────────────────────────────────
@@ -245,6 +247,32 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
     const arr = driversByRoute.get(d.homeRouteId) ?? [];
     arr.push(d);
     driversByRoute.set(d.homeRouteId, arr);
+  }
+
+  // ── 순환 근무표 경로 (2교대 + 짝꿍) ───
+  //
+  // 짤 수 있는 구조라면 하루씩 그리디로 채우지 않고, "누가 며칠 일하고 며칠
+  // 쉬나"를 먼저 확정한 뒤 그 위에 시프트를 얹는다. 연속 근무일 안에서
+  // 시프트가 바뀌는 일이 구조적으로 없어지고, 오후→다음날 오전(법 제44조의6
+  // 연속 휴식 8시간을 위협하는 조합)도 나오지 않는다. cyclic-roster.ts 참고.
+  if (supportsCyclicRoster(policy, crews)) {
+    const roster = buildCyclicRoster({
+      days,
+      drivers: input.drivers,
+      buses: input.buses,
+      crews,
+      policy,
+      ctx,
+    });
+    // 로컬 서치는 돌리지 않는다 — SWAP 은 시프트가 같은 슬롯끼리만 바꾸지만
+    // 근무 블록의 경계를 흐트러뜨려, 방금 세운 5일 블록 구조를 깎아먹는다.
+    const violations = validateFullGrid(input.drivers, roster.slots, monthStart, monthEnd, policy);
+    const workloads = computeWorkloads(input.drivers, roster.slots, policy);
+    const metrics = computeMetrics(workloads, roster.slots, violations, roster.unfilled, 0, weights, restCycle);
+    const summary = renderSummary(input, metrics, workloads, roster.unfilled);
+    const restingByDate: Record<string, number[]> = {};
+    for (const [date, busIds] of roster.restingByDate) restingByDate[date] = busIds;
+    return { slots: roster.slots, unfilled: roster.unfilled, workloads, metrics, summary, restingByDate };
   }
 
   // ── Phase A: 운전자별 휴무 패턴 사전 생성 ───
@@ -959,94 +987,6 @@ function canAssignFill(
 // FILL move 헬퍼 — 그리드 후처리 제약 사전 검증
 // ─────────────────────────────────────────────
 
-/**
- * FILL move 후보를 위한 그리드 레벨 제약 사전 검증.
- *
- * checkAssignment 가 슬롯 단위(승인휴무·면허·중복배정 등)를 처리하는 반면,
- * 아래 규칙은 validateFullGrid 에서 사후 검출하는 연속·주간 집계 룰이다.
- * FILL move 전에 미리 걸러 constitutional violation total 이 증가하지 않도록 한다.
- *
- * 검증 대상:
- *   - noNightStreak: 야간 시프트 연속 횟수 (이미 maxConsecutive 에 도달했으면 거부)
- *   - weeklyMaxWorkDays: 해당 주 근무일이 maxDays 에 달했으면 거부
- *
- * guaranteedWeekendOff 는 월 집계 룰이라 사전 검증이 어렵지만,
- * 해당 슬롯이 주말이고 드라이버가 아직 이번 달 단 하나의 주말 휴무도 없는 상태면 거부.
- */
-function wouldViolateGridRules(
-  ctx: ConstraintContext,
-  driverId: number,
-  date: string,
-  shift: ShiftSlot,
-  policy: CompanyPolicy,
-  monthStart: Date,
-  monthEnd: Date,
-): boolean {
-  const constitutional = policy.constitutional;
-  const existing = ctx.driverSlots.get(driverId) ?? [];
-
-  // noNightStreak — 현재 ctx 기준으로 야간 연속 일수 시뮬레이션
-  const nightRule = constitutional?.noNightStreak;
-  if (nightRule?.enabled && nightRule.nightShifts.includes(shift)) {
-    // 추가하려는 날 기준으로 뒤/앞 연속 야간 일수를 계산
-    const nightDates = new Set(
-      existing.filter((s) => nightRule.nightShifts.includes(s.shift)).map((s) => s.date),
-    );
-    let backward = 0;
-    let cursor = parseDate(date);
-    for (let i = 0; i < nightRule.maxConsecutive; i++) {
-      cursor.setUTCDate(cursor.getUTCDate() - 1);
-      if (nightDates.has(formatDate(cursor))) backward++;
-      else break;
-    }
-    let forward = 0;
-    cursor = parseDate(date);
-    for (let i = 0; i < nightRule.maxConsecutive; i++) {
-      cursor.setUTCDate(cursor.getUTCDate() + 1);
-      if (nightDates.has(formatDate(cursor))) forward++;
-      else break;
-    }
-    if (backward + 1 + forward > nightRule.maxConsecutive) return true;
-  }
-
-  // weeklyMaxWorkDays — 해당 주 현재 근무일 수 확인
-  // weeklyCount is the PRE-fill count (existing slots only, candidate not included).
-  // Post-fill count = weeklyCount + 1. validateFullGrid flags when final count > maxDays,
-  // so the fill is illegal iff (weeklyCount + 1) > maxDays ⟺ weeklyCount >= maxDays.
-  // The >= comparison is therefore correct and intentional.
-  const weeklyRule = constitutional?.weeklyMaxWorkDays;
-  if (weeklyRule?.enabled) {
-    const d = parseDate(date);
-    const dayOfWeek = d.getUTCDay();
-    const weekStartDate = new Date(d);
-    weekStartDate.setUTCDate(d.getUTCDate() - dayOfWeek);
-    const weekEndDate = new Date(weekStartDate);
-    weekEndDate.setUTCDate(weekStartDate.getUTCDate() + 6);
-    const weekStartIso = formatDate(weekStartDate);
-    const weekEndIso = formatDate(weekEndDate);
-    const weeklyCount = existing.filter(
-      (s) => s.date >= weekStartIso && s.date <= weekEndIso,
-    ).length;
-    if (weeklyCount >= weeklyRule.maxDays) return true;
-  }
-
-  // guaranteedWeekendOff — 주말 슬롯이고 드라이버가 아직 이달 주말 휴무가 없는 경우 거부
-  // (월 내 총 주말 일수 중 workedWeekends + 1 이 모두 채워지면 minPerMonth 보장 불가)
-  const weekendRule = constitutional?.guaranteedWeekendOff;
-  if (weekendRule?.enabled && isWeekend(date)) {
-    const monthStartIso = formatDate(monthStart);
-    const monthEndIso = formatDate(monthEnd);
-    const totalWeekendDays = countWeekendDays(monthStart, monthEnd);
-    const workedWeekends = existing.filter(
-      (s) => s.date >= monthStartIso && s.date <= monthEndIso && isWeekend(s.date),
-    ).length;
-    // 이 슬롯을 추가하면 workedWeekends+1 이 되는데, 남은 주말 휴무 가능 일수 확인
-    // totalWeekendDays - (workedWeekends+1) < minPerMonth → 거부
-    if (totalWeekendDays - (workedWeekends + 1) < weekendRule.minPerMonth) return true;
-  }
-
-  return false;
-}
 
 // ─────────────────────────────────────────────
 // Phase C: 로컬 서치

@@ -597,4 +597,13 @@ export interface SolverOutput {
   metrics: SolverMetrics;
   /** 사람이 읽을 요약 (DispatchAgent 가 그대로 채팅에 전달 가능) */
   summary: string;
+  /**
+   * 날짜(YYYY-MM-DD) → 그날 세운 차량 IDs.
+   *
+   * 순환 근무표 경로에서만 채워진다. 요일별 운행 **대수**는 노선 설정을 그대로
+   * 지키되, **어느 차**를 세울지는 기사 휴무와 맞물려야 해서 솔버가 정한다.
+   * 있으면 호출자는 운행 계획 대신 이 값을 SchedulePattern 으로 저장해야 한다
+   * — 안 그러면 화면의 '휴'와 실제 배정이 어긋난다.
+   */
+  restingByDate?: Record<string, number[]>;
 }
