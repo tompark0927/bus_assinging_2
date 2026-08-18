@@ -41,6 +41,15 @@ export interface OperatingPlan {
   totalCells: number;
   /** 요일별 대수를 하나도 설정하지 않았다면 true — 이때는 전 차량 운행 */
   unconfigured: boolean;
+  /**
+   * 노선별·날짜별 운행 **대수** (routeId → 'YYYY-MM-DD' → 대수).
+   *
+   * 대수는 노선 설정이 정하는 정책이고, **어느 차**를 세울지는 기사 휴무와
+   * 맞물려야 하는 배차 결정이다. 여기서 미리 고른 차량 조합을 그대로 넘기면
+   * 감차일이 짝꿍 휴무와 어긋나 휴무가 2일에서 3~4일로 늘어난다. 그래서
+   * 솔버에는 대수만 넘기고 차량 선택은 맡긴다.
+   */
+  dailyCountsByRoute: Record<number, Record<string, number>>;
 }
 
 const dateKey = (d: Date) => d.toISOString().slice(0, 10);
@@ -104,6 +113,7 @@ export async function buildOperatingPlan(
 
   const busOperatingDates = new Map<number, string[]>();
   const restingByDate = new Map<string, number[]>();
+  const dailyCountsByRoute: Record<number, Record<string, number>> = {};
   let totalCells = 0;
 
   // 노선별 감차 커서 — 쉰 차량 수만큼 앞으로 밀어 다음엔 그다음 차가 쉰다.
@@ -126,6 +136,7 @@ export async function buildOperatingPlan(
       const total = rule.busIds.length;
       if (total === 0) continue;
       const need = Math.max(0, Math.min(total, countForDate(rule, date, isHoliday)));
+      (dailyCountsByRoute[rule.routeId] ??= {})[key] = need;
 
       // 감차도 **연속 2일씩 묶어서** 돌린다.
       //
@@ -185,6 +196,7 @@ export async function buildOperatingPlan(
     })),
     totalCells,
     unconfigured,
+    dailyCountsByRoute,
   };
 }
 

@@ -263,6 +263,7 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
       crews,
       policy,
       ctx,
+      routeDailyBusCounts: input.routeDailyBusCounts,
     });
     // 로컬 서치는 돌리지 않는다 — SWAP 은 시프트가 같은 슬롯끼리만 바꾸지만
     // 근무 블록의 경계를 흐트러뜨려, 방금 세운 5일 블록 구조를 깎아먹는다.
