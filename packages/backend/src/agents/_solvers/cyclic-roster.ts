@@ -26,6 +26,12 @@
  *   근무일수 분포        16~23일 → 18~22일 (하드 위반 0)
  *   공석                 0 유지
  *
+ * 월 1일은 근무 사이클의 시작이 아니다. 전월 마지막 연속 근무일수
+ * (carryOverPattern)를 이어받아 출발하고, 전월 자료가 없으면 '이미 돌아가고
+ * 있는 근무표 한가운데'로 위상을 흩뜨려 시작한다. 이걸 안 하면 전원이 방금
+ * 휴무를 시작한 상태가 되어, 첫 블록이 끝나는 5일차까지 나머지가 대기하면서
+ * 월 초에만 3~4일 연속 휴무가 줄줄이 생긴다.
+ *
  * 한계도 적어둔다. 근무 블록이 1~2일로 짧게 끊기는 자리가 아직 남는다
  * (1일 56 · 2일 80). 그날 그 차가 안 나가면(운행 계획상 감차) 그 짝꿍도
  * 강제로 쉬어야 하는데, 그 날짜가 블록 한가운데 떨어지면 블록이 쪼개지기
@@ -33,6 +39,11 @@
  * 것으로 상당 부분 줄였지만(1일 블록 62→52), 감차 날짜 자체를 휴무와 함께
  * 정하지 않는 한 완전히 없앨 수는 없다. 운행 계획의 차량 지정은 정비·운휴
  * 같은 실제 의미를 담을 수 있어 솔버가 덮어쓰지 않는다.
+ *
+ * 휴무도 전부 2일로 떨어지지는 않는다(2일 280 · 3일 100 · 1일 82). 요일별
+ * 운행 대수가 12/11/10 으로 달라지니 필요 인원도 날마다 달라지고, 그 변동을
+ * 짝꿍의 휴무가 흡수하기 때문이다. 한 달 근무일이 20일이면 휴무가 11일인데
+ * 블록이 4개면 평균 2.75일이라, 애초에 전부 2일일 수는 없다.
  *
  * 참고: Er-Rbib et al.(2021) 의 2단계 구성("first making a day-off pattern and
  * second placing daily shifts under the constraint of the day-off pattern"),
@@ -148,6 +159,15 @@ interface LineOptions {
   /** 시작 위상을 흩뜨리는 값 — 전원이 같은 날 쉬지 않게 한다 */
   seed: number;
   cycle: CycleRules;
+  /**
+   * 월 1일의 출발 상태 — 전월에서 이어받는다.
+   *
+   * 이게 없으면 전원이 "방금 휴무를 시작한" 상태로 출발한다. 수요가 일정하면
+   * 첫 블록이 끝날 때까지(5일쯤) 나머지가 계속 대기하게 되어, 월 초에만
+   * 3~4일 연속 휴무가 줄줄이 생긴다. 달력상 1일이 근무 사이클의 시작인 것은
+   * 아니므로, 전월 마지막 연속 근무일수를 그대로 이어 붙여야 한다.
+   */
+  initial?: { work: boolean; runLen: number }[];
   /** forcedRest[i][d] = true 면 유닛 i 는 그날 반드시 쉰다 */
   forcedRest?: boolean[][];
   /**
@@ -178,9 +198,11 @@ export function buildLines(units: number, opts: LineOptions): boolean[][] {
   const { demand, seed, cycle } = opts;
   const { minWork: MIN_WORK, maxWork: MAX_WORK, minRest: MIN_REST, maxRest } = cycle;
   const days = demand.length;
-  const mode: ('WORK' | 'REST')[] = new Array(units).fill('REST');
-  // 시작 위상을 다르게 — 전부 같은 날 블록을 시작하면 휴무가 한 날에 몰린다
-  const runLen = Array.from({ length: units }, (_, i) => MIN_REST + ((i * 3 + seed) % (maxRest - MIN_REST + 1)));
+  // 출발 상태 — 전월에서 이어받은 값이 있으면 그대로, 없으면 사이클 위상을
+  // 흩뜨려 '이미 돌아가고 있는 근무표 한가운데'로 시작한다.
+  const start = opts.initial ?? spreadStart(units, demand[0] ?? 0, seed, cycle);
+  const mode: ('WORK' | 'REST')[] = start.map((s) => (s.work ? 'WORK' : 'REST'));
+  const runLen = start.map((s) => s.runLen);
   const worked = new Array(units).fill(0);
   const sched: boolean[][] = Array.from({ length: units }, () => new Array(days).fill(false));
 
@@ -331,6 +353,44 @@ export function buildLines(units: number, opts: LineOptions): boolean[][] {
   return sched;
 }
 
+/**
+ * 유닛별 전월 이어받기. 한 명이라도 전월 자료가 없으면 전체를 합성 위상에
+ * 맡긴다 — 일부만 이어받으면 그 사람들만 몰려 첫 주가 되레 뒤틀린다.
+ */
+function carriedStart(
+  unitDrivers: number[][],
+  startOf: (ids: number[], cycle: CycleRules) => { work: boolean; runLen: number } | null,
+  cycle: CycleRules,
+): { work: boolean; runLen: number }[] | undefined {
+  const out = unitDrivers.map((ids) => startOf(ids, cycle));
+  return out.every((x) => x !== null) ? (out as { work: boolean; runLen: number }[]) : undefined;
+}
+
+/**
+ * 전월 정보가 없을 때의 출발 상태.
+ *
+ * 첫날 필요한 만큼은 이미 근무 중인 상태로 두되, 연속 근무일수를 1..maxWork
+ * 로 흩뜨려 블록이 같은 날 한꺼번에 끝나지 않게 한다. 나머지는 휴무를 이미
+ * 채운 상태로 둬서 바로 다음 날부터 투입될 수 있게 한다.
+ */
+function spreadStart(
+  units: number,
+  firstDemand: number,
+  seed: number,
+  cycle: CycleRules,
+): { work: boolean; runLen: number }[] {
+  const order = Array.from({ length: units }, (_, i) => i).sort(
+    (a, b) => ((a * 7 + seed) % units) - ((b * 7 + seed) % units) || a - b,
+  );
+  const out = new Array(units).fill(null).map(() => ({ work: false, runLen: cycle.minRest }));
+  order.forEach((unit, k) => {
+    out[unit] = k < firstDemand
+      ? { work: true, runLen: 1 + (k % cycle.maxWork) }
+      : { work: false, runLen: cycle.minRest + ((k - firstDemand) % (cycle.maxRest - cycle.minRest + 1)) };
+  });
+  return out;
+}
+
 /** 연속 근무 구간 [시작, 끝] 목록 */
 export function blocksOf(row: boolean[]): [number, number][] {
   const out: [number, number][] = [];
@@ -379,6 +439,27 @@ export function buildCyclicRoster(args: CyclicRosterArgs): CyclicRosterResult {
 
   const pairCycle = cycleRulesFor(policy);
   const spareCycle = cycleRulesFor(policy, SPARE_EXTRA_REST);
+
+  /**
+   * 전월 마지막 연속 근무일수를 출발 상태로 옮긴다.
+   *
+   * 달력상 1일이 근무 사이클의 시작은 아니다. 전월 말에 3일째 근무 중이던
+   * 사람은 1일에 4일째를 이어가야 하고, 전월 말에 쉬고 있던 사람은 1일부터
+   * 나와야 한다. 이걸 안 보면 월 초에만 3~4일 연속 휴무가 줄줄이 생긴다.
+   * 짝꿍은 같이 움직이므로 둘 중 큰 값을 쓴다.
+   */
+  const startOf = (driverIds: number[], cycle: ReturnType<typeof cycleRulesFor>) => {
+    let streak = -1;
+    for (const id of driverIds) {
+      const c = driverById0.get(id)?.carryOverPattern;
+      if (c) streak = Math.max(streak, c.consecutiveWorkDays);
+    }
+    if (streak < 0) return null; // 전월 자료 없음 → 합성 위상 사용
+    return streak > 0
+      ? { work: true, runLen: Math.min(streak, cycle.maxWork) }
+      : { work: false, runLen: cycle.minRest };
+  };
+  const driverById0 = new Map<number, SolverDriver>(drivers.map((d) => [d.id, d]));
 
   const crewByBus = new Map<number, SolverCrew>(crews.map((c) => [c.busId, c]));
   const busById = new Map<number, SolverBus>(buses.map((b) => [b.id, b]));
@@ -466,6 +547,7 @@ export function buildCyclicRoster(args: CyclicRosterArgs): CyclicRosterResult {
         demand: counts.map((c, d) => Math.max(0, c - uncov[d])),
         seed: rid,
         cycle: pairCycle,
+        initial: carriedStart(list.map((b) => crewByBus.get(b.id)!.driverIds), startOf, pairCycle),
         grid: gridRules,
         // 노선 설정이 그 차를 아예 못 쓰게 한 날(정비·운휴)은 짝꿍도 강제 휴무
         forcedRest: list.map((b) => days.map((day) => !mayRun(b, day))),
@@ -544,6 +626,7 @@ export function buildCyclicRoster(args: CyclicRosterArgs): CyclicRosterResult {
       demand: uncoveredBuses.map((a) => a.length),
       seed: 9973,
       cycle: spareCycle,
+      initial: carriedStart(spareCrews.map((c) => [...c]), startOf, spareCycle),
       grid: gridRules,
     });
     const crewOfDay: [number, number][][] = Array.from({ length: nDays }, () => []);
