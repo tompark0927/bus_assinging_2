@@ -237,3 +237,38 @@ describe('그리디 경로는 그대로 — 회귀 방지', () => {
     expect(DEFAULT_POLICY.preset).toBe('CITY_2SHIFT');
   });
 });
+
+describe('월 경계 — 1일은 근무 사이클의 시작이 아니다', () => {
+  it('월 초에 전원이 길게 쉬지 않는다 (전원 휴무 상태로 출발하지 않는다)', () => {
+    const r = solveMonthlyGrid(buildInput(14, 16));
+    const first = new Map<number, string>();
+    for (const s of r.slots) {
+      const cur = first.get(s.driverId);
+      if (!cur || s.date < cur) first.set(s.driverId, s.date);
+    }
+    // 1일부터 나오는 사람이 과반이어야 한다
+    const day1 = [...first.values()].filter((d) => d === '2026-07-01').length;
+    expect(day1).toBeGreaterThan(first.size / 2);
+    // 아무도 휴무 상한을 넘겨 쉬며 시작하지 않는다 (5/2 정책 → 최대 5일)
+    for (const d of first.values()) expect(Number(d.slice(-2))).toBeLessThanOrEqual(6);
+  });
+
+  it('전월 마지막 연속 근무일수를 이어받는다', () => {
+    const input = buildInput(14, 16);
+    // 전원에게 전월 이월 정보를 준다 — 짝꿍 절반은 4일째 근무 중, 나머지는 휴무 중
+    input.drivers = input.drivers.map((d, i) => ({
+      ...d,
+      carryOverPattern: {
+        consecutiveWorkDays: i % 4 < 2 ? 4 : 0,
+        lastShift: null,
+        lastWeekDominantShift: 'MIXED' as const,
+      },
+    }));
+    const r = solveMonthlyGrid(input);
+    const onDay1 = new Set(r.slots.filter((s) => s.date === '2026-07-01').map((s) => s.driverId));
+    // 4일째 근무 중이던 사람은 1일에도 나와야 한다 (5일 블록의 마지막 날)
+    const carried = input.drivers.filter((_, i) => i % 4 < 2).map((d) => d.id);
+    const workedOnDay1 = carried.filter((id) => onDay1.has(id)).length;
+    expect(workedOnDay1).toBeGreaterThan(carried.length / 2);
+  });
+});
