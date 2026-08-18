@@ -249,24 +249,26 @@ describe('월 경계 — 1일은 근무 사이클의 시작이 아니다', () =>
     // 1일부터 나오는 사람이 과반이어야 한다
     const day1 = [...first.values()].filter((d) => d === '2026-07-01').length;
     expect(day1).toBeGreaterThan(first.size / 2);
-    // 아무도 휴무 상한을 넘겨 쉬며 시작하지 않는다 (5/2 정책 → 최대 5일)
-    for (const d of first.values()) expect(Number(d.slice(-2))).toBeLessThanOrEqual(6);
+    // 대다수가 첫 사흘 안에 근무를 시작한다 (전원 휴무 출발이면 5일까지 밀린다)
+    const within3 = [...first.values()].filter((d) => Number(d.slice(-2)) <= 3).length;
+    expect(within3 / first.size).toBeGreaterThan(0.8);
   });
 
   it('전월 마지막 연속 근무일수를 이어받는다', () => {
     const input = buildInput(14, 16);
-    // 전원에게 전월 이월 정보를 준다 — 짝꿍 절반은 4일째 근무 중, 나머지는 휴무 중
+    // 전원에게 전월 이월 정보를 준다 — 짝꿍 절반은 블록 2일째(계속 나와야 함),
+    // 나머지는 휴무 중. 2일째면 최소 근무 블록(3일)에 못 미쳐 반드시 이어간다.
     input.drivers = input.drivers.map((d, i) => ({
       ...d,
       carryOverPattern: {
-        consecutiveWorkDays: i % 4 < 2 ? 4 : 0,
+        consecutiveWorkDays: i % 4 < 2 ? 2 : 0,
         lastShift: null,
         lastWeekDominantShift: 'MIXED' as const,
       },
     }));
     const r = solveMonthlyGrid(input);
     const onDay1 = new Set(r.slots.filter((s) => s.date === '2026-07-01').map((s) => s.driverId));
-    // 4일째 근무 중이던 사람은 1일에도 나와야 한다 (5일 블록의 마지막 날)
+    // 블록 2일째였던 사람은 1일에도 나와야 한다 (최소 블록 길이를 못 채웠다)
     const carried = input.drivers.filter((_, i) => i % 4 < 2).map((d) => d.id);
     const workedOnDay1 = carried.filter((id) => onDay1.has(id)).length;
     expect(workedOnDay1).toBeGreaterThan(carried.length / 2);

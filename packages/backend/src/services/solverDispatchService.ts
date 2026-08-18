@@ -808,12 +808,17 @@ export async function generateMonthlyScheduleV2(args: {
   // 근무를 한 달에 수백 칸 만들어낸다 (그만큼 인력이 모자란 것처럼 보인다).
   const plan = await buildOperatingPlan(args.companyId, args.year, args.month);
 
+  // 운행 **대수**만 넘기고, 어느 차를 세울지는 솔버가 기사 휴무와 맞물려
+  // 정하게 한다. 여기서 차량 조합까지 못박으면 감차일이 짝꿍 휴무와 어긋나
+  // 그 짝꿍의 휴무가 2일에서 3~4일로 늘어난다(실측: 3일 이상 휴무의 대부분).
+  // busOperatingDates 는 정비·장기 운휴처럼 **정말 못 쓰는 차**를 표시할 때만
+  // 넘긴다 — 지금은 그런 입력이 없으므로 대수만 넘긴다.
   const input = await buildSolverInputFromDb({
     companyId: args.companyId,
     year: args.year,
     month: args.month,
     policy,
-    busOperatingDates: plan.unconfigured ? undefined : plan.busOperatingDates,
+    busOperatingDates: undefined,
     newHireDriverIds: args.newHireDriverIds ? new Set(args.newHireDriverIds) : undefined,
     blockedRouteIdsByDriver: blockedRouteIdsByDriver.size > 0 ? blockedRouteIdsByDriver : undefined,
   });
@@ -827,6 +832,8 @@ export async function generateMonthlyScheduleV2(args: {
   if (!input.crews || input.crews.length === 0) {
     throw new Error('차량에 배정된 기사가 없습니다. 기사 등록 시 담당 차량(차번)을 입력해주세요.');
   }
+
+  if (!plan.unconfigured) input.routeDailyBusCounts = plan.dailyCountsByRoute;
 
   const output = solveMonthlyGrid(input);
 

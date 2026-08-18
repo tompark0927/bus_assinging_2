@@ -481,6 +481,19 @@ export interface SolverInput {
   localSearchIterations?: number;
   /** 로컬 서치 RNG 시드. 지정 시 동일 입력 → 동일 결과(재현·감사 가능). 미지정 시 고정 기본 시드 사용. */
   randomSeed?: number;
+  /**
+   * 노선별·날짜별 운행 **대수** (routeId → 'YYYY-MM-DD' → 대수).
+   *
+   * 노선 설정의 요일별 대수(평일 12 / 토 11 / 휴일 10)를 그대로 넘긴다.
+   * 이걸 주면 **어느 차**를 세울지는 솔버가 기사 휴무와 맞물려 정한다.
+   * 감차일이 짝꿍의 휴무와 어긋나면 그 짝꿍의 휴무가 2일에서 3~4일로
+   * 늘어나기 때문이다(실측: 3일 이상 휴무 56건 중 48건이 이 겹침).
+   *
+   * 미지정 시 기존대로 bus.operatingDates 를 대수의 근거로도 쓴다.
+   * bus.operatingDates 는 이 값과 무관하게 항상 **가용 여부**로 지켜진다
+   * — 정비·장기 운휴 차량을 솔버가 멋대로 꺼내 쓰면 안 되기 때문이다.
+   */
+  routeDailyBusCounts?: Record<number, Record<string, number>>;
 }
 
 export interface AssignedSlot {

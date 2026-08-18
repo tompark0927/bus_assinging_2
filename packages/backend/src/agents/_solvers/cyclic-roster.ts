@@ -18,13 +18,26 @@
  *            → 연속 근무일 안에서 시프트가 바뀌는 일이 **구조적으로** 없다.
  *
  * 같은 데이터로 측정한 결과(2026년 7월, 실제 생성 출력):
- *   연속일 시프트 전환   12.0% → 0.0%      (0/1598)
- *   메인 전 블록 단일시프트 45% → 100%     (84/84)
- *   5일 근무 블록        218개 → 306개
+ *   연속일 시프트 전환   12.0% → 0.0%      (0/1516)
+ *   메인 전 블록 단일시프트 45% → 100%
  *   오후→다음날 오전     110건 → 0건       (법 제44조의6)
  *   고정차 승무율         38% → 100%
- *   근무일수 분포        16~23일 → 18~22일 (하드 위반 0)
+ *   휴무 2일 이하        —      → 98.6%    (2일 548 · 1일 16 · 3일 8)
+ *   휴무 4일 이상        26+16건 → 0건
+ *   근무일수 분포        16~23일 → 17~21일
  *   공석                 0 유지
+ *
+ * 근무 블록은 4일이 중심이다(4일 344 · 3일 214). 5일 근무 2일 휴무를 전원에게
+ * 주려면 가동률 5/7 = 0.714 가 필요한데, 성민은 2160칸에 108명이라 1인당
+ * 20일 = 0.645 다. 인력이 5/2 기준보다 10명쯤 많다는 뜻이고, 그 여유를 긴
+ * 휴무로 흘리면 4~5일 휴무가 생긴다. 그래서 블록 길이를 필요 가동률에서
+ * 역산해 휴무를 2일로 고정한다.
+ *
+ * 감차(그날 어느 차를 세우나)는 이 계산 안에서 함께 정한다. 노선 설정의
+ * 요일별 **대수**는 그대로 지키되(불일치 0 검증), **어느 차**를 세울지는
+ * 짝꿍의 휴무와 맞물려야 한다 — 감차일이 휴무와 어긋나면 그 짝꿍의 휴무가
+ * 2일에서 3~4일로 늘어난다(그 겹침이 3일 이상 휴무의 대부분이었다).
+ * 대수는 정책이고 차량 선택은 배차 결정이다.
  *
  * 월 1일은 근무 사이클의 시작이 아니다. 전월 마지막 연속 근무일수
  * (carryOverPattern)를 이어받아 출발하고, 전월 자료가 없으면 '이미 돌아가고
@@ -32,18 +45,10 @@
  * 휴무를 시작한 상태가 되어, 첫 블록이 끝나는 5일차까지 나머지가 대기하면서
  * 월 초에만 3~4일 연속 휴무가 줄줄이 생긴다.
  *
- * 한계도 적어둔다. 근무 블록이 1~2일로 짧게 끊기는 자리가 아직 남는다
- * (1일 56 · 2일 80). 그날 그 차가 안 나가면(운행 계획상 감차) 그 짝꿍도
- * 강제로 쉬어야 하는데, 그 날짜가 블록 한가운데 떨어지면 블록이 쪼개지기
- * 때문이다. 블록 시작 시점에 "다음 감차까지 며칠 남았나"를 보고 고르는
- * 것으로 상당 부분 줄였지만(1일 블록 62→52), 감차 날짜 자체를 휴무와 함께
- * 정하지 않는 한 완전히 없앨 수는 없다. 운행 계획의 차량 지정은 정비·운휴
- * 같은 실제 의미를 담을 수 있어 솔버가 덮어쓰지 않는다.
- *
- * 휴무도 전부 2일로 떨어지지는 않는다(2일 280 · 3일 100 · 1일 82). 요일별
- * 운행 대수가 12/11/10 으로 달라지니 필요 인원도 날마다 달라지고, 그 변동을
- * 짝꿍의 휴무가 흡수하기 때문이다. 한 달 근무일이 20일이면 휴무가 11일인데
- * 블록이 4개면 평균 2.75일이라, 애초에 전부 2일일 수는 없다.
+ * 한계 — 근무 블록이 1~2일로 짧게 끊기는 자리가 남는다(1일 30 · 2일 56).
+ * 요일별 운행 대수가 12/11/10 으로 달라져 필요 인원도 날마다 달라지는데,
+ * 그 변동을 흡수하다 보면 생긴다. 남은 3일 휴무 8건은 전부 스페어 조로,
+ * 월 최소 주말 휴무 보장이 걸린 자리다.
  *
  * 참고: Er-Rbib et al.(2021) 의 2단계 구성("first making a day-off pattern and
  * second placing daily shifts under the constraint of the day-off pattern"),
@@ -98,7 +103,7 @@ function cycleRulesFor(policy: CompanyPolicy, extraRest = 0): CycleRules {
     minWork: Math.min(3, maxWork),
     maxWork,
     minRest,
-    maxRest: minRest + 3 + extraRest,
+    maxRest: minRest + 0 + extraRest,
     maxTotalWork: policy.workdayBands.hardMax,
     sweetMaxWork: policy.workdayBands.sweetMax,
   };
@@ -108,7 +113,7 @@ function cycleRulesFor(policy: CompanyPolicy, extraRest = 0): CycleRules {
  * 스페어 조는 주말 수요가 크게 줄어 더 길게 쉴 수 있어야 근무일수가 맞는다.
  * (평일 9조 → 일요일 3조. 상한이 짧으면 억지로 불려나와 편차가 벌어진다)
  */
-const SPARE_EXTRA_REST = 3;
+const SPARE_EXTRA_REST = 0;
 /** 한 번 세운 차는 이틀 이상 붙여 세운다 */
 const BUS_REST_MIN_DAYS = 2;
 
@@ -119,6 +124,8 @@ export interface CyclicRosterArgs {
   buses: SolverBus[];
   crews: SolverCrew[];
   policy: CompanyPolicy;
+  /** 노선별·날짜별 운행 대수 (있으면 어느 차를 세울지는 여기서 정한다) */
+  routeDailyBusCounts?: Record<number, Record<string, number>>;
   /** 배정하면서 갱신된다 — 이후 단계(메트릭·로컬서치)가 그대로 쓴다 */
   ctx: ConstraintContext;
 }
@@ -208,7 +215,8 @@ export function buildLines(units: number, opts: LineOptions): boolean[][] {
 
   // 강제 휴무(그날 그 차가 안 나감)까지 남은 날 — 블록을 시작할 때 미리 본다.
   // 이걸 안 보고 시작하면 이틀 만에 차가 서서 근무 블록이 하루·이틀로 쪼개진다.
-  const headroom: number[][] = Array.from({ length: units }, () => new Array(days).fill(days));
+  // (+1 칸은 마지막 날 다음을 보는 코드가 있어 경계를 넘지 않게 하기 위함)
+  const headroom: number[][] = Array.from({ length: units }, () => new Array(days + 1).fill(days));
   if (opts.forcedRest) {
     for (let i = 0; i < units; i++) {
       let next = days;
@@ -219,6 +227,24 @@ export function buildLines(units: number, opts: LineOptions): boolean[][] {
       }
     }
   }
+
+  // ── 휴무를 2일로 유지하려면 근무 블록이 며칠이어야 하는가 ──
+  //
+  // 근무 W일 / 휴무 R일을 반복하면 가동률은 W/(W+R) 이다. 필요 가동률보다
+  // 블록을 길게 잡으면 남는 만큼이 **긴 휴무로 몰린다** — 4일·5일 휴무가
+  // 생기는 이유가 이것이다. 그래서 블록 길이를 필요 가동률에서 역산한다.
+  //
+  //   성민 실측: 짝꿍 14조에 하루 평균 8.7조 필요 → 가동률 0.62
+  //   → W = R·duty/(1-duty) = 2 × 0.62/0.38 ≈ 3.3 → 블록 4일, 휴무 2일
+  //
+  // 정책의 workDays(5일)는 상한으로만 쓴다. 5일 근무 2일 휴무를 전원에게
+  // 주려면 가동률 0.714 가 필요한데, 인력이 그보다 많으면 자리가 모자란다.
+  const totalDemand = demand.reduce((a, b) => a + b, 0);
+  const duty = units > 0 ? totalDemand / (units * days) : 0;
+  const fitWork =
+    duty >= 1
+      ? MAX_WORK
+      : Math.min(MAX_WORK, Math.max(MIN_WORK, Math.ceil((MIN_REST * duty) / (1 - duty))));
 
   // 이 인원으로 휴무 사이클을 지키며 매일 감당 가능한 최대치.
   // 수요가 이걸 넘으면 구조적인 인력 부족이라, 블록을 늘려 덮으면 안 된다.
@@ -268,7 +294,21 @@ export function buildLines(units: number, opts: LineOptions): boolean[][] {
     };
 
     const mustWork = pick((i) => mode[i] === 'WORK' && runLen[i] < MIN_WORK);
-    const canContinue = pick((i) => mode[i] === 'WORK' && runLen[i] >= MIN_WORK && runLen[i] < MAX_WORK);
+    // 감차가 코앞이면 블록을 그날까지 이어간다(상한 안에서).
+    //
+    // 4일 근무 → 2일 휴무 → 감차 2일 이면 휴무가 4일이 된다. 그러지 말고
+    // 5일 근무 → 감차 2일 로 붙이면 휴무가 2일로 끝난다. 3일 이상 휴무의
+    // 대부분(56건 중 48건)이 이 겹침에서 나왔다.
+    const alignToBusRest = (i: number) => {
+      const untilOff = headroom[i][d];
+      return untilOff >= 1 && untilOff <= 3 && runLen[i] < MAX_WORK;
+    };
+    const canContinue = pick(
+      (i) =>
+        mode[i] === 'WORK' &&
+        runLen[i] >= MIN_WORK &&
+        (runLen[i] < fitWork || alignToBusRest(i)),
+    );
     const forcedIn = pick((i) => mode[i] === 'REST' && runLen[i] >= maxRest);
     const canStart = pick((i) => mode[i] === 'REST' && runLen[i] >= MIN_REST && runLen[i] < maxRest);
     const mustRest = pick((i) => mode[i] === 'REST' && runLen[i] < MIN_REST);
@@ -278,9 +318,14 @@ export function buildLines(units: number, opts: LineOptions): boolean[][] {
 
     // ① 진행 중인 블록을 이어 5일을 채우는 쪽이 먼저 (짧게 끊긴 블록 우선)
     if (short() > 0) {
-      for (const i of [...canContinue].sort((a, b) => runLen[a] - runLen[b] || a - b).slice(0, short())) {
-        today.add(i);
-      }
+      // 감차에 맞춰 붙여야 하는 유닛을 먼저 — 그 다음 짧게 끊긴 블록 순
+      const order = [...canContinue].sort(
+        (a, b) =>
+          (alignToBusRest(a) ? 0 : 1) - (alignToBusRest(b) ? 0 : 1) ||
+          runLen[a] - runLen[b] ||
+          a - b,
+      );
+      for (const i of order.slice(0, short())) today.add(i);
     }
     // ② 모자라면 새 블록 — 근무일수가 적고 오래 쉰 유닛부터 (공정성)
     if (short() > 0) {
@@ -312,7 +357,7 @@ export function buildLines(units: number, opts: LineOptions): boolean[][] {
       const ext = pick(
         (i) =>
           mode[i] === 'WORK' &&
-          runLen[i] >= MAX_WORK &&
+          runLen[i] >= fitWork &&
           runLen[i] < MAX_WORK + 1 &&
           worked[i] < cycle.sweetMaxWork,
       );
@@ -321,10 +366,15 @@ export function buildLines(units: number, opts: LineOptions): boolean[][] {
     }
     // 초과분 — 5일을 이미 채운 쪽부터 뺀다 (블록을 억지로 늘리지 않는다)
     if (today.size > demand[d]) {
+      // 내일 그 차가 안 나가는(감차) 유닛부터 내린다 — 그래야 그 사람의 휴무가
+      // 감차일과 겹쳐 2일로 끝난다. 아무나 내리면 감차일이 휴무 뒤에 붙어
+      // 3~4일 연속 휴무가 된다.
+      const forcedTomorrow = (i: number) => (headroom[i][d + 1] === 0 ? 0 : 1);
       const droppable = [...today]
-        .filter((i) => !mustWork.includes(i))
+        .filter((i) => !mustWork.includes(i) && !forcedIn.includes(i))
         .sort(
           (a, b) =>
+            forcedTomorrow(a) - forcedTomorrow(b) ||
             needsWeekend(b) - needsWeekend(a) ||
             runLen[b] - runLen[a] ||
             worked[b] - worked[a] ||
@@ -411,7 +461,7 @@ export function blocksOf(row: boolean[]): [number, number][] {
 // ─────────────────────────────────────────────
 
 export function buildCyclicRoster(args: CyclicRosterArgs): CyclicRosterResult {
-  const { days, drivers, buses, crews, policy, ctx } = args;
+  const { days, drivers, buses, crews, policy, ctx, routeDailyBusCounts } = args;
   const nDays = days.length;
   const monthStart = parseDate(days[0]);
   const monthEnd = parseDate(days[nDays - 1]);
@@ -487,9 +537,14 @@ export function buildCyclicRoster(args: CyclicRosterArgs): CyclicRosterResult {
   /** 노선별 그날 운행 **대수** — 이건 정책이라 그대로 지킨다 */
   const countPerRouteDay = new Map<number, number[]>();
   for (const [routeId, list] of busesByRoute) {
+    const given = routeDailyBusCounts?.[routeId];
     countPerRouteDay.set(
       routeId,
-      days.map((day) => list.filter((b) => mayRun(b, day)).length),
+      days.map((day) => {
+        const available = list.filter((b) => mayRun(b, day)).length;
+        // 설정 대수가 있으면 그걸 쓰되, 가용 대수를 넘길 수는 없다
+        return given?.[day] !== undefined ? Math.min(given[day], available) : available;
+      }),
     );
   }
 
@@ -566,6 +621,18 @@ export function buildCyclicRoster(args: CyclicRosterArgs): CyclicRosterResult {
       const need = countPerRouteDay.get(rid)![d];
       const run = new Set<number>();
       for (let i = 0; i < list.length; i++) if (lines[i][d]) run.add(i);
+      // 근무선이 설정 대수보다 많은 날이 생길 수 있다(휴무 상한에 걸린 조가
+      // 한꺼번에 복귀할 때). 대수는 노선 설정이 정한 정책이라 넘기지 않는다 —
+      // 넘치는 조는 그날 쉰다.
+      if (run.size > need) {
+        const overflow = [...run].sort(
+          (a, b) => ((b + d) % list.length) - ((a + d) % list.length) || b - a,
+        );
+        for (const i of overflow) {
+          if (run.size <= need) break;
+          run.delete(i);
+        }
+      }
 
       // 복귀 순서 — 한 번 세운 차는 이틀 이상 붙여 세운다.
       //   0 어제 나갔던 차   1 이틀 이상 쉰 차   2 어제 처음 쉰 차(더 쉬게 둔다)
