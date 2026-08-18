@@ -30,6 +30,7 @@ import { buildDailyPostingXlsx } from '../services/dailyPostingExport';
 import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
+import { computeManpowerPlan } from '../services/manpowerService';
 
 const router = Router();
 
@@ -280,6 +281,28 @@ router.post('/from-engine', requireRole('DISPATCH'), async (req: AuthRequest, re
  *     description: 패턴이 없는 옛 배차표는 groups/cells 가 비어 오며 호출측이 기존 뷰로 폴백한다.
  *     tags: [Schedules]
  */
+/**
+ * 인력 계산 — "이 배차를 돌리려면 몇 명이 필요한가".
+ *
+ * 노사정이 노선버스를 격일제에서 1일 2교대로 개편하기로 합의하면서, 전환에
+ * 필요한 인원이 회사마다 최대 현안이 됐다(경기도 추산 기존 대비 1.5~2배).
+ * 운행 계획에서 나온 필요 칸수를 근무 사이클별 가동률로 나눠 답을 낸다.
+ */
+router.get('/:year/:month/manpower', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  try {
+    const year = Number(req.params.year);
+    const month = Number(req.params.month);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+      return res.status(400).json({ success: false, message: '연도·월이 올바르지 않습니다.' });
+    }
+    const plan = await computeManpowerPlan(req.user!.companyId, year, month);
+    return res.json({ success: true, data: plan });
+  } catch (error) {
+    logger.error(`[schedules/manpower] ${error}`);
+    return res.status(500).json({ success: false, message: '인력 계산에 실패했습니다.' });
+  }
+});
+
 router.get('/by-id/:id/posting', async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);

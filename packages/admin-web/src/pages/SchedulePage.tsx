@@ -43,6 +43,7 @@ import { engineApi } from '../services/api';
 import SectionHeader from '../components/SectionHeader';
 import { scheduleHelp } from '../help/helpContent';
 import { useAuthStore } from '../store/authStore';
+import ManpowerModal from '../components/ManpowerModal';
 
 // ─────────────────────────────────────────
 // 상수 & 타입
@@ -188,6 +189,7 @@ export default function SchedulePage() {
   const queryClient = useQueryClient();
 
   // 날짜 / 필터 상태
+  const [showManpower, setShowManpower] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date());
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth() + 1;
@@ -1458,6 +1460,17 @@ export default function SchedulePage() {
           배차표 생성
         </button>
 
+        {/* 인력 계산 — 배차표가 없어도 볼 수 있어야 한다.
+            "2교대로 가면 몇 명 필요한가"는 배차를 짜기 **전에** 답이 나와야 하는 질문이다. */}
+        <button
+          onClick={() => setShowManpower(true)}
+          className="inline-flex items-center gap-2 text-base px-5 py-3 min-h-[48px] rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium"
+          title="근무 형태별로 몇 명이 필요한지 계산합니다"
+        >
+          <Users size={20} />
+          인력 계산
+        </button>
+
         {schedule && (
           <>
             {schedule.status === 'DRAFT' && undoStack.length > 0 && (
@@ -1735,6 +1748,10 @@ export default function SchedulePage() {
             </button>
           </div>
         </div>
+      )}
+
+      {showManpower && (
+        <ManpowerModal year={year} month={month} onClose={() => setShowManpower(false)} />
       )}
 
       {/* ─── 벌크 변경 모달 ─── */}

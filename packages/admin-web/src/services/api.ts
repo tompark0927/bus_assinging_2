@@ -300,6 +300,8 @@ export const companyInfoApi = {
 // Schedules
 export const schedulesApi = {
   list: () => api.get('/schedules'),
+  // 인력 계산 — 근무 형태별 필요 인원 (격일제 → 1일 2교대 전환 검토용)
+  manpower: (year: number, month: number) => api.get(`/schedules/${year}/${month}/manpower`),
   get: (year: number, month: number, scheduleId?: number) =>
     api.get(`/schedules/${year}/${month}`, { params: scheduleId ? { scheduleId } : undefined }),
   // 멀티 초안: 해당 월의 모든 배차표(초안 프로필 + 발행본) 목록
