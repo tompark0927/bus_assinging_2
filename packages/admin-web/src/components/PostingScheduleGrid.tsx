@@ -175,7 +175,7 @@ function WeekTable({
             <col style={{ width: 58 }} />
             {week.map((iso) => (
               <>
-                <col key={`${iso}-s`} style={{ width: 26 }} />
+                <col key={`${iso}-s`} style={{ width: 30 }} />
                 <col key={`${iso}-a`} style={{ width: 58 }} />
                 <col key={`${iso}-p`} style={{ width: 58 }} />
               </>
@@ -212,7 +212,7 @@ function WeekTable({
                 ['순번', '오전', '오후'].map((h, hi) => (
                   <th
                     key={`${iso}-${h}`}
-                    className={`border-b border-gray-200 px-0.5 py-0.5 text-center text-[10px] font-medium text-gray-400 dark:border-gray-700 dark:text-gray-500 ${
+                    className={`whitespace-nowrap border-b border-gray-200 px-0.5 py-0.5 text-center text-[10px] font-medium text-gray-400 dark:border-gray-700 dark:text-gray-500 ${
                       hi === 2 ? 'border-r-2 border-r-gray-300 dark:border-r-gray-600' : 'border-r border-r-gray-100'
                     }`}
                   >
