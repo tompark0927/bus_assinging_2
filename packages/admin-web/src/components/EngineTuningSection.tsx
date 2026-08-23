@@ -11,18 +11,34 @@ import {
   Upload,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { engineApi } from '../services/api';
-import PageHeader from '../components/PageHeader';
+import { companyPolicyApi, engineApi } from '../services/api';
 
 /* ────────────────────────────────────────────
-   AI 배차 엔진 설정 (Python dispatch-engine)
+   엔진 튜닝 섹션 — [배차 설정] 페이지의 두 번째 탭.
 
    화면은 엔진의 설정 카탈로그(GET /engine/catalog)를 읽어 자동 렌더링된다.
    → 엔진에 설정이 추가되면 프론트 코드 수정 없이 화면에 나타난다.
 
+   값의 저장소는 **DB(Company.enginePolicy)** 다. 엔진은 요청마다 policy_json
+   을 받는 stateless 계산기라, 엔진이 꺼져 있어도 저장은 된다(카탈로그를 읽지
+   못해 화면을 그리지 못할 뿐).
+
    온보딩: 기존 배차표 엑셀 업로드 → 엔진이 규칙을 감지하고 설정별
    추천값 + 신뢰도 + 근거 문장을 제시 → 담당자가 [추천 수락] 원탭 확정.
    ──────────────────────────────────────────── */
+
+/**
+ * [운영 정책] 탭이 주인인 키 — 백엔드 engine 프록시가 생성·검산 요청마다
+ * 이 키들을 운영 정책 값으로 덮어쓴다(services/enginePolicyMapper.ts).
+ * 여기서 따로 저장해봐야 무시되므로 편집을 막고 운영 정책 탭으로 보낸다.
+ */
+const KEYS_OWNED_BY_DISPATCH_SETTINGS = new Set([
+  'max_consecutive_enabled',
+  'max_consecutive_days',
+  'monthly_band_enabled',
+  'monthly_work_days',
+  'forbid_pm_to_am',
+]);
 
 interface SettingSpec {
   key: string;
@@ -160,7 +176,7 @@ function confidenceBadge(c: number) {
   return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${color}`}>신뢰도 {pct}%</span>;
 }
 
-export default function EngineSettingsPage() {
+export default function EngineTuningSection({ onGoToPolicy }: { onGoToPolicy: () => void }) {
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [values, setValues] = useState<PolicyValues>({});
@@ -180,7 +196,7 @@ export default function EngineSettingsPage() {
 
   const { data: policyData, isLoading: policyLoading } = useQuery({
     queryKey: ['engine-policy'],
-    queryFn: async () => (await engineApi.getPolicy()).data,
+    queryFn: async () => (await companyPolicyApi.getEngine()).data.data,
     retry: 1,
   });
 
@@ -221,7 +237,7 @@ export default function EngineSettingsPage() {
         .split(/[,\s]+/)
         .map(x => x.trim())
         .filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x));
-      return engineApi.putPolicy({
+      return companyPolicyApi.updateEngine({
         values,
         holidays: holidayList,
         special_reductions: policyData?.policy?.special_reductions ?? [],
@@ -232,7 +248,11 @@ export default function EngineSettingsPage() {
       setDirty(false);
       queryClient.invalidateQueries({ queryKey: ['engine-policy'] });
     },
-    onError: () => toast.error('저장에 실패했습니다. 엔진 연결을 확인해 주세요.'),
+    onError: (err: unknown) =>
+      toast.error(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+          '저장에 실패했습니다.',
+      ),
   });
 
   const analyzeMutation = useMutation({
@@ -259,15 +279,20 @@ export default function EngineSettingsPage() {
     setRecommendations(prev => prev.filter(r => r.key !== rec.key));
   };
 
+  // 엔진 소관 추천만 여기서 적용한다. 배차 설정이 주인인 키는 저장해도
+  // 생성 때 덮어써지므로, 적용 버튼 대신 배차 설정으로 안내한다.
+  const engineRecommendations = recommendations.filter(r => !KEYS_OWNED_BY_DISPATCH_SETTINGS.has(r.key));
+  const dispatchRecommendations = recommendations.filter(r => KEYS_OWNED_BY_DISPATCH_SETTINGS.has(r.key));
+
   const applyAll = () => {
     setValues(prev => {
       const next = { ...prev };
-      for (const r of recommendations) next[r.key] = r.value;
+      for (const r of engineRecommendations) next[r.key] = r.value;
       return next;
     });
     setDirty(true);
-    setRecommendations([]);
-    toast.success('모든 추천을 적용했습니다. 저장을 눌러 확정하세요.');
+    setRecommendations(dispatchRecommendations);
+    toast.success('엔진 설정 추천을 모두 적용했습니다. 저장을 눌러 확정하세요.');
   };
 
   const specByKey = useMemo(() => {
@@ -300,33 +325,34 @@ export default function EngineSettingsPage() {
 
   if (catalogError) {
     return (
-      <div>
-        <PageHeader icon={BrainCircuit} title="AI 배차 엔진 설정" />
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
-          배차 엔진에 연결할 수 없습니다. 서버에 <code className="rounded bg-amber-100 px-1">ENGINE_URL</code>이
-          설정되어 있고 엔진 서비스가 실행 중인지 확인해 주세요.
-        </div>
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
+        배차 엔진에 연결할 수 없습니다. 서버에 <code className="rounded bg-amber-100 px-1">ENGINE_URL</code>이
+        설정되어 있고 엔진 서비스가 실행 중인지 확인해 주세요.
+        <br />
+        (저장된 엔진 설정은 DB 에 있으므로 유실되지 않습니다 — 엔진이 복구되면 그대로 보입니다.)
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        icon={BrainCircuit}
-        title="AI 배차 엔진 설정"
-        description="배차 스타일은 회사마다 다릅니다. 필요한 규칙만 켜고 끄세요 — 기존 배차표를 업로드하면 우리 회사에 맞는 값을 자동으로 추천해 드립니다."
-        actions={
-          <button
-            onClick={() => saveMutation.mutate()}
-            disabled={!dirty || saveMutation.isPending}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {saveMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-            저장
-          </button>
-        }
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <BrainCircuit className="mt-0.5 text-blue-600 dark:text-blue-400" size={22} />
+          <p className="max-w-3xl text-[14px] leading-relaxed text-gray-600 dark:text-gray-300">
+            순번 로테이션·감차·짝궁 교대·예비 운영·공정성 등 <b>엔진 고유 규칙</b>을 관리합니다.
+            근무일수·연속근무·최소 휴식은 <b>운영 정책</b> 탭이 주인이며, 배차표를 생성할 때 그 값이 적용됩니다.
+          </p>
+        </div>
+        <button
+          onClick={() => saveMutation.mutate()}
+          disabled={!dirty || saveMutation.isPending}
+          className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {saveMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+          저장
+        </button>
+      </div>
 
       {/* ── 온보딩: 엑셀 분석 + 추천 ── */}
       <section className="rounded-xl border border-blue-100 bg-blue-50/50 p-5">
@@ -362,12 +388,12 @@ export default function EngineSettingsPage() {
                 : <Upload size={16} />}
               엑셀 업로드
             </button>
-            {recommendations.length > 0 && (
+            {engineRecommendations.length > 0 && (
               <button
                 onClick={applyAll}
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
               >
-                <Check size={16} /> 전체 추천 수락 ({recommendations.length})
+                <Check size={16} /> 전체 추천 수락 ({engineRecommendations.length})
               </button>
             )}
           </div>
@@ -395,9 +421,42 @@ export default function EngineSettingsPage() {
           </div>
         )}
 
-        {recommendations.length > 0 && (
+        {dispatchRecommendations.length > 0 && (
           <ul className="mt-4 space-y-2">
-            {recommendations.map(rec => {
+            {dispatchRecommendations.map(rec => {
+              const spec = specByKey[rec.key];
+              return (
+                <li
+                  key={rec.key}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-gray-300 bg-white/60 p-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-gray-700">{spec?.label ?? rec.key}</span>
+                      <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">
+                        분석값: {formatValue(rec)}
+                      </span>
+                      {confidenceBadge(rec.confidence)}
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {rec.evidence} — 이 항목은 [운영 정책] 탭이 주인이라 여기서 적용하지 않습니다.
+                    </p>
+                  </div>
+                  <button
+                    onClick={onGoToPolicy}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                  >
+                    운영 정책 탭에서 반영 →
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {engineRecommendations.length > 0 && (
+          <ul className="mt-4 space-y-2">
+            {engineRecommendations.map(rec => {
               const spec = specByKey[rec.key];
               return (
                 <li
@@ -437,24 +496,44 @@ export default function EngineSettingsPage() {
               {cat.name}
             </h3>
             <ul className="divide-y divide-gray-50">
-              {visible.map(spec => (
+              {visible.map(spec => {
+                const owned = KEYS_OWNED_BY_DISPATCH_SETTINGS.has(spec.key);
+                return (
                 <li key={spec.key} className="flex flex-wrap items-center justify-between gap-4 px-5 py-3.5">
                   <div className="min-w-0 max-w-xl flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-gray-900">{spec.label}</span>
+                      <span className={`text-sm font-medium ${owned ? 'text-gray-500' : 'text-gray-900'}`}>
+                        {spec.label}
+                      </span>
                       {spec.advanced && (
                         <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">고급</span>
+                      )}
+                      {owned && (
+                        <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
+                          운영 정책 탭에서 관리
+                        </span>
                       )}
                     </div>
                     <p className="mt-0.5 text-xs leading-relaxed text-gray-500">{spec.description}</p>
                   </div>
-                  <SettingControl
-                    spec={spec}
-                    value={effectiveValue(spec)}
-                    onChange={v => setValue(spec.key, v)}
-                  />
+                  {owned ? (
+                    <button
+                      type="button"
+                      onClick={onGoToPolicy}
+                      className="shrink-0 rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-50"
+                    >
+                      운영 정책 탭에서 변경 →
+                    </button>
+                  ) : (
+                    <SettingControl
+                      spec={spec}
+                      value={effectiveValue(spec)}
+                      onChange={v => setValue(spec.key, v)}
+                    />
+                  )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </section>
         );

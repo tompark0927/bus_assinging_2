@@ -7,7 +7,6 @@ import {
   LayoutDashboard, Calendar, AlertTriangle, Database, LogOut,
   Settings,
   ShieldCheck,
-  BrainCircuit,
   CalendarOff, Bus, UserCog, Building2, ScrollText,
   PanelLeftClose, PanelLeft,
 } from 'lucide-react';
@@ -65,7 +64,6 @@ const navGroups: NavGroup[] = [
     label: '설정',
     items: [
       { to: '/dashboard/settings', labelKey: '배차 설정', icon: Settings, roles: ['DISPATCH'] },
-      { to: '/dashboard/engine', labelKey: 'AI 엔진 설정', icon: BrainCircuit, roles: ['DISPATCH'] },
       { to: '/dashboard/accounts', labelKey: '계정 관리', icon: UserCog, restrictTo: ['OWNER', 'DIRECTOR', 'ADMIN'] },
       { to: '/dashboard/company', labelKey: '회사 정보', icon: Building2, restrictTo: ['OWNER', 'DIRECTOR', 'ADMIN'] },
     ],

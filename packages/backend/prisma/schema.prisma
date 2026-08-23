@@ -92,15 +92,20 @@ enum InspectionStatus {
 }
 
 model Company {
-  id        Int      @id @default(autoincrement())
-  name      String
-  code      String   @unique // 회사별 고유 코드 (영문/숫자 2~10자, 로그인 시 사용)
-  isActive  Boolean  @default(true)
+  id           Int      @id @default(autoincrement())
+  name         String
+  code         String   @unique // 회사별 고유 코드 (영문/숫자 2~10자, 로그인 시 사용)
+  isActive     Boolean  @default(true)
   /// 회사 배차 정책 (CompanyPolicy JSON: workdayBands / restCycle / shiftSystem / crewModel / constitutional)
   /// null 이면 DEFAULT_POLICY (CITY_2SHIFT) 사용. solverDispatchService.loadCompanyPolicy 가 읽음.
-  policy    Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  policy       Json?
+  /// AI 배차 엔진 튜닝 정책 ({ values, holidays, special_reductions }).
+  /// 순번 로테이션·감차·짝궁 교대·예비·공정성 등 엔진 고유 설정의 단일 소스.
+  /// 예전엔 엔진 컨테이너 파일에 있었고(볼륨 없으면 재배포 시 유실), 지금은 여기가 주인이다.
+  /// enginePolicyStore.loadEnginePolicy / saveEnginePolicy 가 읽고 쓴다.
+  enginePolicy Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   users              User[]
   buses              Bus[]

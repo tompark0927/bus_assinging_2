@@ -39,6 +39,8 @@ describe('inspectScheduleForPublish', () => {
     mockPrisma.schedule.findUnique.mockResolvedValue({
       notes: null, companyId: 1, year: 2026, month: 9,
     });
+    // 승인 휴무 없음이 기본 — E5 를 보는 테스트에서만 따로 채운다
+    mockPrisma.dayOffRequest.findMany.mockResolvedValue([]);
   });
 
   const arrange = (slots: unknown[]) =>
@@ -225,5 +227,76 @@ describe('inspectScheduleForPublish', () => {
     const r = await inspectScheduleForPublish(5);
     expect(r.errors).toHaveLength(1);
     expect(r.errors[0].driverName).toBe('박철수');
+  });
+
+  // ── E4 면허·자격 만료 ──
+  it('면허 만료 뒤 날짜에 배정되면 E4 (기사×사유 1건으로 묶는다)', async () => {
+    arrange(
+      run(1, '김영수', 10, 5).map((x) => ({
+        ...x,
+        driver: { name: '김영수', licenseExpiresAt: new Date('2026-09-11T00:00:00.000Z') },
+      })),
+    );
+    const r = await inspectScheduleForPublish(5);
+    const e4 = r.errors.filter((e) => e.rule === 'E4');
+    expect(e4).toHaveLength(1);
+    expect(r.counts.expiredLicense).toBe(1);
+    // 만료일 당일(9/11)까지는 유효 — 첫 위반은 9/12
+    expect(e4[0].date).toBe('2026-09-12');
+  });
+
+  it('만료일 당일까지만 배정돼 있으면 위반이 아니다', async () => {
+    arrange(
+      run(1, '김영수', 8, 4).map((x) => ({  // 9/8~9/11
+        ...x,
+        driver: { name: '김영수', qualificationExpiresAt: new Date('2026-09-11T00:00:00.000Z') },
+      })),
+    );
+    const r = await inspectScheduleForPublish(5);
+    expect(r.errors.filter((e) => e.rule === 'E4')).toHaveLength(0);
+  });
+
+  it('만료일이 없으면 검사하지 않는다', async () => {
+    arrange(run(1, '김영수', 1, 3));
+    const r = await inspectScheduleForPublish(5);
+    expect(r.counts.expiredLicense).toBe(0);
+  });
+
+  // ── E5 승인 휴무 배정 ──
+  it('승인된 휴무일에 배정돼 있으면 E5', async () => {
+    arrange(run(1, '김영수', 1, 3));
+    mockPrisma.dayOffRequest.findMany.mockResolvedValue([
+      { driverId: 1, date: new Date('2026-09-02T00:00:00.000Z') },
+    ]);
+    const r = await inspectScheduleForPublish(5);
+    const e5 = r.errors.filter((e) => e.rule === 'E5');
+    expect(e5).toHaveLength(1);
+    expect(e5[0].date).toBe('2026-09-02');
+    expect(r.counts.approvedOff).toBe(1);
+  });
+
+  it('다른 기사의 승인 휴무는 영향 없다', async () => {
+    arrange(run(1, '김영수', 1, 3));
+    mockPrisma.dayOffRequest.findMany.mockResolvedValue([
+      { driverId: 2, date: new Date('2026-09-02T00:00:00.000Z') },
+    ]);
+    const r = await inspectScheduleForPublish(5);
+    expect(r.counts.approvedOff).toBe(0);
+  });
+
+  // ── W2 주말휴무 부족 ──
+  it('한 달 내내 주말에도 일하면 W2 경고 (발행은 막지 않는다)', async () => {
+    arrange(run(1, '김영수', 1, 30));
+    const r = await inspectScheduleForPublish(5);
+    const w2 = r.warnings.filter((w) => w.rule === 'W2');
+    expect(w2).toHaveLength(1);
+    expect(r.counts.weekendOff).toBe(1);
+    expect(r.errors.filter((e) => e.rule === 'W2')).toHaveLength(0);
+  });
+
+  it('주말에 하루라도 쉬면 W2 아님', async () => {
+    arrange(run(1, '김영수', 1, 4)); // 9/5(토)·9/6(일) 휴무
+    const r = await inspectScheduleForPublish(5);
+    expect(r.counts.weekendOff).toBe(0);
   });
 });
