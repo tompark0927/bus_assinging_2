@@ -207,10 +207,10 @@ export default function DailyDispatchGrid({
             <table className="w-full border-collapse text-[13px] leading-tight tabular-nums">
               <thead>
                 <tr className="bg-gray-50 text-[11px] text-gray-500 dark:bg-gray-900/30 dark:text-gray-400">
-                  <th className="w-10 border-b border-gray-200 px-1 py-1 font-medium dark:border-gray-700">순번</th>
-                  <th className="w-16 border-b border-gray-200 px-1 py-1 font-medium dark:border-gray-700">차번</th>
-                  <th className="border-b border-gray-200 px-1 py-1 font-medium dark:border-gray-700">오전</th>
-                  <th className="border-b border-gray-200 px-1 py-1 font-medium dark:border-gray-700">오후</th>
+                  <th className="w-12 whitespace-nowrap border-b border-gray-200 px-1 py-1 font-medium dark:border-gray-700">순번</th>
+                  <th className="w-16 whitespace-nowrap border-b border-gray-200 px-1 py-1 font-medium dark:border-gray-700">차번</th>
+                  <th className="whitespace-nowrap border-b border-gray-200 px-1 py-1 font-medium dark:border-gray-700">오전</th>
+                  <th className="whitespace-nowrap border-b border-gray-200 px-1 py-1 font-medium dark:border-gray-700">오후</th>
                 </tr>
               </thead>
               {card.blocks.map((block, bi) => (

@@ -200,10 +200,12 @@ export default function VehicleScheduleGrid({
       <div className="overflow-x-auto rounded-lg border border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800">
         <table
           className="border-collapse text-[11px] leading-tight tabular-nums"
-          style={{ minWidth: `${daysInMonth * 104 + 92}px` }}
+          style={{ minWidth: `${daysInMonth * 104 + 102}px` }}
         >
           <colgroup>
-            <col style={{ width: 28 }} />
+            {/* 순번 열 — '순번' 두 글자(11px)가 패딩까지 들어가야 한 줄로 붙는다.
+                폭을 줄이면 '순/번'으로 접힌다. 아래 sticky left-[38px] 과 한 쌍. */}
+            <col style={{ width: 38 }} />
             <col style={{ width: 64 }} />
             {dates.map((d) => (
               <Fragment key={d.key}>
@@ -214,10 +216,10 @@ export default function VehicleScheduleGrid({
           </colgroup>
           <thead>
             <tr className="bg-gray-100 dark:bg-gray-900/50">
-              <th className="sticky left-0 z-10 border-b border-gray-300 bg-gray-100 px-1 py-1.5 text-center font-semibold text-gray-700 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-200">
+              <th className="sticky left-0 z-10 whitespace-nowrap border-b border-gray-300 bg-gray-100 px-1 py-1.5 text-center font-semibold text-gray-700 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-200">
                 순번
               </th>
-              <th className="sticky left-[28px] z-10 border-b border-r-2 border-gray-300 bg-gray-100 px-1 py-1.5 text-center font-semibold text-gray-700 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-200">
+              <th className="sticky left-[38px] z-10 whitespace-nowrap border-b border-r-2 border-gray-300 bg-gray-100 px-1 py-1.5 text-center font-semibold text-gray-700 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-200">
                 차번
               </th>
               {dates.map((d) => (
@@ -238,7 +240,7 @@ export default function VehicleScheduleGrid({
             </tr>
             <tr className="bg-gray-50 dark:bg-gray-900/20">
               <th className="sticky left-0 z-10 border-b border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-900/50" />
-              <th className="sticky left-[28px] z-10 border-b border-r-2 border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-900/50" />
+              <th className="sticky left-[38px] z-10 border-b border-r-2 border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-900/50" />
               {dates.map((d) =>
                 (['오전', '오후'] as const).map((h, hi) => (
                   <th
@@ -289,7 +291,7 @@ export default function VehicleScheduleGrid({
                           {bus === UNASSIGNED ? '-' : bi + 1}
                         </td>
                         <td
-                          className={`sticky left-[28px] z-10 border-b border-r-2 border-gray-300 bg-white px-1 py-0.5 text-center font-semibold dark:border-gray-600 dark:bg-gray-800 ${
+                          className={`sticky left-[38px] z-10 border-b border-r-2 border-gray-300 bg-white px-1 py-0.5 text-center font-semibold dark:border-gray-600 dark:bg-gray-800 ${
                             bus === UNASSIGNED
                               ? 'text-amber-600 dark:text-amber-500'
                               : 'text-gray-800 dark:text-gray-100'
