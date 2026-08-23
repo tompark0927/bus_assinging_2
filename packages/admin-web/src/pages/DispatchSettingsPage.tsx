@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Loader2,
@@ -9,12 +10,15 @@ import {
   Settings,
   Info,
   RotateCcw,
+  BrainCircuit,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { companyPolicyApi } from '../services/api';
 import toast from 'react-hot-toast';
 import PageHeader from '../components/PageHeader';
 import { dispatchSettingsHelp } from '../help/helpContent';
 import { useAuthStore } from '../store/authStore';
+import EngineTuningSection from '../components/EngineTuningSection';
 
 /* ────────────────────────────────────────────
    Types — backend `agents/_solvers/types.ts` 와 형식 일치
@@ -68,10 +72,14 @@ const PRESET_CITY_2SHIFT: CompanyPolicy = {
   shiftSystem: { kind: 'TWO_SHIFT', slots: ['AM', 'PM'], weeklyAlternation: true },
   crewModel: { kind: 'PAIR', size: 2 },
   constitutional: {
-    noNightStreak: { enabled: true, maxConsecutive: 3, nightShifts: ['PM'] },
+    // 백엔드 POLICY_PRESETS.CITY_2SHIFT 와 값이 같아야 한다 —
+    // 시내 2교대의 '오후'는 야간이 아니다. 야간 연속 상한을 걸면 5근 블록이
+    // 구조적으로 깨지고, 그 자리에서 오후→다음날 오전(휴식 8시간 미만)이 생긴다.
+    noNightStreak: { enabled: false, maxConsecutive: 3, nightShifts: [] },
     weeklyMaxWorkDays: { enabled: true, maxDays: 6 },
     noSameDayDoubleAssign: { enabled: true },
-    minRestBetweenShifts: { enabled: false, minHours: 8 },
+    // 여객자동차 운수사업법 시행규칙 제44조의6 — 퇴근~다음 출근 8시간 이상
+    minRestBetweenShifts: { enabled: true, minHours: 8 },
     noAssignOnApprovedOff: { enabled: true },
     noExpiredLicense: { enabled: true },
     noExpiredQualification: { enabled: true },
@@ -108,6 +116,12 @@ const PRESET_VILLAGE_1SHIFT: CompanyPolicy = {
 export default function DispatchSettingsPage() {
   const queryClient = useQueryClient();
   const companyId = useAuthStore((s) => s.user?.companyId);
+  // 운영 정책 / 엔진 튜닝 — 한 화면 두 탭. 예전엔 별도 페이지였고, 그래서
+  // 두 정책이 서로 다른 값을 가리키는 사고가 났다. URL(?tab=engine)로도 열린다.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: 'policy' | 'engine' = searchParams.get('tab') === 'engine' ? 'engine' : 'policy';
+  const setTab = (next: 'policy' | 'engine') =>
+    setSearchParams(next === 'engine' ? { tab: 'engine' } : {}, { replace: true });
   const { data, isLoading } = useQuery<{ policy: CompanyPolicy; isDefault: boolean }>({
     queryKey: ['company-policy'],
     queryFn: () => companyPolicyApi.get().then((r) => r.data.data),
@@ -178,10 +192,10 @@ export default function DispatchSettingsPage() {
         help={dispatchSettingsHelp}
         icon={Settings}
         title="배차 설정"
-        description="회사 운영 정책. AI 배차표 생성 시 이 설정을 따릅니다."
+        description="회사 운영 정책과 AI 엔진 튜닝을 한 곳에서 관리합니다. 배차표 생성과 발행 전 안전 검산이 이 설정을 따릅니다."
         actions={
           <>
-            {dirty && (
+            {tab === 'policy' && dirty && (
               <button
                 onClick={handleReset}
                 className="px-4 py-2.5 rounded-xl border border-gray-300 dark:border-white/10 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 inline-flex items-center gap-2 text-[15px]"
@@ -189,18 +203,20 @@ export default function DispatchSettingsPage() {
                 <RotateCcw className="w-4 h-4" /> 되돌리기
               </button>
             )}
-            <button
-              onClick={handleSave}
-              disabled={!dirty || updateMutation.isPending}
-              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-2 text-[15px] font-medium"
-            >
-              {updateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              저장
-            </button>
+            {tab === 'policy' && (
+              <button
+                onClick={handleSave}
+                disabled={!dirty || updateMutation.isPending}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-2 text-[15px] font-medium"
+              >
+                {updateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                저장
+              </button>
+            )}
           </>
         }
       >
-        {data?.isDefault && (
+        {tab === 'policy' && data?.isDefault && (
           <div className="mt-3 inline-flex items-center gap-2 text-[14px] text-amber-700 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-300 px-3 py-1.5 rounded-full">
             <Info className="w-4 h-4" />
             아직 정책이 저장되지 않아 기본값을 표시 중입니다. 저장하면 사용자 정의 정책이 됩니다.
@@ -208,372 +224,437 @@ export default function DispatchSettingsPage() {
         )}
       </PageHeader>
 
-      {/* Section: Preset */}
-      <Section icon={<Sparkles className="w-5 h-5 text-gray-900 dark:text-white" />} title="빠른 프리셋" desc="회사 유형에 맞는 표준 설정을 한 번에 적용합니다.">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <PresetCard
-            active={policy.preset === 'CITY_2SHIFT'}
-            title="시내버스 2교대"
-            tags={['PAIR (정·부)', '5근 2휴', 'AM/PM 교대']}
-            onClick={() => applyPreset('CITY_2SHIFT')}
-          />
-          <PresetCard
-            active={policy.preset === 'VILLAGE_1SHIFT'}
-            title="마을버스 1교대"
-            tags={['SOLO (단독)', '6근 1휴', '종일']}
-            onClick={() => applyPreset('VILLAGE_1SHIFT')}
-          />
+      {/* 탭 — 운영 정책(사람이 정하는 규칙) / 엔진 튜닝(엔진 카탈로그 자동 렌더링) */}
+      <div className="flex gap-1 border-b border-gray-200 dark:border-white/10">
+        {([
+          ['policy', '운영 정책', SlidersHorizontal],
+          ['engine', '엔진 튜닝', BrainCircuit],
+        ] as const).map(([key, label, Icon]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`inline-flex items-center gap-2 px-4 py-2.5 text-[15px] font-medium border-b-2 -mb-px transition-colors ${
+              tab === key
+                ? 'border-blue-600 text-blue-700 dark:text-blue-300'
+                : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+            }`}
+          >
+            <Icon className="w-4 h-4" /> {label}
+          </button>
+        ))}
+      </div>
+
+      {/* AI 엔진과의 역할 구분 — 어떤 항목이 실제로 생성에 전달되는지 명시한다.
+          (예전에는 이 화면이 구 TS 솔버 전용이라, 여기서 바꾼 값이 실제
+           배차표를 만드는 Python 엔진에 전혀 전달되지 않았다) */}
+      {tab === 'policy' && (
+      <div className="rounded-2xl border border-blue-200 dark:border-blue-800 bg-blue-50/60 dark:bg-blue-900/20 p-4">
+        <div className="flex items-start gap-3">
+          <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+          <div className="text-[14px] leading-relaxed text-blue-900 dark:text-blue-200">
+            <p className="font-semibold mb-1">생성할 때 엔진에 전달되는 항목</p>
+            <p>
+              월 근무일수 범위 · 주간 최대 근무일(연속근무 상한) · 운행 후 최소 휴식(오후→다음날 오전 금지)
+              · 1인 승무/1교대 여부 · <b>승인된 휴무</b> — 배차표를 생성할 때마다 이 값이 적용됩니다.
+            </p>
+            <p className="font-semibold mt-2 mb-1">발행 전 안전 검산이 막는 항목</p>
+            <p>
+              면허·자격 만료 기사 배정(발행 차단) · 승인 휴무일 배정(발행 차단) · 연속근무 초과(발행 차단)
+              · 월 최소 주말휴무 부족(경고) — 엔진이 짜든 엑셀로 가져오든, 손으로 고친 최종본까지 검사합니다.
+            </p>
+            <p className="font-semibold mt-2 mb-1">아직 자동 반영되지 않는 항목</p>
+            <p>
+              3교대·격일제, 승무 인원수(TRIO), 신규기사 단독 배정 금지, 사고 노선 금지 — 엔진은 오전/오후
+              2교대 짝궁 구조를 전제로 생성하므로, 이 규칙들은 생성 후 배차표에서 직접 확인해야 합니다.
+            </p>
+            <p className="mt-2">
+              순번 로테이션 · 주말 감차 · 짝궁 교대 · 예비 운영 · 공정성은{' '}
+              <button
+                type="button"
+                onClick={() => setTab('engine')}
+                className="underline font-semibold hover:text-blue-700 dark:hover:text-blue-100"
+              >
+                엔진 튜닝
+              </button>
+              {' '}탭에서 관리합니다.
+            </p>
+          </div>
         </div>
-      </Section>
+      </div>
+      )}
 
-      {/* Section: 운영 모델 */}
-      <Section title="운영 모델" desc="시프트·승무 형태와 휴무 사이클을 정합니다.">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="시프트 시스템" hint="1교대 / 2교대 / 3교대 / 격일제">
-            <select
-              value={policy.shiftSystem.kind}
-              onChange={(e) => {
-                const kind = e.target.value as CompanyPolicy['shiftSystem']['kind'];
-                const slots =
-                  kind === 'ONE_SHIFT' ? ['FULL_DAY']
-                  : kind === 'TWO_SHIFT' ? ['AM', 'PM']
-                  : kind === 'THREE_SHIFT' ? ['MORNING', 'AFTERNOON', 'NIGHT']
-                  : ['ON_DUTY'];
-                update((p) => ({ ...p, shiftSystem: { ...p.shiftSystem, kind, slots } }));
-              }}
-              className={selectCls}
-            >
-              <option value="ONE_SHIFT">1교대 (종일)</option>
-              <option value="TWO_SHIFT">2교대 (AM/PM)</option>
-              <option value="THREE_SHIFT">3교대 (오전/오후/야간)</option>
-              <option value="ALTERNATING_DAY">격일제</option>
-            </select>
-          </Field>
-
-          <Field label="승무 모델" hint="버스 1대당 운전자 수">
-            <select
-              value={policy.crewModel.kind}
-              onChange={(e) => {
-                const kind = e.target.value as 'SOLO' | 'PAIR' | 'TRIO';
-                const size: 1 | 2 | 3 = kind === 'SOLO' ? 1 : kind === 'PAIR' ? 2 : 3;
-                update((p) => ({ ...p, crewModel: { kind, size } }));
-              }}
-              className={selectCls}
-            >
-              <option value="SOLO">SOLO (단독, 1명)</option>
-              <option value="PAIR">PAIR (정·부, 2명)</option>
-              <option value="TRIO">TRIO (3명)</option>
-            </select>
-          </Field>
-
-          <Field label="연속 근무일" hint="휴무 사이의 근무일 수">
-            <NumberInput
-              value={policy.restCycle.workDays}
-              min={1}
-              max={14}
-              onChange={(v) => update((p) => ({ ...p, restCycle: { ...p.restCycle, workDays: v } }))}
+        {tab === 'policy' ? (
+          <>
+        {/* Section: Preset */}
+        <Section icon={<Sparkles className="w-5 h-5 text-gray-900 dark:text-white" />} title="빠른 프리셋" desc="회사 유형에 맞는 표준 설정을 한 번에 적용합니다.">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <PresetCard
+              active={policy.preset === 'CITY_2SHIFT'}
+              title="시내버스 2교대"
+              tags={['PAIR (정·부)', '5근 2휴', 'AM/PM 교대']}
+              onClick={() => applyPreset('CITY_2SHIFT')}
             />
-          </Field>
-
-          <Field label="연속 휴무일" hint="근무 사이의 휴무일 수">
-            <NumberInput
-              value={policy.restCycle.restDays}
-              min={1}
-              max={7}
-              onChange={(v) => update((p) => ({ ...p, restCycle: { ...p.restCycle, restDays: v } }))}
+            <PresetCard
+              active={policy.preset === 'VILLAGE_1SHIFT'}
+              title="마을버스 1교대"
+              tags={['SOLO (단독)', '6근 1휴', '종일']}
+              onClick={() => applyPreset('VILLAGE_1SHIFT')}
             />
-          </Field>
+          </div>
+        </Section>
 
-          {policy.shiftSystem.kind === 'TWO_SHIFT' && (
-            <Field label="주별 AM↔PM 교대" hint="매주 오전·오후 시프트를 교대로 배정">
-              <Toggle
-                checked={!!policy.shiftSystem.weeklyAlternation}
-                onChange={(v) => update((p) => ({ ...p, shiftSystem: { ...p.shiftSystem, weeklyAlternation: v } }))}
+        {/* Section: 운영 모델 */}
+        <Section title="운영 모델" desc="시프트·승무 형태와 휴무 사이클을 정합니다.">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="시프트 시스템" hint="1교대 / 2교대 / 3교대 / 격일제">
+              <select
+                value={policy.shiftSystem.kind}
+                onChange={(e) => {
+                  const kind = e.target.value as CompanyPolicy['shiftSystem']['kind'];
+                  const slots =
+                    kind === 'ONE_SHIFT' ? ['FULL_DAY']
+                    : kind === 'TWO_SHIFT' ? ['AM', 'PM']
+                    : kind === 'THREE_SHIFT' ? ['MORNING', 'AFTERNOON', 'NIGHT']
+                    : ['ON_DUTY'];
+                  update((p) => ({ ...p, shiftSystem: { ...p.shiftSystem, kind, slots } }));
+                }}
+                className={selectCls}
+              >
+                <option value="ONE_SHIFT">1교대 (종일)</option>
+                <option value="TWO_SHIFT">2교대 (AM/PM)</option>
+                <option value="THREE_SHIFT">3교대 (오전/오후/야간)</option>
+                <option value="ALTERNATING_DAY">격일제</option>
+              </select>
+            </Field>
+
+            <Field label="승무 모델" hint="버스 1대당 운전자 수">
+              <select
+                value={policy.crewModel.kind}
+                onChange={(e) => {
+                  const kind = e.target.value as 'SOLO' | 'PAIR' | 'TRIO';
+                  const size: 1 | 2 | 3 = kind === 'SOLO' ? 1 : kind === 'PAIR' ? 2 : 3;
+                  update((p) => ({ ...p, crewModel: { kind, size } }));
+                }}
+                className={selectCls}
+              >
+                <option value="SOLO">SOLO (단독, 1명)</option>
+                <option value="PAIR">PAIR (정·부, 2명)</option>
+                <option value="TRIO">TRIO (3명)</option>
+              </select>
+            </Field>
+
+            <Field label="연속 근무일" hint="휴무 사이의 근무일 수">
+              <NumberInput
+                value={policy.restCycle.workDays}
+                min={1}
+                max={14}
+                onChange={(v) => update((p) => ({ ...p, restCycle: { ...p.restCycle, workDays: v } }))}
               />
             </Field>
-          )}
-          <Field label="휴무 연속 보장" hint="휴무일을 반드시 연속으로 부여">
-            <Toggle
-              checked={policy.restCycle.consecutiveRest}
-              onChange={(v) => update((p) => ({ ...p, restCycle: { ...p.restCycle, consecutiveRest: v } }))}
+
+            <Field label="연속 휴무일" hint="근무 사이의 휴무일 수">
+              <NumberInput
+                value={policy.restCycle.restDays}
+                min={1}
+                max={7}
+                onChange={(v) => update((p) => ({ ...p, restCycle: { ...p.restCycle, restDays: v } }))}
+              />
+            </Field>
+
+            {policy.shiftSystem.kind === 'TWO_SHIFT' && (
+              <Field label="주별 AM↔PM 교대" hint="매주 오전·오후 시프트를 교대로 배정">
+                <Toggle
+                  checked={!!policy.shiftSystem.weeklyAlternation}
+                  onChange={(v) => update((p) => ({ ...p, shiftSystem: { ...p.shiftSystem, weeklyAlternation: v } }))}
+                />
+              </Field>
+            )}
+            <Field label="휴무 연속 보장" hint="휴무일을 반드시 연속으로 부여">
+              <Toggle
+                checked={policy.restCycle.consecutiveRest}
+                onChange={(v) => update((p) => ({ ...p, restCycle: { ...p.restCycle, consecutiveRest: v } }))}
+              />
+            </Field>
+          </div>
+        </Section>
+
+        {/* Section: workdayBands — 친근한 UX */}
+        <Section
+          title="한 달 근무일 가이드"
+          desc="기사 한 명이 한 달에 며칠 정도 일하는 게 좋을지 정해주세요. AI가 모든 기사를 이 범위 안에서 비슷하게 일하도록 자동으로 균등 배분합니다."
+        >
+          <WorkdayBandSlider
+            idealMin={policy.workdayBands.sweetMin}
+            idealMax={policy.workdayBands.sweetMax}
+            allowMin={policy.workdayBands.hardMin}
+            allowMax={policy.workdayBands.hardMax}
+            onChange={(next) =>
+              update((p) => ({
+                ...p,
+                workdayBands: {
+                  ...p.workdayBands,
+                  sweetMin: next.idealMin,
+                  sweetMax: next.idealMax,
+                  hardMin: next.allowMin,
+                  hardMax: next.allowMax,
+                },
+              }))
+            }
+          />
+        </Section>
+
+        {/* Section: 안전·운영 룰 */}
+        <Section
+          icon={<ShieldCheck className="w-5 h-5 text-gray-900 dark:text-white" />}
+          title="안전·운영 룰"
+          desc="회사 단협 또는 안전 정책으로 켜고 끌 수 있습니다. 일부는 법적 강제로 잠겨 있습니다."
+        >
+          <div className="space-y-2">
+            <RuleRow
+              locked
+              title="같은 날 중복 배정 금지"
+              desc="한 기사가 같은 날 두 슬롯에 배정되지 않도록 함. 구조적 룰."
+              checked={policy.constitutional?.noSameDayDoubleAssign?.enabled ?? true}
+              onChange={() => { /* locked */ }}
             />
-          </Field>
-        </div>
-      </Section>
+            <RuleRow
+              locked
+              title="승인된 휴무일 배정 금지"
+              desc="기사가 신청·승인한 휴무일에는 어떤 슬롯도 배정하지 않음."
+              checked={policy.constitutional?.noAssignOnApprovedOff?.enabled ?? true}
+              onChange={() => { /* locked */ }}
+            />
+            <RuleRow
+              locked
+              title="면허 만료 운전자 배정 금지"
+              desc="여객자동차 운수사업법 제24조 — 만료된 운전면허로는 운행 불가."
+              checked={policy.constitutional?.noExpiredLicense?.enabled ?? true}
+              onChange={() => { /* locked */ }}
+            />
+            <RuleRow
+              locked
+              title="자격 만료 운전자 배정 금지"
+              desc="여객법 제24조의2 — 운전적성정밀검사 미통과·만료자 운행 불가."
+              checked={policy.constitutional?.noExpiredQualification?.enabled ?? true}
+              onChange={() => { /* locked */ }}
+            />
 
-      {/* Section: workdayBands — 친근한 UX */}
-      <Section
-        title="한 달 근무일 가이드"
-        desc="기사 한 명이 한 달에 며칠 정도 일하는 게 좋을지 정해주세요. AI가 모든 기사를 이 범위 안에서 비슷하게 일하도록 자동으로 균등 배분합니다."
-      >
-        <WorkdayBandSlider
-          idealMin={policy.workdayBands.sweetMin}
-          idealMax={policy.workdayBands.sweetMax}
-          allowMin={policy.workdayBands.hardMin}
-          allowMax={policy.workdayBands.hardMax}
-          onChange={(next) =>
-            update((p) => ({
-              ...p,
-              workdayBands: {
-                ...p.workdayBands,
-                sweetMin: next.idealMin,
-                sweetMax: next.idealMax,
-                hardMin: next.allowMin,
-                hardMax: next.allowMax,
-              },
-            }))
-          }
-        />
-      </Section>
-
-      {/* Section: 안전·운영 룰 */}
-      <Section
-        icon={<ShieldCheck className="w-5 h-5 text-gray-900 dark:text-white" />}
-        title="안전·운영 룰"
-        desc="회사 단협 또는 안전 정책으로 켜고 끌 수 있습니다. 일부는 법적 강제로 잠겨 있습니다."
-      >
-        <div className="space-y-2">
-          <RuleRow
-            locked
-            title="같은 날 중복 배정 금지"
-            desc="한 기사가 같은 날 두 슬롯에 배정되지 않도록 함. 구조적 룰."
-            checked={policy.constitutional?.noSameDayDoubleAssign?.enabled ?? true}
-            onChange={() => { /* locked */ }}
-          />
-          <RuleRow
-            locked
-            title="승인된 휴무일 배정 금지"
-            desc="기사가 신청·승인한 휴무일에는 어떤 슬롯도 배정하지 않음."
-            checked={policy.constitutional?.noAssignOnApprovedOff?.enabled ?? true}
-            onChange={() => { /* locked */ }}
-          />
-          <RuleRow
-            locked
-            title="면허 만료 운전자 배정 금지"
-            desc="여객자동차 운수사업법 제24조 — 만료된 운전면허로는 운행 불가."
-            checked={policy.constitutional?.noExpiredLicense?.enabled ?? true}
-            onChange={() => { /* locked */ }}
-          />
-          <RuleRow
-            locked
-            title="자격 만료 운전자 배정 금지"
-            desc="여객법 제24조의2 — 운전적성정밀검사 미통과·만료자 운행 불가."
-            checked={policy.constitutional?.noExpiredQualification?.enabled ?? true}
-            onChange={() => { /* locked */ }}
-          />
-
-          <RuleRow
-            title="야간 시프트 연속 근무 제한"
-            desc="동일 기사가 PM(야간) 시프트를 연속 근무하는 일수 상한. 단협 권장 사항이며 법적 강제는 아님."
-            checked={policy.constitutional?.noNightStreak?.enabled ?? true}
-            onChange={(v) =>
-              update((p) => ({
-                ...p,
-                constitutional: {
-                  ...(p.constitutional ?? {}),
-                  noNightStreak: {
-                    enabled: v,
-                    maxConsecutive: p.constitutional?.noNightStreak?.maxConsecutive ?? 3,
-                    nightShifts: p.constitutional?.noNightStreak?.nightShifts ?? ['PM'],
+            <RuleRow
+              title="야간 시프트 연속 근무 제한"
+              desc="동일 기사가 PM(야간) 시프트를 연속 근무하는 일수 상한. 단협 권장 사항이며 법적 강제는 아님."
+              checked={policy.constitutional?.noNightStreak?.enabled ?? true}
+              onChange={(v) =>
+                update((p) => ({
+                  ...p,
+                  constitutional: {
+                    ...(p.constitutional ?? {}),
+                    noNightStreak: {
+                      enabled: v,
+                      maxConsecutive: p.constitutional?.noNightStreak?.maxConsecutive ?? 3,
+                      nightShifts: p.constitutional?.noNightStreak?.nightShifts ?? ['PM'],
+                    },
                   },
-                },
-              }))
-            }
-            extra={
-              policy.constitutional?.noNightStreak?.enabled ? (
-                <InlineNumber
-                  label="최대 연속 일수"
-                  value={policy.constitutional.noNightStreak.maxConsecutive ?? 3}
-                  min={1}
-                  max={7}
-                  onChange={(v) =>
-                    update((p) => ({
-                      ...p,
-                      constitutional: {
-                        ...(p.constitutional ?? {}),
-                        noNightStreak: {
-                          ...(p.constitutional?.noNightStreak ?? { enabled: true, maxConsecutive: 3, nightShifts: ['PM'] }),
-                          maxConsecutive: v,
+                }))
+              }
+              extra={
+                policy.constitutional?.noNightStreak?.enabled ? (
+                  <InlineNumber
+                    label="최대 연속 일수"
+                    value={policy.constitutional.noNightStreak.maxConsecutive ?? 3}
+                    min={1}
+                    max={7}
+                    onChange={(v) =>
+                      update((p) => ({
+                        ...p,
+                        constitutional: {
+                          ...(p.constitutional ?? {}),
+                          noNightStreak: {
+                            ...(p.constitutional?.noNightStreak ?? { enabled: true, maxConsecutive: 3, nightShifts: ['PM'] }),
+                            maxConsecutive: v,
+                          },
                         },
-                      },
-                    }))
-                  }
-                />
-              ) : null
-            }
-          />
-          <RuleRow
-            title="주 최대 근무일"
-            desc="근로기준법 제55조 (주 1회 유급휴일) 기반. 보통 6일."
-            checked={policy.constitutional?.weeklyMaxWorkDays?.enabled ?? true}
-            onChange={(v) =>
-              update((p) => ({
-                ...p,
-                constitutional: {
-                  ...(p.constitutional ?? {}),
-                  weeklyMaxWorkDays: {
-                    enabled: v,
-                    maxDays: p.constitutional?.weeklyMaxWorkDays?.maxDays ?? 6,
+                      }))
+                    }
+                  />
+                ) : null
+              }
+            />
+            <RuleRow
+              title="주 최대 근무일"
+              desc="근로기준법 제55조 (주 1회 유급휴일) 기반. 보통 6일."
+              checked={policy.constitutional?.weeklyMaxWorkDays?.enabled ?? true}
+              onChange={(v) =>
+                update((p) => ({
+                  ...p,
+                  constitutional: {
+                    ...(p.constitutional ?? {}),
+                    weeklyMaxWorkDays: {
+                      enabled: v,
+                      maxDays: p.constitutional?.weeklyMaxWorkDays?.maxDays ?? 6,
+                    },
                   },
-                },
-              }))
-            }
-            extra={
-              policy.constitutional?.weeklyMaxWorkDays?.enabled ? (
-                <InlineNumber
-                  label="최대 일수"
-                  value={policy.constitutional.weeklyMaxWorkDays.maxDays ?? 6}
-                  min={1}
-                  max={7}
-                  onChange={(v) =>
-                    update((p) => ({
-                      ...p,
-                      constitutional: {
-                        ...(p.constitutional ?? {}),
-                        weeklyMaxWorkDays: {
-                          ...(p.constitutional?.weeklyMaxWorkDays ?? { enabled: true, maxDays: 6 }),
-                          maxDays: v,
+                }))
+              }
+              extra={
+                policy.constitutional?.weeklyMaxWorkDays?.enabled ? (
+                  <InlineNumber
+                    label="최대 일수"
+                    value={policy.constitutional.weeklyMaxWorkDays.maxDays ?? 6}
+                    min={1}
+                    max={7}
+                    onChange={(v) =>
+                      update((p) => ({
+                        ...p,
+                        constitutional: {
+                          ...(p.constitutional ?? {}),
+                          weeklyMaxWorkDays: {
+                            ...(p.constitutional?.weeklyMaxWorkDays ?? { enabled: true, maxDays: 6 }),
+                            maxDays: v,
+                          },
                         },
-                      },
-                    }))
-                  }
-                />
-              ) : null
-            }
-          />
-          <RuleRow
-            title="월 최소 주말 휴무 보장"
-            desc="한 달에 최소 N회 주말(토·일) 휴무 보장."
-            checked={policy.constitutional?.guaranteedWeekendOff?.enabled ?? true}
-            onChange={(v) =>
-              update((p) => ({
-                ...p,
-                constitutional: {
-                  ...(p.constitutional ?? {}),
-                  guaranteedWeekendOff: {
-                    enabled: v,
-                    minPerMonth: p.constitutional?.guaranteedWeekendOff?.minPerMonth ?? 1,
+                      }))
+                    }
+                  />
+                ) : null
+              }
+            />
+            <RuleRow
+              title="월 최소 주말 휴무 보장"
+              desc="한 달에 최소 N회 주말(토·일) 휴무 보장."
+              checked={policy.constitutional?.guaranteedWeekendOff?.enabled ?? true}
+              onChange={(v) =>
+                update((p) => ({
+                  ...p,
+                  constitutional: {
+                    ...(p.constitutional ?? {}),
+                    guaranteedWeekendOff: {
+                      enabled: v,
+                      minPerMonth: p.constitutional?.guaranteedWeekendOff?.minPerMonth ?? 1,
+                    },
                   },
-                },
-              }))
-            }
-            extra={
-              policy.constitutional?.guaranteedWeekendOff?.enabled ? (
-                <InlineNumber
-                  label="월 최소 횟수"
-                  value={policy.constitutional.guaranteedWeekendOff.minPerMonth ?? 1}
-                  min={0}
-                  max={4}
-                  onChange={(v) =>
-                    update((p) => ({
-                      ...p,
-                      constitutional: {
-                        ...(p.constitutional ?? {}),
-                        guaranteedWeekendOff: {
-                          ...(p.constitutional?.guaranteedWeekendOff ?? { enabled: true, minPerMonth: 1 }),
-                          minPerMonth: v,
+                }))
+              }
+              extra={
+                policy.constitutional?.guaranteedWeekendOff?.enabled ? (
+                  <InlineNumber
+                    label="월 최소 횟수"
+                    value={policy.constitutional.guaranteedWeekendOff.minPerMonth ?? 1}
+                    min={0}
+                    max={4}
+                    onChange={(v) =>
+                      update((p) => ({
+                        ...p,
+                        constitutional: {
+                          ...(p.constitutional ?? {}),
+                          guaranteedWeekendOff: {
+                            ...(p.constitutional?.guaranteedWeekendOff ?? { enabled: true, minPerMonth: 1 }),
+                            minPerMonth: v,
+                          },
                         },
-                      },
-                    }))
-                  }
-                />
-              ) : null
-            }
-          />
-          <RuleRow
-            title="신규 기사 단독 배정 금지"
-            desc="입사 후 N일 동안 다른 노선에 단독 투입 금지."
-            checked={policy.constitutional?.noNewHireSolo?.enabled ?? true}
-            onChange={(v) =>
-              update((p) => ({
-                ...p,
-                constitutional: {
-                  ...(p.constitutional ?? {}),
-                  noNewHireSolo: {
-                    enabled: v,
-                    newHirePeriodDays: p.constitutional?.noNewHireSolo?.newHirePeriodDays ?? 7,
+                      }))
+                    }
+                  />
+                ) : null
+              }
+            />
+            <RuleRow
+              title="신규 기사 단독 배정 금지"
+              desc="입사 후 N일 동안 다른 노선에 단독 투입 금지."
+              checked={policy.constitutional?.noNewHireSolo?.enabled ?? true}
+              onChange={(v) =>
+                update((p) => ({
+                  ...p,
+                  constitutional: {
+                    ...(p.constitutional ?? {}),
+                    noNewHireSolo: {
+                      enabled: v,
+                      newHirePeriodDays: p.constitutional?.noNewHireSolo?.newHirePeriodDays ?? 7,
+                    },
                   },
-                },
-              }))
-            }
-            extra={
-              policy.constitutional?.noNewHireSolo?.enabled ? (
-                <InlineNumber
-                  label="신규 기간(일)"
-                  value={policy.constitutional.noNewHireSolo.newHirePeriodDays ?? 7}
-                  min={1}
-                  max={90}
-                  onChange={(v) =>
-                    update((p) => ({
-                      ...p,
-                      constitutional: {
-                        ...(p.constitutional ?? {}),
-                        noNewHireSolo: {
-                          ...(p.constitutional?.noNewHireSolo ?? { enabled: true, newHirePeriodDays: 7 }),
-                          newHirePeriodDays: v,
+                }))
+              }
+              extra={
+                policy.constitutional?.noNewHireSolo?.enabled ? (
+                  <InlineNumber
+                    label="신규 기간(일)"
+                    value={policy.constitutional.noNewHireSolo.newHirePeriodDays ?? 7}
+                    min={1}
+                    max={90}
+                    onChange={(v) =>
+                      update((p) => ({
+                        ...p,
+                        constitutional: {
+                          ...(p.constitutional ?? {}),
+                          noNewHireSolo: {
+                            ...(p.constitutional?.noNewHireSolo ?? { enabled: true, newHirePeriodDays: 7 }),
+                            newHirePeriodDays: v,
+                          },
                         },
-                      },
-                    }))
-                  }
-                />
-              ) : null
-            }
-          />
-          <RuleRow
-            title="운행 후 최소 휴식 시간"
-            desc="여객법 시행규칙 제44조의2 — 시외/고속/광역급행 권장 8시간."
-            checked={policy.constitutional?.minRestBetweenShifts?.enabled ?? false}
-            onChange={(v) =>
-              update((p) => ({
-                ...p,
-                constitutional: {
-                  ...(p.constitutional ?? {}),
-                  minRestBetweenShifts: {
-                    enabled: v,
-                    minHours: p.constitutional?.minRestBetweenShifts?.minHours ?? 8,
+                      }))
+                    }
+                  />
+                ) : null
+              }
+            />
+            <RuleRow
+              title="운행 후 최소 휴식 시간"
+              desc="여객법 시행규칙 제44조의2 — 시외/고속/광역급행 권장 8시간."
+              checked={policy.constitutional?.minRestBetweenShifts?.enabled ?? false}
+              onChange={(v) =>
+                update((p) => ({
+                  ...p,
+                  constitutional: {
+                    ...(p.constitutional ?? {}),
+                    minRestBetweenShifts: {
+                      enabled: v,
+                      minHours: p.constitutional?.minRestBetweenShifts?.minHours ?? 8,
+                    },
                   },
-                },
-              }))
-            }
-            extra={
-              policy.constitutional?.minRestBetweenShifts?.enabled ? (
-                <InlineNumber
-                  label="최소 시간"
-                  value={policy.constitutional.minRestBetweenShifts.minHours ?? 8}
-                  min={1}
-                  max={24}
-                  onChange={(v) =>
-                    update((p) => ({
-                      ...p,
-                      constitutional: {
-                        ...(p.constitutional ?? {}),
-                        minRestBetweenShifts: {
-                          ...(p.constitutional?.minRestBetweenShifts ?? { enabled: false, minHours: 8 }),
-                          minHours: v,
+                }))
+              }
+              extra={
+                policy.constitutional?.minRestBetweenShifts?.enabled ? (
+                  <InlineNumber
+                    label="최소 시간"
+                    value={policy.constitutional.minRestBetweenShifts.minHours ?? 8}
+                    min={1}
+                    max={24}
+                    onChange={(v) =>
+                      update((p) => ({
+                        ...p,
+                        constitutional: {
+                          ...(p.constitutional ?? {}),
+                          minRestBetweenShifts: {
+                            ...(p.constitutional?.minRestBetweenShifts ?? { enabled: false, minHours: 8 }),
+                            minHours: v,
+                          },
                         },
-                      },
-                    }))
-                  }
-                />
-              ) : null
-            }
-          />
-          <RuleRow
-            title="사고 이력 노선 재배치 금지"
-            desc="사고가 난 노선에 같은 기사 재투입 금지 (블랙리스트 룰)."
-            checked={policy.constitutional?.noBlockedRoute?.enabled ?? true}
-            onChange={(v) =>
-              update((p) => ({
-                ...p,
-                constitutional: {
-                  ...(p.constitutional ?? {}),
-                  noBlockedRoute: { enabled: v },
-                },
-              }))
-            }
-          />
-        </div>
-      </Section>
+                      }))
+                    }
+                  />
+                ) : null
+              }
+            />
+            <RuleRow
+              title="사고 이력 노선 재배치 금지"
+              desc="사고가 난 노선에 같은 기사 재투입 금지 (블랙리스트 룰)."
+              checked={policy.constitutional?.noBlockedRoute?.enabled ?? true}
+              onChange={(v) =>
+                update((p) => ({
+                  ...p,
+                  constitutional: {
+                    ...(p.constitutional ?? {}),
+                    noBlockedRoute: { enabled: v },
+                  },
+                }))
+              }
+            />
+          </div>
+        </Section>
+          </>
+        ) : (
+          <EngineTuningSection onGoToPolicy={() => setTab('policy')} />
+        )}
     </div>
   );
 }

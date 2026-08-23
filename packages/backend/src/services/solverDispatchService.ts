@@ -33,6 +33,8 @@ import {
   type WorkdayBandsPolicy,
 } from '../agents/_solvers/types';
 import { uniqueScheduleName } from './scheduleService';
+import { buildOperatingPlan, persistRestingVehicles } from './operatingPlanService';
+import { fillVacancies } from './vacancyFillService';
 
 // ─────────────────────────────────────────────
 // 순수 헬퍼 — 선호 노선 정렬
@@ -297,7 +299,7 @@ export async function loadCompanyPolicy(companyId: number): Promise<CompanyPolic
   // 1. DB 정책 우선
   if (company.policy && typeof company.policy === 'object') {
     const validated = validateCompanyPolicy(company.policy);
-    if (validated) return validated;
+    if (validated) return normalizeConstitutional(validated, companyId);
     logger.warn('[SolverDispatch] Company.policy invalid — 디폴트 fallback', {
       companyId,
     });
@@ -309,6 +311,48 @@ export async function loadCompanyPolicy(companyId: number): Promise<CompanyPolic
     return POLICY_PRESETS.VILLAGE_1SHIFT;
   }
   return POLICY_PRESETS.CITY_2SHIFT;
+}
+
+/**
+ * 저장된 정책 중 **스스로와 모순되는 규칙**을 끈다.
+ *
+ * 2교대의 '오후'는 야간 근무가 아니다 — 저녁에 끝나는 주간 근무다. 그런데
+ * DB 에 저장된 정책 상당수가 noNightStreak(야간 연속 상한 3일)을 'PM' 에
+ * 걸어두고 있다. 근무 사이클이 5일이면 이 둘은 동시에 만족할 수 없고,
+ * 솔버는 어쩔 수 없이 블록 중간에 오전을 끼워넣는다:
+ *
+ *     오후 오후 오후 **오전** 오후
+ *                    ↑ 여기서 '오후 근무 → 다음날 오전 근무'가 만들어진다
+ *
+ * 이 조합이 바로 여객자동차 운수사업법 시행규칙 제44조의6 이 막으려는 것
+ * (퇴근 전 마지막 운행 ~ 다음 출근 첫 운행 사이 8시간)이다. 즉 이 규칙을
+ * 켜두면 **안전 규칙을 지키려다 더 위험한 배차를 만든다.** 성민버스 7월
+ * 실측으로 그 조합이 110건 있었다.
+ *
+ * 그래서 상한이 근무 블록보다 짧으면 규칙을 끄고 로그를 남긴다. 조용히
+ * 나쁜 배차를 내는 것보다, 모순을 드러내고 안전한 쪽을 택한다.
+ */
+function normalizeConstitutional(policy: CompanyPolicy, companyId: number): CompanyPolicy {
+  const night = policy.constitutional?.noNightStreak;
+  if (!night?.enabled) return policy;
+  if (policy.shiftSystem.kind !== 'TWO_SHIFT') return policy;
+  const overlaps = night.nightShifts.some((s) => policy.shiftSystem.slots.includes(s as never));
+  if (!overlaps || night.maxConsecutive >= policy.restCycle.workDays) return policy;
+
+  logger.warn(
+    `[SolverDispatch] 회사 ${companyId}: 야간 연속 제한(${night.maxConsecutive}일)이 ` +
+      `근무 사이클(${policy.restCycle.workDays}일)보다 짧아 서로 모순됩니다. ` +
+      `2교대의 '오후'는 야간 근무가 아니므로 이 규칙을 적용하지 않습니다 ` +
+      `— 적용하면 블록 중간에 오전이 끼어들어 '오후→다음날 오전'(법 제44조의6 ` +
+      `연속 휴식 8시간 위협)이 오히려 늘어납니다.`,
+  );
+  return {
+    ...policy,
+    constitutional: {
+      ...policy.constitutional,
+      noNightStreak: { ...night, enabled: false },
+    },
+  };
 }
 
 /**
@@ -708,6 +752,10 @@ export async function persistSolverOutput(args: PersistArgs): Promise<{
 export interface GenerateScheduleV2Result {
   scheduleId: number;
   slotsCreated: number;
+  /** 솔버가 못 채운 칸을 사후에 메운 수 */
+  vacancyFilled: number;
+  /** 안전 규칙상 채울 수 없어 남은 공석 */
+  stillVacant: number;
   output: SolverOutput;
   policyUsed: PolicyPreset | 'CUSTOM';
   elapsedMs: number;
@@ -755,11 +803,22 @@ export async function generateMonthlyScheduleV2(args: {
     }
   }
 
+  // 노선 설정의 요일별 운행 대수 → 차량별 운행 날짜.
+  // 이걸 넘기지 않으면 솔버가 "전 차량 매일 운행"으로 보고, 실제로는 없는
+  // 근무를 한 달에 수백 칸 만들어낸다 (그만큼 인력이 모자란 것처럼 보인다).
+  const plan = await buildOperatingPlan(args.companyId, args.year, args.month);
+
+  // 운행 **대수**만 넘기고, 어느 차를 세울지는 솔버가 기사 휴무와 맞물려
+  // 정하게 한다. 여기서 차량 조합까지 못박으면 감차일이 짝꿍 휴무와 어긋나
+  // 그 짝꿍의 휴무가 2일에서 3~4일로 늘어난다(실측: 3일 이상 휴무의 대부분).
+  // busOperatingDates 는 정비·장기 운휴처럼 **정말 못 쓰는 차**를 표시할 때만
+  // 넘긴다 — 지금은 그런 입력이 없으므로 대수만 넘긴다.
   const input = await buildSolverInputFromDb({
     companyId: args.companyId,
     year: args.year,
     month: args.month,
     policy,
+    busOperatingDates: undefined,
     newHireDriverIds: args.newHireDriverIds ? new Set(args.newHireDriverIds) : undefined,
     blockedRouteIdsByDriver: blockedRouteIdsByDriver.size > 0 ? blockedRouteIdsByDriver : undefined,
   });
@@ -774,6 +833,8 @@ export async function generateMonthlyScheduleV2(args: {
     throw new Error('차량에 배정된 기사가 없습니다. 기사 등록 시 담당 차량(차번)을 입력해주세요.');
   }
 
+  if (!plan.unconfigured) input.routeDailyBusCounts = plan.dailyCountsByRoute;
+
   const output = solveMonthlyGrid(input);
 
   const persisted = await persistSolverOutput({
@@ -786,9 +847,40 @@ export async function generateMonthlyScheduleV2(args: {
     name: args.name,
   });
 
+  // 감차 차량을 패턴으로 남긴다 — 화면·인쇄물·발행 검사가 "원래 안 나가는
+  // 날"과 "사람이 없어 빈 칸"을 구분할 수 있게 하는 유일한 근거다.
+  //
+  // 순환 근무표 경로는 요일별 운행 **대수**만 노선 설정에서 받고 **어느 차**를
+  // 세울지는 기사 휴무와 맞물려 직접 정한다. 그 경우 솔버가 실제로 세운 차를
+  // 저장해야 한다 — 운행 계획의 것을 그대로 쓰면 화면의 '휴'와 배정이 어긋난다.
+  const restingByDate = output.restingByDate
+    ? new Map(Object.entries(output.restingByDate))
+    : plan.restingByDate;
+  const restingSaved = plan.unconfigured && !output.restingByDate
+    ? 0
+    : await persistRestingVehicles(persisted.scheduleId, restingByDate);
+  if (restingSaved > 0) {
+    logger.info(`[SolverDispatch] 감차 ${restingSaved}건 기록 (운행 칸 ${plan.totalCells})`);
+  }
+
+  // 솔버가 못 채운 칸을 남은 인력으로 메운다. 공석 = 그 버스가 안 나간다는
+  // 뜻이라 배차표로서 미완성이다. 안전 규칙(이중배정·연속근무·짧은휴식)을
+  // 어겨야만 채울 수 있는 칸은 비워둔 채 보고한다.
+  let vacancyFilled = 0;
+  let stillVacant = 0;
+  try {
+    const f = await fillVacancies(args.companyId, persisted.scheduleId);
+    vacancyFilled = f.filled;
+    stillVacant = f.stillVacant.length;
+  } catch (e) {
+    logger.error(`[SolverDispatch] 공석 채우기 실패: ${(e as Error).message}`);
+  }
+
   return {
     scheduleId: persisted.scheduleId,
-    slotsCreated: persisted.slotsCreated,
+    slotsCreated: persisted.slotsCreated + vacancyFilled,
+    vacancyFilled,
+    stillVacant,
     output,
     policyUsed: policy.preset ?? 'CUSTOM',
     elapsedMs: Date.now() - start,

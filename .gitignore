@@ -22,3 +22,7 @@ google-play-service-account*.json
 *.keystore
 *.p8
 
+
+# 데모 시드 스크립트 — 무방비 deleteMany(감사로그 포함) 및 테넌트 이동 위험이 있어
+# 저장소에 두지 않는다. 하드닝 전까지 로컬 전용. (backlog D8)
+packages/backend/seed-demo*.js

@@ -222,4 +222,46 @@
   @page { size: landscape; margin: 10mm; }
 
   tr { page-break-inside: avoid; }
+
+  /* ── 게시 양식 그리드(주 단위 × 여러 장) 전용 보정 ──
+     이 표는 화면에서 차량 열을 고정(sticky)해 두고 가로로 스크롤하는데,
+     인쇄에서 sticky 는 자리를 잡지 못해 열이 겹쳐 찍힌다. 종이에는
+     스크롤이 없으니 그냥 흐르게 둔다. */
+  [data-print-area] .sticky {
+    position: static !important;
+  }
+
+  /* 표가 한 장을 넘기면 머리행을 다음 장에도 찍는다 — 종이에서는
+     '이 열이 오전인지 오후인지'를 위로 올라가 확인할 수가 없다 */
+  [data-print-area] thead {
+    display: table-header-group !important;
+  }
+
+  /* 화면용 고정 열폭(px)은 용지 폭에 맞춰 다시 배분되게 푼다 */
+  [data-print-area] col {
+    width: auto !important;
+  }
+
+  /* 주차 사이 강제 개면 — 실물 게시물도 한 장에 한 주다 */
+  .break-after-page {
+    break-after: page !important;
+    page-break-after: always !important;
+  }
+
+  /* 출발지그룹은 통째로 넘긴다. 42대짜리 사업부는 한 주가 A4 한 장을
+     넘는데, 그때 '9번 ②' 7대 중 5대만 앞장에 찍히면 게시물로 못 쓴다.
+     그룹 단위로 끊으면 어느 장을 봐도 그 출발지가 온전히 들어 있다. */
+  [data-print-area] tbody.posting-group {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* 밀도: 한 장에 최대한 담아야 장수가 준다. 기사 이름이 4자를 넘는 일이
+     거의 없어 7pt에서도 읽힌다 (실물 게시표가 딱 이 정도 크기다). */
+  [data-print-area] table.posting-grid th,
+  [data-print-area] table.posting-grid td {
+    padding: 0 2px !important;
+    font-size: 7.5pt !important;
+    line-height: 1.15 !important;
+  }
 }

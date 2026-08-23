@@ -347,3 +347,92 @@ export function countWeekendDays(start: Date, end: Date): number {
   }
   return count;
 }
+
+/**
+ * 그리드 룰 사전 검사 — 이 배정을 넣으면 위반이 되는가.
+ *
+ * checkAssignment 는 슬롯 하나만 보고 판단할 수 있는 룰(휴무 승인·면허·적성·
+ * 사고 노선·같은 날 중복)을 본다. 여기 있는 셋은 **그 달 전체 배정을 봐야**
+ * 판단이 되는 룰이라 따로 있다:
+ *   noNightStreak       야간 시프트 연속 상한
+ *   weeklyMaxWorkDays   주간(일~토) 최대 근무일
+ *   guaranteedWeekendOff 월 최소 주말 휴무 — 이 칸을 넣으면 남은 주말로
+ *                        최소치를 못 채우게 되는 경우 거부
+ *
+ * 그리디 경로(Phase B·C)와 순환 근무표 경로(cyclic-roster)가 같은 판정을
+ * 쓰도록 여기에 둔다.
+ */
+export function wouldViolateGridRules(
+  ctx: ConstraintContext,
+  driverId: number,
+  date: string,
+  shift: ShiftSlot,
+  policy: CompanyPolicy,
+  monthStart: Date,
+  monthEnd: Date,
+): boolean {
+  const constitutional = policy.constitutional;
+  const existing = ctx.driverSlots.get(driverId) ?? [];
+
+  // noNightStreak — 현재 ctx 기준으로 야간 연속 일수 시뮬레이션
+  const nightRule = constitutional?.noNightStreak;
+  if (nightRule?.enabled && nightRule.nightShifts.includes(shift)) {
+    // 추가하려는 날 기준으로 뒤/앞 연속 야간 일수를 계산
+    const nightDates = new Set(
+      existing.filter((s) => nightRule.nightShifts.includes(s.shift)).map((s) => s.date),
+    );
+    let backward = 0;
+    let cursor = parseDate(date);
+    for (let i = 0; i < nightRule.maxConsecutive; i++) {
+      cursor.setUTCDate(cursor.getUTCDate() - 1);
+      if (nightDates.has(formatDate(cursor))) backward++;
+      else break;
+    }
+    let forward = 0;
+    cursor = parseDate(date);
+    for (let i = 0; i < nightRule.maxConsecutive; i++) {
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+      if (nightDates.has(formatDate(cursor))) forward++;
+      else break;
+    }
+    if (backward + 1 + forward > nightRule.maxConsecutive) return true;
+  }
+
+  // weeklyMaxWorkDays — 해당 주 현재 근무일 수 확인
+  // weeklyCount is the PRE-fill count (existing slots only, candidate not included).
+  // Post-fill count = weeklyCount + 1. validateFullGrid flags when final count > maxDays,
+  // so the fill is illegal iff (weeklyCount + 1) > maxDays ⟺ weeklyCount >= maxDays.
+  // The >= comparison is therefore correct and intentional.
+  const weeklyRule = constitutional?.weeklyMaxWorkDays;
+  if (weeklyRule?.enabled) {
+    const d = parseDate(date);
+    const dayOfWeek = d.getUTCDay();
+    const weekStartDate = new Date(d);
+    weekStartDate.setUTCDate(d.getUTCDate() - dayOfWeek);
+    const weekEndDate = new Date(weekStartDate);
+    weekEndDate.setUTCDate(weekStartDate.getUTCDate() + 6);
+    const weekStartIso = formatDate(weekStartDate);
+    const weekEndIso = formatDate(weekEndDate);
+    const weeklyCount = existing.filter(
+      (s) => s.date >= weekStartIso && s.date <= weekEndIso,
+    ).length;
+    if (weeklyCount >= weeklyRule.maxDays) return true;
+  }
+
+  // guaranteedWeekendOff — 주말 슬롯이고 드라이버가 아직 이달 주말 휴무가 없는 경우 거부
+  // (월 내 총 주말 일수 중 workedWeekends + 1 이 모두 채워지면 minPerMonth 보장 불가)
+  const weekendRule = constitutional?.guaranteedWeekendOff;
+  if (weekendRule?.enabled && isWeekend(date)) {
+    const monthStartIso = formatDate(monthStart);
+    const monthEndIso = formatDate(monthEnd);
+    const totalWeekendDays = countWeekendDays(monthStart, monthEnd);
+    const workedWeekends = existing.filter(
+      (s) => s.date >= monthStartIso && s.date <= monthEndIso && isWeekend(s.date),
+    ).length;
+    // 이 슬롯을 추가하면 workedWeekends+1 이 되는데, 남은 주말 휴무 가능 일수 확인
+    // totalWeekendDays - (workedWeekends+1) < minPerMonth → 거부
+    if (totalWeekendDays - (workedWeekends + 1) < weekendRule.minPerMonth) return true;
+  }
+
+  return false;
+}

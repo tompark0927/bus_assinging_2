@@ -1,0 +1,436 @@
+"""2단계: 기사 배정 (Google OR-Tools CP-SAT).
+
+결정변수: x[k, d, v, s] — 기사 k가 날짜 d에 차량 v의 시프트 s(A/P) 근무.
+
+하드 제약 (스펙 4)
+    H1. 운행 (d,v)마다 오전 1명 + 오후 1명 정확히.
+    H2. 기사 1인 1일 최대 1시프트.
+    H3. 연속 근무 ≤ max_consecutive(기본 6).
+    H4. 승인 휴무일은 OFF 고정.
+    H5. 월 근무일수 밴드 (입퇴사자는 호출측에서 일할 조정).
+    H6. (옵션) 오후 근무 다음날 오전 금지.
+
+소프트 제약 (가중 페널티)
+    S1. 고정기사는 본인 차량에 (w 높음. 실측: 위반은 월 3건 수준).
+    S2. 휴무 직후 짝궁과 A/P 스왑 (실측 준수율 지선 74%/간선 69%).
+    S3. 같은 시프트 연속 블록 유지 (연속 근무일에 시프트 변경 페널티).
+    S4. 요일 선호 반영.
+    S5. 예비 투입 부담 균등화 + 차량 숙련도(과거 탑승 빈도) 반영.
+
+공정성 (F1~F3)은 fairness.py 리포트 + 목적함수 분산항으로 반영.
+LLM은 이 모듈에 관여하지 않는다 — 결과는 결정론적·설명가능 (스펙 0).
+"""
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass, field
+from typing import Optional
+
+from ortools.sat.python import cp_model
+
+from .models import Shift
+
+
+@dataclass
+class SolverWeights:
+    own_vehicle: int = 1000        # S1
+    swap_after_leave: int = 30     # S2: 휴무 복귀 후 시프트 유지 시 페널티
+    keep_shift: int = 60           # S3: 연속 근무일 시프트 변경 시 페널티
+    weekday_pref: int = 20         # S4
+    vehicle_affinity: int = 8      # S5: 숙련도 — 과거 탑승 빈도 기반
+    group_affinity: int = 15       # 소속 그룹 밖 투입 페널티 (하드 금지 — 실측 교차 88건/월)
+    spare_balance: int = 5         # S5: 예비 투입 횟수 분산
+    fairness_lambda: int = 3       # λ: 공정성 분산항 (담당자 슬라이더 노출용)
+
+
+@dataclass
+class AssignmentProblem:
+    """한 사업부-월의 배정 문제."""
+
+    dates: list[dt.date]
+    # 운행 슬롯: (date, vehicle, shift) — 1단계 패턴의 operating=True에서 전개.
+    # 결행 등으로 한쪽 시프트만 비는 케이스를 표현하기 위해 시프트 단위로 관리.
+    operating: set[tuple[dt.date, str, str]]
+    drivers: list[str]
+    # H4: 기사별 휴무(OFF 고정)일
+    leaves: dict[str, set[dt.date]] = field(default_factory=dict)
+    # 백테스트 모드: 기사별 근무일을 실측으로 고정 (None이면 자유 — 생성 모드)
+    forced_work_days: Optional[dict[str, set[dt.date]]] = None
+    # 프로필
+    home_vehicle: dict[str, str] = field(default_factory=dict)      # 고정기사 -> 본인차량
+    partner: dict[str, str] = field(default_factory=dict)           # 짝궁 (양방향)
+    driver_group: dict[str, str] = field(default_factory=dict)
+    vehicle_group: dict[str, str] = field(default_factory=dict)
+    # S5 숙련도: (기사, 차량) -> 과거 탑승 횟수
+    affinity: dict[tuple[str, str], int] = field(default_factory=dict)
+    # S4: 기사 -> {요일(0=월): 휴무선호 0..1}
+    weekday_off_pref: dict[str, dict[int, float]] = field(default_factory=dict)
+    # 풀(비고정) 기사 시프트 특화: 기사 -> 과거 오후 근무 비율 (0..1)
+    pm_ratio: dict[str, float] = field(default_factory=dict)
+    # 월초 페이즈 앵커: 기사 -> (첫 근무일, 오후여부). 실무에선 월초 게시표가
+    # 항상 존재하므로 초기 조건으로 정당 (전월 오프셋의 페이즈 버전).
+    first_shift_anchor: dict[str, tuple[dt.date, bool]] = field(default_factory=dict)
+    # 직전월 말 상태 (시프트 연속성·스왑 판단용): 기사 -> 마지막 근무가 오후였나/언제였나
+    prev_pm: dict[str, bool] = field(default_factory=dict)
+    prev_last_work: dict[str, dt.date] = field(default_factory=dict)
+    # H5: 근무일수 밴드 (생성 모드에서만 유효)
+    work_days_band: tuple[int, int] = (0, 31)
+    max_consecutive: int = 6
+    forbid_pm_to_am: bool = False  # H6 스위치
+    # S1을 하드로 (백테스트·기본 생성: 실측 위반 월 3건 수준이라 사실상 하드)
+    hard_own_vehicle: bool = False
+    # 후보 가지치기: 기사는 (본인차량 | 과거 탑승 차량 | 같은 그룹)만 몰 수 있다
+    prune_candidates: bool = True
+    # 짝 교대 규칙: joint_solo(동시휴→교대/단독휴→유지) | always_swap | manual
+    pair_swap_rule: str = "joint_solo"
+    # 수급 부족 시 미충원 슬롯 허용 (생성 모드): 해당 슬롯은 '결행 후보'로 리포트
+    allow_unfilled: bool = False
+    # 예비 부담 균등화 (생성 모드): 비고정 기사 근무일수 max-min 최소화
+    spare_balance_enabled: bool = True
+    fairness_lambda: int = 3
+
+
+@dataclass
+class Assignment:
+    """(date, vehicle, shift) -> driver"""
+
+    cells: dict[tuple[dt.date, str, str], str]
+    objective: float
+    status: str
+    # 설명가능성: 셀별 기여 페널티 내역 (why this driver here)
+    notes: dict[tuple[dt.date, str, str], str] = field(default_factory=dict)
+    # 수급 부족으로 미충원된 슬롯 (결행 후보 — 담당자 확인 대상)
+    unfilled: list[tuple[dt.date, str, str]] = field(default_factory=list)
+    # 당일 결원으로 빠진 기사: 슬롯 -> 원래 배정자 (국소 수리 입력)
+    absences: dict[tuple[dt.date, str, str], str] = field(default_factory=dict)
+
+
+def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
+          time_limit_s: float = 60.0) -> Assignment:
+    w = weights or SolverWeights()
+    m = cp_model.CpModel()
+    dates = problem.dates
+    date_idx = {d: i for i, d in enumerate(dates)}
+
+    # 슬롯 목록
+    slots: list[tuple[dt.date, str, str]] = sorted(problem.operating)
+
+    # 가용성: 기사 k가 날짜 d에 근무 가능한가
+    def available(k: str, d: dt.date) -> bool:
+        if d in problem.leaves.get(k, ()):  # H4
+            return False
+        if problem.forced_work_days is not None:
+            return d in problem.forced_work_days.get(k, ())
+        return True
+
+    def candidate(k: str, v: str) -> bool:
+        if not problem.prune_candidates:
+            return True
+        if problem.home_vehicle.get(k) == v:
+            return True
+        if problem.affinity.get((k, v), 0) > 0:
+            return True
+        kg, vg = problem.driver_group.get(k), problem.vehicle_group.get(v)
+        return kg is None or vg is None or kg == vg
+
+    x: dict[tuple[str, dt.date, str, str], cp_model.IntVar] = {}
+    for (d, v, s) in slots:
+        for k in problem.drivers:
+            if available(k, d) and candidate(k, v):
+                x[(k, d, v, s)] = m.NewBoolVar(f"x_{k}_{d}_{v}_{s}")
+
+    # H1: 운행 슬롯마다 정확히 1명 (allow_unfilled면 미충원 슬랙 + 큰 페널티)
+    unfilled_penalties = []
+    unfilled_vars: dict[tuple[dt.date, str, str], cp_model.IntVar] = {}
+    for (d, v, s) in slots:
+        vars_ = [x[(k, d, v, s)] for k in problem.drivers if (k, d, v, s) in x]
+        if not vars_ and not problem.allow_unfilled:
+            raise ValueError(f"슬롯 {d} {v} {s}에 배정 가능한 기사가 없음")
+        if problem.allow_unfilled:
+            sv = m.NewBoolVar(f"un_{d}_{v}_{s}")
+            m.Add(sum(vars_) + sv == 1)
+            unfilled_vars[(d, v, s)] = sv
+            unfilled_penalties.append(sv * 10000)
+        else:
+            m.AddExactlyOne(vars_)
+
+    # 기사-일 근무 지시변수 works[k][d]
+    works: dict[tuple[str, dt.date], cp_model.IntVar] = {}
+    # 시프트 지시변수 shift_pm[k][d] (그날 오후 근무 여부)
+    shift_pm: dict[tuple[str, dt.date], cp_model.IntVar] = {}
+    for k in problem.drivers:
+        for d in dates:
+            day_vars = [x[(k, d, v, s)] for (dd, v, s) in slots if dd == d
+                        and (k, d, v, s) in x]
+            if not day_vars:
+                continue
+            wv = m.NewBoolVar(f"w_{k}_{d}")
+            m.Add(sum(day_vars) <= 1)          # H2
+            m.Add(sum(day_vars) == 1).OnlyEnforceIf(wv)
+            m.Add(sum(day_vars) == 0).OnlyEnforceIf(wv.Not())
+            works[(k, d)] = wv
+            pm_vars = [x[(k, d, v, s)] for (dd, v, s) in slots
+                       if dd == d and s == "P" and (k, d, v, s) in x]
+            pv = m.NewBoolVar(f"pm_{k}_{d}")
+            if pm_vars:
+                m.Add(sum(pm_vars) == 1).OnlyEnforceIf(pv)
+                m.Add(sum(pm_vars) == 0).OnlyEnforceIf(pv.Not())
+            else:
+                m.Add(pv == 0)
+            shift_pm[(k, d)] = pv
+
+    # 백테스트 모드: 근무일 강제
+    if problem.forced_work_days is not None:
+        for k in problem.drivers:
+            for d in problem.forced_work_days.get(k, ()):
+                if (k, d) in works:
+                    m.Add(works[(k, d)] == 1)
+    else:
+        # H5: 월 근무일수 밴드 — 가용일이 밴드 하한보다 적은 기사(연차·입퇴사)는
+        # 가용일 기준으로 자동 일할 (스펙 2.8)
+        lo, hi = problem.work_days_band
+        for k in problem.drivers:
+            kvars = [works[(k, d)] for d in dates if (k, d) in works]
+            if kvars:
+                m.Add(sum(kvars) >= min(lo, len(kvars)))
+                m.Add(sum(kvars) <= hi)
+
+    # H3: 연속 근무 ≤ max_consecutive
+    win = problem.max_consecutive + 1
+    for k in problem.drivers:
+        for i in range(len(dates) - win + 1):
+            span = [works[(k, dates[i + j])] for j in range(win)
+                    if (k, dates[i + j]) in works]
+            if len(span) == win:
+                m.Add(sum(span) <= problem.max_consecutive)
+
+    # H6: 오후 → 익일 오전 금지 (옵션)
+    if problem.forbid_pm_to_am:
+        for k in problem.drivers:
+            for i in range(len(dates) - 1):
+                d1, d2 = dates[i], dates[i + 1]
+                if (k, d1) in shift_pm and (k, d2) in shift_pm and (k, d2) in works:
+                    am2 = m.NewBoolVar(f"am_{k}_{d2}")
+                    m.Add(am2 == 1).OnlyEnforceIf([works[(k, d2)], shift_pm[(k, d2)].Not()])
+                    m.AddImplication(shift_pm[(k, d1)], am2.Not())
+
+    penalties: list[cp_model.LinearExpr] = list(unfilled_penalties)
+
+    # 월초 페이즈 앵커 (하드): 기사별 첫 근무일의 A/P 고정
+    for k, (d, is_pm) in problem.first_shift_anchor.items():
+        if (k, d) in shift_pm:
+            m.Add(shift_pm[(k, d)] == (1 if is_pm else 0))
+
+    # 월 경계 연속성: 전월 마지막 근무일과 이번 달 첫 근무일 사이에도 S2/S3 적용.
+    # (백테스트 모드: 첫 근무일이 forced로 확정되어 있어 정확히 걸 수 있다)
+    if problem.forced_work_days is not None:
+        for k in problem.drivers:
+            if k not in problem.prev_pm or k not in problem.prev_last_work:
+                continue
+            fdays = sorted(problem.forced_work_days.get(k, ()))
+            if not fdays or (k, fdays[0]) not in shift_pm:
+                continue
+            first_day = fdays[0]
+            gap = (first_day - problem.prev_last_work[k]).days
+            pv = shift_pm[(k, first_day)]
+            was_pm = problem.prev_pm[k]
+            if gap == 1:
+                # S3: 연속 근무 — 시프트 변경 페널티
+                bad = pv.Not() if was_pm else pv
+                penalties.append(bad * w.keep_shift)
+            elif 2 <= gap <= 5:
+                # S2: 휴무 복귀 — 유지 페널티
+                bad = pv if was_pm else pv.Not()
+                penalties.append(bad * w.swap_after_leave)
+
+    # S1: 고정기사 본인차량 (본인차량이 그날 운행하면, 근무 시 그 차량에)
+    for k, home in problem.home_vehicle.items():
+        for d in dates:
+            if (k, d) not in works:
+                continue
+            own_vars = [x[(k, d, home, s)] for s in ("A", "P")
+                        if (d, home, s) in problem.operating and (k, d, home, s) in x]
+            if not own_vars:
+                continue
+            if problem.hard_own_vehicle:
+                # 근무하면 반드시 본인차량 (본인차량이 운행하는 날 한정)
+                m.Add(sum(own_vars) == 1).OnlyEnforceIf(works[(k, d)])
+                continue
+            off_own = m.NewBoolVar(f"s1_{k}_{d}")
+            # 근무하는데 본인차량이 아니면 페널티
+            m.Add(sum(own_vars) == 0).OnlyEnforceIf(off_own)
+            m.Add(sum(own_vars) == 1).OnlyEnforceIf(off_own.Not())
+            viol = m.NewBoolVar(f"s1v_{k}_{d}")
+            m.AddBoolAnd([works[(k, d)], off_own]).OnlyEnforceIf(viol)
+            m.AddBoolOr([works[(k, d)].Not(), off_own.Not()]).OnlyEnforceIf(viol.Not())
+            penalties.append(viol * w.own_vehicle)
+
+    # S2/S3: 시프트 연속성과 휴무 후 스왑
+    # 연속 근무(gap=1): 시프트 변경 페널티(S3). 휴무 복귀(gap 2~5): 유지 페널티(S2).
+    if problem.forced_work_days is not None:
+        # 백테스트 모드: 근무일 시퀀스가 상수 — 정적 선형 페널티로 직결
+        for k in problem.drivers:
+            wdays = sorted(problem.forced_work_days.get(k, ()))
+            pk = problem.partner.get(k)
+            partner_days = problem.forced_work_days.get(pk, set()) if pk else set()
+            for i in range(len(wdays) - 1):
+                d1, d2 = wdays[i], wdays[i + 1]
+                if (k, d1) not in shift_pm or (k, d2) not in shift_pm:
+                    continue
+                gap = (d2 - d1).days
+                p1, p2 = shift_pm[(k, d1)], shift_pm[(k, d2)]
+                diff = m.NewBoolVar(f"df_{k}_{d1}")
+                m.Add(p1 + p2 == 1).OnlyEnforceIf(diff)
+                m.Add(p1 == p2).OnlyEnforceIf(diff.Not())
+                if gap == 1:
+                    penalties.append(diff * w.keep_shift)          # S3
+                elif 2 <= gap <= 5 and problem.pair_swap_rule != "manual":
+                    # 실측 정제 규칙: 짝이 갭 중 하루라도 같이 쉬었으면 스왑(90%+),
+                    # 짝이 계속 일했으면 유지(70%+) — 짝의 시프트 유지가 강제하기 때문.
+                    gap_days = [d1 + dt.timedelta(days=g) for g in range(1, gap)]
+                    joint = (
+                        problem.pair_swap_rule == "always_swap"
+                        or pk is None
+                        or any(gd not in partner_days for gd in gap_days)
+                    )
+                    if joint:
+                        penalties.append(diff.Not() * w.swap_after_leave)  # S2
+                    else:
+                        penalties.append(diff * w.keep_shift)
+    else:
+        # 생성 모드: 근무일이 결정변수 — 조건부(reified) 페널티
+        for k in problem.drivers:
+            for i in range(len(dates) - 1):
+                d1, d2 = dates[i], dates[i + 1]
+                if (k, d1) not in works or (k, d2) not in works:
+                    continue
+                both = m.NewBoolVar(f"b_{k}_{d1}")
+                m.AddBoolAnd([works[(k, d1)], works[(k, d2)]]).OnlyEnforceIf(both)
+                m.AddBoolOr(
+                    [works[(k, d1)].Not(), works[(k, d2)].Not()]
+                ).OnlyEnforceIf(both.Not())
+                diff = m.NewBoolVar(f"df_{k}_{d1}")
+                p1, p2 = shift_pm[(k, d1)], shift_pm[(k, d2)]
+                m.Add(p1 + p2 == 1).OnlyEnforceIf(diff)
+                m.Add(p1 == p2).OnlyEnforceIf(diff.Not())
+                chg = m.NewBoolVar(f"chg_{k}_{d1}")
+                m.AddBoolAnd([both, diff]).OnlyEnforceIf(chg)
+                m.AddBoolOr([both.Not(), diff.Not()]).OnlyEnforceIf(chg.Not())
+                penalties.append(chg * w.keep_shift)  # S3
+
+            if problem.pair_swap_rule == "manual":
+                continue
+            pk = problem.partner.get(k)
+            partner_leaves = problem.leaves.get(pk, set()) if pk else set()
+            for i in range(len(dates)):
+                for gap in (2, 3, 4, 5):
+                    j = i + gap
+                    if j >= len(dates):
+                        break
+                    d1, d2 = dates[i], dates[j]
+                    if (k, d1) not in works or (k, d2) not in works:
+                        continue
+                    mids = [works[(k, dates[i + g])] for g in range(1, gap)
+                            if (k, dates[i + g]) in works]
+                    cond = m.NewBoolVar(f"ret_{k}_{d1}_{gap}")
+                    lits = [works[(k, d1)], works[(k, d2)]] + [mv.Not() for mv in mids]
+                    m.AddBoolAnd(lits).OnlyEnforceIf(cond)
+                    m.AddBoolOr([l.Not() for l in lits]).OnlyEnforceIf(cond.Not())
+                    same = m.NewBoolVar(f"same_{k}_{d1}_{gap}")
+                    p1, p2 = shift_pm[(k, d1)], shift_pm[(k, d2)]
+                    m.Add(p1 == p2).OnlyEnforceIf(same)
+                    m.Add(p1 != p2).OnlyEnforceIf(same.Not())
+                    # joint 판정: 갭 중 짝의 승인 휴무일이 하루라도 있으면 동시휴
+                    gap_days = [dates[i + g] for g in range(1, gap)]
+                    joint = (
+                        problem.pair_swap_rule == "always_swap"
+                        or pk is None
+                        or any(gd in partner_leaves for gd in gap_days)
+                    )
+                    flag = m.NewBoolVar(f"sw_{k}_{d1}_{gap}")
+                    if joint:
+                        # 복귀했는데 유지하면 페널티 (스왑 선호)
+                        m.AddBoolAnd([cond, same]).OnlyEnforceIf(flag)
+                        m.AddBoolOr([cond.Not(), same.Not()]).OnlyEnforceIf(flag.Not())
+                        penalties.append(flag * w.swap_after_leave)
+                    else:
+                        # 단독휴 복귀: 교대하면 페널티 (유지 선호)
+                        m.AddBoolAnd([cond, same.Not()]).OnlyEnforceIf(flag)
+                        m.AddBoolOr([cond.Not(), same]).OnlyEnforceIf(flag.Not())
+                        penalties.append(flag * w.keep_shift)
+
+    # S5: 차량 숙련도 (과거 탑승 빈도 낮은 차량 투입 페널티) + 그룹 교차 페널티
+    max_aff = max(problem.affinity.values(), default=1)
+    for (k, d, v, s), var in x.items():
+        if problem.home_vehicle.get(k) == v:
+            continue  # 본인차량은 S1이 관리
+        aff = problem.affinity.get((k, v), 0)
+        # 숙련도 역비례 페널티 (0회 탑승 = 최대)
+        pen = w.vehicle_affinity * (max_aff - aff) // max(max_aff, 1)
+        if pen:
+            penalties.append(var * pen)
+        kg = problem.driver_group.get(k)
+        vg = problem.vehicle_group.get(v)
+        if kg and vg and kg != vg:
+            penalties.append(var * w.group_affinity)
+
+    # 풀 기사 시프트 특화 (예: 오후 전담 스페어) — 강한 특화만 반영
+    for k, ratio in problem.pm_ratio.items():
+        if k in problem.home_vehicle or abs(ratio - 0.5) < 0.3:
+            continue
+        prefers_pm = ratio > 0.5
+        for d in dates:
+            if (k, d) not in shift_pm or (k, d) not in works:
+                continue
+            pv = shift_pm[(k, d)]
+            bad = pv.Not() if prefers_pm else pv
+            # 근무하는 날만: works ∧ bad
+            dev = m.NewBoolVar(f"sp_{k}_{d}")
+            m.AddBoolAnd([works[(k, d)], bad]).OnlyEnforceIf(dev)
+            m.AddBoolOr([works[(k, d)].Not(), bad.Not()]).OnlyEnforceIf(dev.Not())
+            penalties.append(dev * (w.keep_shift // 2))
+
+    # S4: 요일 선호 (생성 모드에서만 의미 — 근무일이 자유일 때)
+    if problem.forced_work_days is None:
+        for k, prefs in problem.weekday_off_pref.items():
+            for d in dates:
+                if (k, d) in works and prefs.get(d.weekday(), 0) > 0.5:
+                    penalties.append(works[(k, d)] * w.weekday_pref)
+
+    # S5/F3: 예비(비고정) 기사 근무일수 균등화 — 생성 모드에서만
+    if (problem.forced_work_days is None and problem.spare_balance_enabled
+            and problem.fairness_lambda > 0):
+        spare_loads = []
+        for k in problem.drivers:
+            if k in problem.home_vehicle:
+                continue
+            kvars = [works[(k, d)] for d in dates if (k, d) in works]
+            if kvars:
+                load = m.NewIntVar(0, len(dates), f"load_{k}")
+                m.Add(load == sum(kvars))
+                spare_loads.append(load)
+        if len(spare_loads) >= 2:
+            mx = m.NewIntVar(0, len(dates), "load_max")
+            mn = m.NewIntVar(0, len(dates), "load_min")
+            m.AddMaxEquality(mx, spare_loads)
+            m.AddMinEquality(mn, spare_loads)
+            penalties.append((mx - mn) * (problem.fairness_lambda * 10))
+
+    m.Minimize(sum(penalties))
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = time_limit_s
+    solver.parameters.num_workers = 8
+    status = solver.Solve(m)
+    status_name = solver.StatusName(status)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        raise RuntimeError(f"솔버 실패: {status_name}")
+
+    cells: dict[tuple[dt.date, str, str], str] = {}
+    for (k, d, v, s), var in x.items():
+        if solver.Value(var):
+            cells[(d, v, s)] = k
+    unfilled = [
+        slot for slot, sv in unfilled_vars.items() if solver.Value(sv)
+    ]
+    return Assignment(cells=cells, objective=solver.ObjectiveValue(),
+                      status=status_name, unfilled=unfilled)

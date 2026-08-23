@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, AlertCircle, MessageSquare, Building2 } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Mail, Building2 } from 'lucide-react';
 import { authApi } from '../services/api';
 import toast from 'react-hot-toast';
 
@@ -10,7 +10,7 @@ function extractMessage(err: unknown, fallback: string): string {
 }
 
 export default function FindCompanyCodePage() {
-  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [sent, setSent] = useState(false);
@@ -23,8 +23,8 @@ export default function FindCompanyCodePage() {
     setError('');
     setLoading(true);
     try {
-      const res = await authApi.findCompanyCode(phone.trim());
-      toast.success(res.data?.message || '문자를 발송했습니다.');
+      const res = await authApi.findCompanyCode(email.trim());
+      toast.success(res.data?.message || '이메일을 발송했습니다.');
       setSent(true);
     } catch (err) {
       const msg = extractMessage(err, '요청 처리에 실패했습니다.');
@@ -53,18 +53,18 @@ export default function FindCompanyCodePage() {
           {sent ? (
             <div className="text-center py-4">
               <div className="w-16 h-16 bg-green-100 dark:bg-green-500/15 rounded-2xl flex items-center justify-center mx-auto mb-5">
-                <MessageSquare size={30} className="text-green-600 dark:text-green-400" />
+                <Mail size={30} className="text-green-600 dark:text-green-400" />
               </div>
-              <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-2">문자를 확인해주세요</h2>
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-2">이메일을 확인해주세요</h2>
               <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                입력하신 번호로 가입된 회사 코드가 있다면 문자로 발송했습니다.<br />
-                잠시 후 휴대폰 문자를 확인해주세요.
+                입력하신 이메일로 가입된 회사 코드가 있다면 이메일로 발송했습니다.<br />
+                잠시 후 메일함(스팸함 포함)을 확인해주세요.
               </p>
               <button
-                onClick={() => { setSent(false); setPhone(''); }}
+                onClick={() => { setSent(false); setEmail(''); }}
                 className="mt-6 text-sm text-blue-600 dark:text-blue-400 font-medium hover:underline"
               >
-                다른 번호로 다시 찾기
+                다른 이메일로 다시 찾기
               </button>
             </div>
           ) : (
@@ -72,7 +72,7 @@ export default function FindCompanyCodePage() {
               <div className="flex items-start gap-2.5 text-gray-500 dark:text-gray-400">
                 <Building2 size={18} className="mt-0.5 flex-shrink-0" />
                 <p className="text-sm leading-relaxed">
-                  가입 시 등록한 휴대폰 번호를 입력하시면, 해당 번호로 가입된 회사 코드를 문자로 보내드립니다.
+                  가입 시 등록한 이메일을 입력하시면, 해당 이메일로 가입된 회사 코드를 보내드립니다.
                 </p>
               </div>
 
@@ -84,19 +84,20 @@ export default function FindCompanyCodePage() {
               )}
 
               <div>
-                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">휴대폰 번호</label>
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">이메일</label>
                 <input
-                  type="tel"
-                  inputMode="numeric"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   className={inputCls}
-                  placeholder="010-1234-5678"
+                  placeholder="you@example.com"
                   required
                 />
               </div>
               <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-4 rounded-xl font-semibold text-base transition-colors">
-                {loading ? '발송 중...' : '회사 코드 문자로 받기'}
+                {loading ? '발송 중...' : '회사 코드 이메일로 받기'}
               </button>
             </form>
           )}

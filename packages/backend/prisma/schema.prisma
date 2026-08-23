@@ -92,15 +92,20 @@ enum InspectionStatus {
 }
 
 model Company {
-  id        Int      @id @default(autoincrement())
-  name      String
-  code      String   @unique // 회사별 고유 코드 (영문/숫자 2~10자, 로그인 시 사용)
-  isActive  Boolean  @default(true)
+  id           Int      @id @default(autoincrement())
+  name         String
+  code         String   @unique // 회사별 고유 코드 (영문/숫자 2~10자, 로그인 시 사용)
+  isActive     Boolean  @default(true)
   /// 회사 배차 정책 (CompanyPolicy JSON: workdayBands / restCycle / shiftSystem / crewModel / constitutional)
   /// null 이면 DEFAULT_POLICY (CITY_2SHIFT) 사용. solverDispatchService.loadCompanyPolicy 가 읽음.
-  policy    Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  policy       Json?
+  /// AI 배차 엔진 튜닝 정책 ({ values, holidays, special_reductions }).
+  /// 순번 로테이션·감차·짝궁 교대·예비·공정성 등 엔진 고유 설정의 단일 소스.
+  /// 예전엔 엔진 컨테이너 파일에 있었고(볼륨 없으면 재배포 시 유실), 지금은 여기가 주인이다.
+  /// enginePolicyStore.loadEnginePolicy / saveEnginePolicy 가 읽고 쓴다.
+  enginePolicy Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   users              User[]
   buses              Bus[]
@@ -195,7 +200,7 @@ model RefreshToken {
   id        Int      @id @default(autoincrement())
   userId    Int
   token     String   @unique
-  family    String   // token family for rotation replay detection
+  family    String // token family for rotation replay detection
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -207,8 +212,8 @@ model RefreshToken {
 
 model OtpVerification {
   id        Int      @id @default(autoincrement())
-  phone     String?  // 전화번호 OTP(기사 앱 로그인)용
-  email     String?  // 이메일 OTP(관리자 비밀번호 재설정)용
+  phone     String? // 전화번호 OTP(기사 앱 로그인)용
+  email     String? // 이메일 OTP(관리자 비밀번호 재설정)용
   otp       String
   expiresAt DateTime
   used      Boolean  @default(false)
@@ -222,8 +227,8 @@ model OtpVerification {
 model Bus {
   id             Int       @id @default(autoincrement())
   companyId      Int       @default(1)
-  busNumber      String    // 회사별로 유일 (전역 X)
-  plateNumber    String    // 회사별로 유일 (전역 X)
+  busNumber      String // 회사별로 유일 (전역 X)
+  plateNumber    String // 회사별로 유일 (전역 X)
   model          String?
   year           Int?
   isActive       Boolean   @default(true)
@@ -244,6 +249,7 @@ model Bus {
   scheduleSlots      ScheduleSlot[]
   maintenanceRecords MaintenanceRecord[]
   dailyInspections   DailyInspection[]
+  schedulePatterns   SchedulePattern[]
 
   @@unique([companyId, busNumber])
   @@unique([companyId, plateNumber])
@@ -293,24 +299,30 @@ model MaintenanceRecord {
 model Route {
   id            Int      @id @default(autoincrement())
   companyId     Int      @default(1)
-  routeNumber   String   // 회사별로 유일 (전역 X) — 다른 회사도 같은 노선번호를 가질 수 있음
+  routeNumber   String // 회사별로 유일 (전역 X) — 다른 회사도 같은 노선번호를 가질 수 있음
   name          String
   description   String?
   startPoint    String?
   endPoint      String?
   shiftOffset   Int? // 순환 조율 기준 오프셋 (차량 순번 순환용)
+  /// 요일별 실제 운행 대수 — 등록 대수 전부가 매일 나가지는 않는다.
+  /// (성민버스 예: 등록 14대 중 평일 12 / 토 11 / 일·공휴일 10)
+  /// null 이면 "등록된 활성 차량 전부 운행"으로 본다.
+  weekdayBuses  Int? // 월~금
+  saturdayBuses Int? // 토
+  holidayBuses  Int? // 일요일 + 법정 공휴일
   fatigueScore  Int      @default(3) // 피로도 가중치 (1=꿀노선 ~ 5=기피노선)
-  fatigueReason String?  // 피로도 사유 (예: "상습 정체구간", "장거리")
+  fatigueReason String? // 피로도 사유 (예: "상습 정체구간", "장거리")
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  company            Company             @relation(fields: [companyId], references: [id])
-  buses              Bus[]
-  routeAssignments   RouteAssignment[]
-  scheduleSlots      ScheduleSlot[]
-  posts              Post[]
-  driverPreferences  DriverPreference[]
+  company           Company            @relation(fields: [companyId], references: [id])
+  buses             Bus[]
+  routeAssignments  RouteAssignment[]
+  scheduleSlots     ScheduleSlot[]
+  posts             Post[]
+  driverPreferences DriverPreference[]
 
   @@unique([companyId, routeNumber])
   @@index([companyId])
@@ -340,14 +352,14 @@ model DriverPreference {
 // 기사 블랙리스트/태그 (관리자 전용 메모)
 // ─────────────────────────────────────────
 model DriverTag {
-  id        Int      @id @default(autoincrement())
-  companyId Int
-  driverId  Int
-  tag       String   // 예: "#A기사와_원수지간", "#무릎관절_수동차량_배제"
-  isHardRule Boolean @default(false) // true면 AI 배차에서 하드 룰로 적용
+  id             Int      @id @default(autoincrement())
+  companyId      Int
+  driverId       Int
+  tag            String // 예: "#A기사와_원수지간", "#무릎관절_수동차량_배제"
+  isHardRule     Boolean  @default(false) // true면 AI 배차에서 하드 룰로 적용
   targetDriverId Int? // 충돌 상대 기사 (인간관계 태그용)
-  createdBy Int      // 태그 등록한 관리자
-  createdAt DateTime @default(now())
+  createdBy      Int // 태그 등록한 관리자
+  createdAt      DateTime @default(now())
 
   company      Company @relation(fields: [companyId], references: [id])
   driver       User    @relation("TaggedDriver", fields: [driverId], references: [id])
@@ -362,14 +374,14 @@ model DriverTag {
 // 황금 티켓 (대타 보상 - 원하는 날 휴무 프리패스)
 // ─────────────────────────────────────────
 model GoldenTicket {
-  id           Int       @id @default(autoincrement())
-  companyId    Int
-  driverId     Int       // 티켓 보유 기사
-  earnedFrom   Int?      // 대타 수락한 EmergencyDrop.id
-  usedForDate  DateTime? @db.Date // 사용한 날짜
-  isUsed       Boolean   @default(false)
-  expiresAt    DateTime  // 만료일 (기본: 발급 후 60일)
-  createdAt    DateTime  @default(now())
+  id          Int       @id @default(autoincrement())
+  companyId   Int
+  driverId    Int // 티켓 보유 기사
+  earnedFrom  Int? // 대타 수락한 EmergencyDrop.id
+  usedForDate DateTime? @db.Date // 사용한 날짜
+  isUsed      Boolean   @default(false)
+  expiresAt   DateTime // 만료일 (기본: 발급 후 60일)
+  createdAt   DateTime  @default(now())
 
   company Company @relation(fields: [companyId], references: [id])
   driver  User    @relation(fields: [driverId], references: [id])
@@ -409,8 +421,9 @@ model Schedule {
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 
-  company Company        @relation(fields: [companyId], references: [id])
-  slots   ScheduleSlot[]
+  company  Company           @relation(fields: [companyId], references: [id])
+  slots    ScheduleSlot[]
+  patterns SchedulePattern[]
 
   // 월당 DRAFT 는 여러 개 허용 (멀티 초안 프로필).
   // PUBLISHED 는 월당 1개만 — DB 부분 unique 인덱스로 강제
@@ -421,23 +434,55 @@ model Schedule {
   @@index([companyId, status])
 }
 
-model ScheduleSlot {
-  id             Int        @id @default(autoincrement())
+/// 차량-순번 로테이션 패턴 — 배차 엔진 1단계 산출물.
+/// 게시 양식(행=차량, 열=날짜 → 순번|오전|오후)의 뼈대이며,
+/// 월 경계 로테이션 연속성의 근거를 보관한다.
+model SchedulePattern {
+  id             Int      @id @default(autoincrement())
   scheduleId     Int
-  driverId       Int
-  routeId        Int
-  busId          Int?
-  date           DateTime   @db.Date
-  shift          ShiftType  @default(FULL_DAY)
-  status         SlotStatus @default(SCHEDULED)
-  isRestDay      Boolean    @default(false)
-  isManualOverride Boolean  @default(false) // 수동 오버라이드 여부
-  overrideReason String?    // 수동 변경 사유
-  overrideBy     Int?       // 변경한 관리자 ID
-  fairnessNote   String?    // AI 공정성 설명 (예: "지난주 피로도5 노선 4회 → 이번주 꿀노선 배정")
-  notes          String?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  busId          Int
+  date           DateTime @db.Date
+  /// 게시 순번 — 표에 실제로 인쇄되는 값.
+  /// 간선(COMPACT)에서 감차된 차량은 null, 지선(KEEP)은 휴차여도 값 유지.
+  displaySlot    Int?
+  /// 로테이션 언더라잉 슬롯 — 감차와 무관하게 매일 순열이 적용된 값.
+  /// 다음 달 패턴 전개의 시작점이므로 반드시 보존한다 (월 경계 리셋 금지).
+  underlyingSlot Int
+  /// 그날 운행 여부. false = 감차 휴차 (기사 자리는 "휴" 표기)
+  operating      Boolean  @default(true)
+  /// 출발지그룹(삼산/가좌/일신/원창동 …) — 로테이션은 그룹 안에서만 돈다
+  depotGroup     String?
+
+  schedule Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  bus      Bus      @relation(fields: [busId], references: [id])
+
+  @@unique([scheduleId, date, busId])
+  @@index([scheduleId, date])
+  @@index([busId])
+}
+
+model ScheduleSlot {
+  id               Int        @id @default(autoincrement())
+  scheduleId       Int
+  driverId         Int
+  routeId          Int
+  busId            Int?
+  date             DateTime   @db.Date
+  shift            ShiftType  @default(FULL_DAY)
+  status           SlotStatus @default(SCHEDULED)
+  isRestDay        Boolean    @default(false)
+  isManualOverride Boolean    @default(false) // 수동 오버라이드 여부
+  /// 수정 사유 '유형' — 담당자가 왜 바꿨는지. 이게 쌓이면 회사별 숨은 규칙
+  /// (예: 특정 두 기사 분리)을 역으로 뽑아 다음 달 생성에 반영할 수 있다.
+  /// 자유 텍스트만으로는 집계가 안 돼 별도 컬럼으로 둔다.
+  /// PAIR_CONFLICT | ROUTE_UNFIT | BETTER_FIT | PERSONAL | PREFERENCE | OTHER
+  overrideCode     String?
+  overrideReason   String? // 수동 변경 사유 (자유 메모)
+  overrideBy       Int? // 변경한 관리자 ID
+  fairnessNote     String? // AI 공정성 설명 (예: "지난주 피로도5 노선 4회 → 이번주 꿀노선 배정")
+  notes            String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   schedule      Schedule       @relation(fields: [scheduleId], references: [id])
   driver        User           @relation(fields: [driverId], references: [id])
@@ -445,6 +490,12 @@ model ScheduleSlot {
   bus           Bus?           @relation(fields: [busId], references: [id])
   emergencyDrop EmergencyDrop?
 
+  /// 한 배차표에서 (날짜×차량×시프트) 칸은 한 행뿐 — 같은 칸에 두 배정이
+  /// 쌓이는 구조적 오류를 DB가 막는다 (busId NULL인 휴무 슬롯은 제외됨).
+  /// 기사 단위 "같은 날 1근무" 제약은 일부러 DB에 걸지 않는다: 초안에서는
+  /// 엑셀에서 온 중복을 화면에 빨간 테두리로 드러내 고치는 워크플로가
+  /// 의도된 동작이고, 발행 시점에 publishSchedule 게이트가 차단한다.
+  @@unique([scheduleId, date, busId, shift])
   @@index([scheduleId])
   @@index([driverId])
   @@index([routeId])
@@ -575,7 +626,7 @@ model ContactRequest {
   name      String
   phone     String
   email     String?
-  topic     String?  // general | demo | pricing | bug
+  topic     String? // general | demo | pricing | bug
   buses     Int?
   employees Int?
   message   String?
@@ -912,16 +963,16 @@ model DirectMessage {
 // 감사 추적 (Audit Trail)
 // ─────────────────────────────────────────
 model AuditLog {
-  id          Int      @id @default(autoincrement())
-  companyId   Int
-  userId      Int
-  action      String   // CREATE, UPDATE, DELETE
-  entityType  String   // PayrollRecord, Approval, User, Schedule, etc.
-  entityId    Int
-  changes     Json?    // { field: { old: value, new: value } }
-  ipAddress   String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
+  id         Int      @id @default(autoincrement())
+  companyId  Int
+  userId     Int
+  action     String // CREATE, UPDATE, DELETE
+  entityType String // PayrollRecord, Approval, User, Schedule, etc.
+  entityId   Int
+  changes    Json? // { field: { old: value, new: value } }
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
 
   company Company @relation(fields: [companyId], references: [id])
   user    User    @relation("AuditLogs", fields: [userId], references: [id])
@@ -941,18 +992,18 @@ model AuditLog {
 model AgentDecision {
   id             Int      @id @default(autoincrement())
   companyId      Int
-  agentName      String   // 'dispatch' | 'emergency' | 'onboarding' ...
-  sessionId      String   // 같은 의사결정 흐름을 묶는 키 (예: 같은 결원 1건의 모든 시도)
-  triggerType    String   // 'cron' | 'event' | 'manual' | 'simulation'
-  triggerRefId   Int?     // 관련 EmergencyDrop.id, Schedule.id 등 (옵셔널)
-  toolCalls      Json     // [{ tool, args, result, ts, durationMs }]
-  finalAction    String   // 자연어 한 줄 요약 (예: "박기사에게 푸시 전송")
-  reasoning      String   // 자연어 추론 과정 (관리자에게 표시)
+  agentName      String // 'dispatch' | 'emergency' | 'onboarding' ...
+  sessionId      String // 같은 의사결정 흐름을 묶는 키 (예: 같은 결원 1건의 모든 시도)
+  triggerType    String // 'cron' | 'event' | 'manual' | 'simulation'
+  triggerRefId   Int? // 관련 EmergencyDrop.id, Schedule.id 등 (옵셔널)
+  toolCalls      Json // [{ tool, args, result, ts, durationMs }]
+  finalAction    String // 자연어 한 줄 요약 (예: "박기사에게 푸시 전송")
+  reasoning      String // 자연어 추론 과정 (관리자에게 표시)
   status         String   @default("COMPLETED") // COMPLETED | FAILED | CANCELLED | OVERRIDDEN
   errorMessage   String?
   humanOverride  Boolean  @default(false)
   overrideReason String?
-  overriddenById Int?     // 오버라이드한 사용자
+  overriddenById Int? // 오버라이드한 사용자
   tokensIn       Int      @default(0)
   tokensOut      Int      @default(0)
   costKrw        Decimal  @default(0) @db.Decimal(10, 2)
@@ -960,8 +1011,8 @@ model AgentDecision {
   isSimulation   Boolean  @default(false) // 시뮬레이션이면 true (실 데이터 영향 없음)
   createdAt      DateTime @default(now())
 
-  company       Company @relation(fields: [companyId], references: [id])
-  overriddenBy  User?   @relation("AgentDecisionOverrides", fields: [overriddenById], references: [id])
+  company      Company @relation(fields: [companyId], references: [id])
+  overriddenBy User?   @relation("AgentDecisionOverrides", fields: [overriddenById], references: [id])
 
   @@index([companyId, agentName, createdAt])
   @@index([sessionId])

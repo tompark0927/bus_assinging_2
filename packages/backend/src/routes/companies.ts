@@ -5,6 +5,8 @@ import {
   checkPhoneAvailable,
   getCompanyPolicy,
   updateCompanyPolicy,
+  getEnginePolicy,
+  updateEnginePolicy,
   getCompanyInfo,
   updateCompanyInfo,
 } from '../controllers/companiesController';
@@ -24,5 +26,8 @@ router.get('/me', authenticate, getCompanyInfo);
 router.put('/me', authenticate, requireRole('DISPATCH'), updateCompanyInfo);
 router.get('/policy', authenticate, getCompanyPolicy);
 router.put('/policy', authenticate, requireRole('DISPATCH'), updateCompanyPolicy);
+// AI 엔진 튜닝 정책 — 저장소는 DB (엔진은 요청마다 policy_json 을 받는 stateless 계산기)
+router.get('/engine-policy', authenticate, getEnginePolicy);
+router.put('/engine-policy', authenticate, requireRole('DISPATCH'), updateEnginePolicy);
 
 export default router;
