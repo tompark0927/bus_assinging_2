@@ -1,0 +1,6 @@
+# BuSync 배차 엔진 런타임 의존성
+openpyxl>=3.1        # 엑셀 임포터/렌더러
+ortools>=9.8         # CP-SAT 솔버 (배차 생성 코어)
+fastapi>=0.110       # HTTP 서비스
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9   # 파일 업로드

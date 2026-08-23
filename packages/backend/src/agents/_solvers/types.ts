@@ -333,8 +333,17 @@ export const POLICY_PRESETS: Record<PolicyPreset, CompanyPolicy> = {
     crewModel: { kind: 'PAIR', size: 2 },
     constitutional: {
       ...DEFAULT_CONSTITUTIONAL,
-      // 시내버스 2교대 = PM 이 야간 (실질적으로 저녁 시간대)
-      noNightStreak: { enabled: true, maxConsecutive: 3, nightShifts: ['PM'] },
+      // 시내버스 2교대의 '오후'는 야간 근무가 아니다 — 저녁에 끝나는 주간 근무다.
+      // 이걸 야간으로 보고 "3일 연속 금지"를 걸면, 5일 근무 사이클과 충돌해
+      // **5일 연속 오후가 구조적으로 불가능**해진다. 그러면 솔버는 어쩔 수 없이
+      // 블록 중간에 오전을 끼워넣고(오후·오후·오전·오후·오후), 그 자리에서
+      // 오후→다음날 오전이라는 최악의 조합(휴식 8시간 미만)이 만들어진다.
+      // 현장은 한 블록을 같은 시프트로 쭉 간다 — 그 구조를 막지 않는다.
+      noNightStreak: { enabled: false, maxConsecutive: 3, nightShifts: [] },
+      // 오후 근무 뒤 다음날 오전 근무 금지 (여객자동차 운수사업법 시행규칙
+      // 제44조의6 — 퇴근 전 마지막 운행 ~ 다음 출근 첫 운행 8시간 이상).
+      // 블록 안 시프트 일관성을 지키는 안전장치이기도 하다.
+      minRestBetweenShifts: { enabled: true, minHours: 8 },
     },
   },
   // 마을버스 1교대 + 단독 + 6/1
@@ -472,6 +481,19 @@ export interface SolverInput {
   localSearchIterations?: number;
   /** 로컬 서치 RNG 시드. 지정 시 동일 입력 → 동일 결과(재현·감사 가능). 미지정 시 고정 기본 시드 사용. */
   randomSeed?: number;
+  /**
+   * 노선별·날짜별 운행 **대수** (routeId → 'YYYY-MM-DD' → 대수).
+   *
+   * 노선 설정의 요일별 대수(평일 12 / 토 11 / 휴일 10)를 그대로 넘긴다.
+   * 이걸 주면 **어느 차**를 세울지는 솔버가 기사 휴무와 맞물려 정한다.
+   * 감차일이 짝꿍의 휴무와 어긋나면 그 짝꿍의 휴무가 2일에서 3~4일로
+   * 늘어나기 때문이다(실측: 3일 이상 휴무 56건 중 48건이 이 겹침).
+   *
+   * 미지정 시 기존대로 bus.operatingDates 를 대수의 근거로도 쓴다.
+   * bus.operatingDates 는 이 값과 무관하게 항상 **가용 여부**로 지켜진다
+   * — 정비·장기 운휴 차량을 솔버가 멋대로 꺼내 쓰면 안 되기 때문이다.
+   */
+  routeDailyBusCounts?: Record<number, Record<string, number>>;
 }
 
 export interface AssignedSlot {
@@ -588,4 +610,13 @@ export interface SolverOutput {
   metrics: SolverMetrics;
   /** 사람이 읽을 요약 (DispatchAgent 가 그대로 채팅에 전달 가능) */
   summary: string;
+  /**
+   * 날짜(YYYY-MM-DD) → 그날 세운 차량 IDs.
+   *
+   * 순환 근무표 경로에서만 채워진다. 요일별 운행 **대수**는 노선 설정을 그대로
+   * 지키되, **어느 차**를 세울지는 기사 휴무와 맞물려야 해서 솔버가 정한다.
+   * 있으면 호출자는 운행 계획 대신 이 값을 SchedulePattern 으로 저장해야 한다
+   * — 안 그러면 화면의 '휴'와 실제 배정이 어긋난다.
+   */
+  restingByDate?: Record<string, number[]>;
 }

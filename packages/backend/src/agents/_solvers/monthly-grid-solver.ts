@@ -26,6 +26,7 @@ import {
   isWeekend,
   parseDate,
   validateFullGrid,
+  wouldViolateGridRules,
   type ConstraintContext,
 } from './constraints';
 import {
@@ -39,6 +40,7 @@ import {
   type RestCyclePolicy,
   type ShiftSlot,
   type ShiftSystemPolicy,
+  type SolverBus,
   type SolverCrew,
   type SolverDriver,
   type SolverInput,
@@ -49,6 +51,7 @@ import {
   type UnfilledSlot,
   type WorkloadEvaluation,
 } from './types';
+import { buildCyclicRoster, supportsCyclicRoster } from './cyclic-roster';
 import { createRng, type Rng } from '../../utils/seededRng';
 
 // ─────────────────────────────────────────────
@@ -246,10 +249,37 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
     driversByRoute.set(d.homeRouteId, arr);
   }
 
+  // ── 순환 근무표 경로 (2교대 + 짝꿍) ───
+  //
+  // 짤 수 있는 구조라면 하루씩 그리디로 채우지 않고, "누가 며칠 일하고 며칠
+  // 쉬나"를 먼저 확정한 뒤 그 위에 시프트를 얹는다. 연속 근무일 안에서
+  // 시프트가 바뀌는 일이 구조적으로 없어지고, 오후→다음날 오전(법 제44조의6
+  // 연속 휴식 8시간을 위협하는 조합)도 나오지 않는다. cyclic-roster.ts 참고.
+  if (supportsCyclicRoster(policy, crews)) {
+    const roster = buildCyclicRoster({
+      days,
+      drivers: input.drivers,
+      buses: input.buses,
+      crews,
+      policy,
+      ctx,
+      routeDailyBusCounts: input.routeDailyBusCounts,
+    });
+    // 로컬 서치는 돌리지 않는다 — SWAP 은 시프트가 같은 슬롯끼리만 바꾸지만
+    // 근무 블록의 경계를 흐트러뜨려, 방금 세운 5일 블록 구조를 깎아먹는다.
+    const violations = validateFullGrid(input.drivers, roster.slots, monthStart, monthEnd, policy);
+    const workloads = computeWorkloads(input.drivers, roster.slots, policy);
+    const metrics = computeMetrics(workloads, roster.slots, violations, roster.unfilled, 0, weights, restCycle);
+    const summary = renderSummary(input, metrics, workloads, roster.unfilled);
+    const restingByDate: Record<string, number[]> = {};
+    for (const [date, busIds] of roster.restingByDate) restingByDate[date] = busIds;
+    return { slots: roster.slots, unfilled: roster.unfilled, workloads, metrics, summary, restingByDate };
+  }
+
   // ── Phase A: 운전자별 휴무 패턴 사전 생성 ───
   // restCycle 기반 사이클 (5/2, 6/1 등). 운전자별 시작 offset 을 다르게 해서
   // 같은 차량의 페어가 동시에 휴무 안 되도록 분산.
-  const restPlan = buildRestPlan(input.drivers, days, restCycle);
+  const restPlan = buildRestPlan(input.drivers, days, restCycle, input.buses, monthStart);
 
   // ── Phase B: 일별 슬롯 채우기 ───
   const slots: AssignedSlot[] = [];
@@ -323,7 +353,7 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
   // ── Phase C: 로컬 서치 ───
   const iterations = input.localSearchIterations ?? 1000;
   const searchRng = createRng(input.randomSeed ?? DEFAULT_SOLVER_SEED);
-  const swaps = localSearch(ctx, slots, unfilled, input.drivers, weights, restCycle, policy, iterations, monthStart, searchRng, monthEnd);
+  const swaps = localSearch(ctx, slots, unfilled, input.drivers, weights, restCycle, policy, iterations, monthStart, searchRng, monthEnd, restPlan);
 
   // ── 메트릭 ───
   const violations = validateFullGrid(input.drivers, slots, monthStart, monthEnd, policy);
@@ -341,6 +371,16 @@ export function solveMonthlyGrid(input: SolverInput): SolverOutput {
 interface RestPlan {
   /** driverId → Set<date(YYYY-MM-DD)> (계획 휴무일) */
   restDays: Map<number, Set<string>>;
+  /**
+   * driverId → date → 그날 맡을 시프트 (담당 차량이 있는 기사만).
+   *
+   * 휴무 패턴을 확정한 뒤 그 위에 시프트를 얹는 2단계의 결과다. 한 근무
+   * 블록은 같은 시프트로 가고, 휴무를 지나면 반대로 바꾼다 — 짝꿍은 서로
+   * 반대 시프트라 한 차의 오전·오후가 자연히 채워진다.
+   * 스페어는 계획을 두지 않는다. 빈자리를 메우는 역할이라 그날 필요한
+   * 시프트를 따라가야 하기 때문이다.
+   */
+  plannedShift: Map<number, Map<string, ShiftSlot>>;
 }
 
 /**
@@ -365,72 +405,197 @@ interface RestPlan {
  *   16 home + 4 spare = 20 → offset 0..6 균등 + 페어 내 cycleLen/2 stride
  *   → 매일 ~3명 휴무, 한 차의 페어 둘이 동시 휴무 X
  */
+/** 수요 기반 휴무 계획의 운전자 상태 */
+interface RestState {
+  runLen: number;   // 현재 연속 근무일
+  restLeft: number; // 남은 연속 휴무일
+  work: number;     // 누적 근무일
+  rest: number;     // 누적 휴무일
+}
+
+/**
+ * 휴무 계획 — "누가 언제 쉬는가".
+ *
+ * 표준 rostering 은 휴무 패턴을 먼저 확정하고 그 위에 시프트를 얹는다
+ * (Er-Rbib et al. 2021 'fixed days off'; Optibus rostering). 여기가 그 1단계다.
+ *
+ * 핵심은 **그날 실제로 필요한 인원에 휴무 인원을 맞추는 것**이다. 요일별
+ * 운행 대수 때문에 하루에 필요한 사람 수가 달라지는데(성민: 평일 72 / 토 66 /
+ * 일 60명), 휴무를 전원 5/2 고정으로 잡으면 슬롯이 적은 날 계획에 없던 사람이
+ * 강제로 쉬게 되고 5일 근무 블록이 3일+1일로 잘린다.
+ *
+ * 규칙:
+ *   · 그날 쉬어야 할 인원 = max(전체 - 필요 인원, 사이클상 반드시 쉬어야 할 사람)
+ *   · 쉴 사람은 연속 근무가 긴 사람부터 (쉴 자격을 먼저 얻은 순서)
+ *   · 짝꿍이 이미 쉬는 날은 피한다 — 한 차의 두 기사가 같이 빠지면 그 차를
+ *     통째로 남에게 맡겨야 한다
+ *   · 한 번 쉬기 시작하면 연속 휴무일을 채운다 (2일 붙여 쉬기)
+ * 운행 계획이 없으면(전 차량 매일 운행) 필요 인원이 무한대가 되어 사이클
+ * 그대로 동작한다 — 기존 동작과 같다.
+ */
 function buildRestPlan(
   drivers: SolverDriver[],
   days: string[],
   restCycle: RestCyclePolicy,
+  buses: SolverBus[] | undefined,
+  monthStart: Date,
 ): RestPlan {
   const cycleLen = restCycle.workDays + restCycle.restDays;
   const restDays = new Map<number, Set<string>>();
+  const plannedShift = new Map<number, Map<string, ShiftSlot>>();
+  const crewIndex = new Map<number, number>(); // driverId → 차량 내 순번(0=정, 1=부)
 
-  // 노선별 그룹화 (homeRouteId 있는 운전자)
-  const byRoute = new Map<number | 'orphan', SolverDriver[]>();
-  for (const d of drivers) {
-    const key = d.homeRouteId ?? 'orphan';
-    const arr = byRoute.get(key) ?? [];
-    arr.push(d);
-    byRoute.set(key, arr);
+  // ── 노선별 일일 필요 인원 = 그날 운행 차량 수 × 2교대 ──
+  const demand = new Map<number, Map<string, number>>();
+  for (const b of buses ?? []) {
+    const per = demand.get(b.routeId) ?? new Map<string, number>();
+    const runs = b.operatingDates ? new Set(b.operatingDates) : null;
+    for (const d of days) {
+      if (runs && !runs.has(d)) continue;
+      per.set(d, (per.get(d) ?? 0) + 2);
+    }
+    demand.set(b.routeId, per);
   }
 
-  for (const [_route, routeDrivers] of byRoute.entries()) {
-    // 노선 내 운전자 정렬:
-    //   1순위: homeBusId 있음 → 없음 (HOME 먼저, spare 뒤)
-    //   2순위: homeBusId asc (같은 차의 페어가 묶이도록)
-    //   3순위: id asc (페어 내 안정 정렬)
-    routeDrivers.sort((a, b) => {
-      const aHasHome = a.homeBusId !== undefined ? 0 : 1;
-      const bHasHome = b.homeBusId !== undefined ? 0 : 1;
-      if (aHasHome !== bHasHome) return aHasHome - bHasHome;
-      if (a.homeBusId !== undefined && b.homeBusId !== undefined) {
-        if (a.homeBusId !== b.homeBusId) return a.homeBusId - b.homeBusId;
+  // ── 노선별 그룹화. 담당 노선이 없는 기사(스페어)는 노선에 고르게 나눠
+  //    붙인다 — 계획 목적일 뿐 실제 배정은 솔버가 자유롭게 한다.
+  const byRoute = new Map<number, SolverDriver[]>();
+  const orphans: SolverDriver[] = [];
+  for (const d of drivers) {
+    if (d.homeRouteId === undefined) { orphans.push(d); continue; }
+    const arr = byRoute.get(d.homeRouteId) ?? [];
+    arr.push(d);
+    byRoute.set(d.homeRouteId, arr);
+  }
+  const routeIds = [...byRoute.keys()].sort((a, b) => a - b);
+  if (routeIds.length === 0 && orphans.length > 0) {
+    byRoute.set(-1, orphans);
+  } else {
+    orphans.sort((a, b) => a.id - b.id);
+    orphans.forEach((d, i) => byRoute.get(routeIds[i % routeIds.length])!.push(d));
+  }
+
+  for (const [routeId, group] of byRoute.entries()) {
+    // 노선 내 정렬: 담당 차량 있는 기사 먼저 → 차량별로 묶여 짝꿍이 인접
+    group.sort((a, b) => {
+      const ah = a.homeBusId !== undefined ? 0 : 1;
+      const bh = b.homeBusId !== undefined ? 0 : 1;
+      if (ah !== bh) return ah - bh;
+      if (a.homeBusId !== undefined && b.homeBusId !== undefined && a.homeBusId !== b.homeBusId) {
+        return a.homeBusId - b.homeBusId;
       }
       return a.id - b.id;
     });
 
-    // 노선 내 균등 offset 분배
-    const N = Math.max(routeDrivers.length, 1);
-    // bus 별 인덱스 추적 (PAIR/TRIO 의 driverIdxInCrew 계산용)
+    const N = group.length;
+    const state = new Map<number, RestState>();
+    const partnerOf = new Map<number, number[]>();
+    for (const d of group) {
+      if (d.homeBusId === undefined) continue;
+      const mates = group.filter((x) => x.homeBusId === d.homeBusId && x.id !== d.id).map((x) => x.id);
+      partnerOf.set(d.id, mates);
+    }
+
+    // 초기 위상 — 첫날부터 휴무가 고르게 흩어지도록. 같은 차의 짝꿍은
+    // 사이클의 절반만큼 어긋나게 해 동시 휴무를 피한다.
     const idxInBus = new Map<number, number>();
-
-    for (let i = 0; i < routeDrivers.length; i++) {
-      const d = routeDrivers[i];
-      // 노선 내 base offset — 각 운전자가 다른 phase 에 위치
-      let offset = Math.floor((i * cycleLen) / N);
-
-      // 같은 bus 의 다른 운전자(PAIR/TRIO)면 stride 적용 — 동시 휴무 회피
+    for (let i = 0; i < N; i++) {
+      const d = group[i];
+      let phase = Math.floor((i * cycleLen) / Math.max(N, 1));
       if (d.homeBusId !== undefined) {
-        const idxInCrew = idxInBus.get(d.homeBusId) ?? 0;
-        idxInBus.set(d.homeBusId, idxInCrew + 1);
-        if (idxInCrew > 0) {
-          // 두 번째 이상의 crew member 는 cycleLen/2 stride 더해서 짝꿍과 분리
-          offset = (offset + Math.floor(cycleLen / 2)) % cycleLen;
+        const k = idxInBus.get(d.homeBusId) ?? 0;
+        idxInBus.set(d.homeBusId, k + 1);
+        if (k > 0) phase = (phase + Math.floor(cycleLen / 2)) % cycleLen;
+        crewIndex.set(d.id, k);
+      }
+      const carry = d.carryOverPattern?.consecutiveWorkDays ?? 0;
+      phase = (phase - carry + cycleLen) % cycleLen;
+      state.set(d.id, {
+        runLen: phase < restCycle.workDays ? phase : 0,
+        restLeft: phase < restCycle.workDays ? 0 : cycleLen - phase,
+        work: 0,
+        rest: 0,
+      });
+      restDays.set(d.id, new Set());
+    }
+
+    const perDayDemand = demand.get(routeId);
+
+    // 짝꿍은 항상 반대 시프트 — 한 차의 오전·오후가 그 차 사람들로 채워진다.
+    // 한 달 안에서는 고정(블록이 100% 같은 시프트), 공평성은 달마다 뒤집어 맞춘다.
+    const monthParity = monthStart.getUTCMonth() % 2;
+    const fixedShift = new Map<number, ShiftSlot>();
+    for (const d of group) {
+      if (d.homeBusId === undefined) continue; // 스페어는 빈자리를 따라간다
+      fixedShift.set(d.id, ((crewIndex.get(d.id) ?? 0) + monthParity) % 2 === 0 ? 'PM' : 'AM');
+    }
+
+    for (const day of days) {
+      // 그날 필요한 인원과 시프트별 정원. 운행 계획이 없으면 무제한.
+      const need = perDayDemand?.get(day);
+      const capAM = need === undefined ? Infinity : Math.ceil(need / 2);
+      const capPM = need === undefined ? Infinity : need - Math.ceil(need / 2);
+
+      // 반드시 쉬는 사람: 승인 휴무 · 연속 근무 한도 도달 · 연속 휴무 진행 중
+      const forced = new Set<number>();
+      for (const d of group) {
+        const st = state.get(d.id)!;
+        if (d.approvedDayOffs.includes(day) || st.runLen >= restCycle.workDays || st.restLeft > 0) {
+          forced.add(d.id);
         }
       }
 
-      const carry = d.carryOverPattern?.consecutiveWorkDays ?? 0;
-      const startOffset = (offset - carry + cycleLen) % cycleLen;
+      // 오래 일한 사람이 쉬도록, 근무는 연속 근무가 짧은 사람부터 채운다
+      const pick = (pool: SolverDriver[], cap: number) =>
+        [...pool]
+          .sort((a, b) => {
+            const sa = state.get(a.id)!, sb = state.get(b.id)!;
+            if (sa.runLen !== sb.runLen) return sa.runLen - sb.runLen;
+            if (sa.work !== sb.work) return sa.work - sb.work;
+            return a.id - b.id;
+          })
+          .slice(0, cap === Infinity ? pool.length : cap);
 
-      const set = new Set<string>();
-      for (let j = 0; j < days.length; j++) {
-        const phase = (startOffset + j) % cycleLen;
-        if (phase >= restCycle.workDays) set.add(days[j]);
+      const free = group.filter((d) => !forced.has(d.id));
+      const workAM = pick(free.filter((d) => fixedShift.get(d.id) === 'AM'), capAM);
+      const workPM = pick(free.filter((d) => fixedShift.get(d.id) === 'PM'), capPM);
+      // 남은 정원은 스페어가 메운다 — 그래서 스페어는 시프트를 고정하지 않는다
+      const gap =
+        need === undefined
+          ? Infinity
+          : capAM - workAM.length + (capPM - workPM.length);
+      const workSpare = pick(free.filter((d) => !fixedShift.has(d.id)), gap);
+
+      const working = new Set([...workAM, ...workPM, ...workSpare].map((d) => d.id));
+
+      for (const d of group) {
+        const st = state.get(d.id)!;
+        if (working.has(d.id)) {
+          st.work++;
+          st.runLen++;
+          st.restLeft = 0;
+        } else {
+          restDays.get(d.id)!.add(day);
+          st.rest++;
+          st.runLen = 0;
+          st.restLeft = st.restLeft > 0 ? st.restLeft - 1 : restCycle.restDays - 1;
+        }
       }
-      for (const off of d.approvedDayOffs) set.add(off);
-      restDays.set(d.id, set);
+    }
+
+    // ── 2단계: 확정된 휴무 패턴 위에 시프트를 얹는다 ──
+    // 위에서 정한 고정 시프트를 근무일에 그대로 깔아준다.
+    for (const d of group) {
+      const fixed = fixedShift.get(d.id);
+      if (!fixed) continue;
+      const rest = restDays.get(d.id)!;
+      const plan = new Map<string, ShiftSlot>();
+      for (const day of days) if (!rest.has(day)) plan.set(day, fixed);
+      plannedShift.set(d.id, plan);
     }
   }
 
-  return { restDays };
+  return { restDays, plannedShift };
 }
 
 // ─────────────────────────────────────────────
@@ -490,9 +655,34 @@ function pickDriver(args: PickArgs): PickResult {
     { list: emergencyCandidates, familiarity: 'CROSS_ROUTE', isEmergency: true },
   ];
 
-  for (const tier of tiers) {
-    const ranked = rankCandidates(tier.list, slot, ctx, policy);
-    for (const cand of ranked) {
+  // 2단 통과 — 1차는 "연속 근무 블록의 시프트를 지키는 후보"만 본다.
+  //
+  // 티어(HOME > SAME_ROUTE > ...)가 하드 우선순위라, 짝꿍이 쉬는 날 홈 기사가
+  // 한 명만 남으면 그 사람이 자기 블록 시프트와 무관하게 먼저 처리되는 슬롯
+  // (오전)에 들어간다 — 비용을 아무리 높여도 같은 티어에 경쟁자가 없어
+  // 소용이 없었다. 그래서 "블록 유지"를 티어보다 앞선 기준으로 올린다.
+  // 현장 방식과도 같다: 짝꿍이 쉬면 그 자리를 스페어가 메우고, 남은 기사는
+  // 자기 시프트를 그대로 간다.
+  // 1차에서 아무도 못 찾으면 2차에서 조건을 풀어 미배정을 만들지 않는다.
+  // 정렬은 티어당 한 번만 — candidateCost 가 비싸 2단 통과가 두 번 정렬하면
+  // 솔버 실행 시간이 배로 뛴다.
+  const rankedTiers = tiers.map((t) => ({ ...t, ranked: rankCandidates(t.list, slot, ctx, policy) }));
+  // 3단 통과: ① 계획 시프트 일치 ② 블록 연속성 유지 ③ 자유(미배정 방지)
+  for (const pass of [0, 1, 2]) {
+  for (const tier of rankedTiers) {
+    for (const cand of tier.ranked) {
+      // ① 휴무 계획 위에 얹은 블록 시프트를 그대로 따른다
+      if (pass === 0) {
+        const planned = restPlan.plannedShift.get(cand.id)?.get(slot.date);
+        if (planned && planned !== slot.shift) continue;
+      }
+      // ①② 블록 시프트 유지 — 어제 근무했다면 같은 시프트여야 한다
+      if (pass <= 1) {
+        const prev = ctx.driverSlots
+          .get(cand.id)
+          ?.find((s) => s.date === previousDate(slot.date));
+        if (prev && prev.shift !== slot.shift) continue;
+      }
       // 계획 휴무
       if (restPlan.restDays.get(cand.id)?.has(slot.date)) continue;
       // 헌법 + restCycle 룰 검증
@@ -509,6 +699,7 @@ function pickDriver(args: PickArgs): PickResult {
         reason: tier.isEmergency ? 'EMERGENCY_FALLBACK' : 'OK',
       };
     }
+  }
   }
 
   return {
@@ -530,6 +721,20 @@ function rankCandidates(
 }
 
 /** 후보 비용 — 작을수록 우선. 정책 기반. */
+/** 다음날 (YYYY-MM-DD) */
+function nextDate(date: string): string {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** 전날 (YYYY-MM-DD) — 연속 근무 블록 판정용 */
+function previousDate(date: string): string {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 function candidateCost(
   driver: SolverDriver,
   slot: { date: string; shift: ShiftSlot; routeId: number },
@@ -555,7 +760,11 @@ function candidateCost(
   } else if (projectedEval.tier === 'ACCEPTABLE_HIGH') {
     workloadCost = 50;
   } else if (projectedEval.exempted) {
-    workloadCost = 100;
+    // 스페어(하한 면제) — 예전엔 일률적으로 100 이라 0일짜리와 17일짜리가
+    // 같은 값이었다. 그래서 스페어끼리 부하가 전혀 분산되지 않고 누구는 4일,
+    // 누구는 21일이 됐다. 고정기사보다는 뒤에 두되(+40), 스페어끼리는
+    // 적게 일한 사람이 먼저 뽑히도록 현재 부하에 비례시킨다.
+    workloadCost = 40 + current;
   } else if (projectedEval.tier === 'SWEET_SPOT') {
     // sweet 안 — current 를 sweet 중심에서 약간 우선 (underloaded 미세 선호)
     const center = (sweet.min + sweet.max) / 2;
@@ -565,6 +774,15 @@ function candidateCost(
     // 현재 workload 가 작을수록 비용 낮음 (가장 부족한 운전자 먼저 채움)
     workloadCost = current; // 0 → 0, 5일 → 5, 10일 → 10
   }
+
+  // 2-a) 연속 근무 블록 안에서는 시프트를 바꾸지 않는다.
+  //      현장은 "5일 내리 오후" 처럼 한 블록을 같은 시프트로 간다. 중간에
+  //      오전이 끼면 오후→다음날 오전(휴식 8시간 미만)이 만들어지고, 기사도
+  //      생활 리듬이 깨진다. 휴무로 블록이 끊긴 뒤에는 자유롭게 바꾼다.
+  const prevDaySlot = ctx.driverSlots
+    .get(driver.id)
+    ?.find((s) => s.date === previousDate(slot.date));
+  const blockShiftCost = prevDaySlot && prevDaySlot.shift !== slot.shift ? 300 : 0;
 
   // 2) 주간 슬롯 일관성 — 이번 주에 이미 다른 슬롯 한 적 있으면 페널티
   const weekSlots = sameWeekSlots(ctx, driver.id, slot.date);
@@ -595,7 +813,8 @@ function candidateCost(
     ? 2 // 약한 타이브레이커 — 근무일 밴드 결정을 뒤집지 않도록 작게 유지 (12→2)
     : 0;
 
-  return workloadCost + consistencyCost + alternationCost + fatigueCost + weekendCost + preferenceCost;
+  return workloadCost + blockShiftCost + consistencyCost + alternationCost
+    + fatigueCost + weekendCost + preferenceCost;
 }
 
 function sameWeekSlots(
@@ -749,6 +968,15 @@ function canAssignFill(
   monthStart: Date,
   monthEnd: Date,
 ): boolean {
+  // 앞뒤 날 근무와 시프트가 어긋나면 안 된다 — 한 블록은 같은 시프트로 간다.
+  // (오후 → 다음날 오전은 법정 휴식 8시간도 위협한다)
+  const mine = ctx.driverSlots.get(driverId);
+  if (mine) {
+    const prev = mine.find((s) => s.date === previousDate(date));
+    if (prev && prev.shift !== shift) return false;
+    const nxt = mine.find((s) => s.date === nextDate(date));
+    if (nxt && nxt.shift !== shift) return false;
+  }
   return (
     checkAssignment(ctx, driverId, date, shift, routeId, policy) === null &&
     !violatesRestCycle(ctx, driverId, date, restCycle, monthStart) &&
@@ -760,94 +988,6 @@ function canAssignFill(
 // FILL move 헬퍼 — 그리드 후처리 제약 사전 검증
 // ─────────────────────────────────────────────
 
-/**
- * FILL move 후보를 위한 그리드 레벨 제약 사전 검증.
- *
- * checkAssignment 가 슬롯 단위(승인휴무·면허·중복배정 등)를 처리하는 반면,
- * 아래 규칙은 validateFullGrid 에서 사후 검출하는 연속·주간 집계 룰이다.
- * FILL move 전에 미리 걸러 constitutional violation total 이 증가하지 않도록 한다.
- *
- * 검증 대상:
- *   - noNightStreak: 야간 시프트 연속 횟수 (이미 maxConsecutive 에 도달했으면 거부)
- *   - weeklyMaxWorkDays: 해당 주 근무일이 maxDays 에 달했으면 거부
- *
- * guaranteedWeekendOff 는 월 집계 룰이라 사전 검증이 어렵지만,
- * 해당 슬롯이 주말이고 드라이버가 아직 이번 달 단 하나의 주말 휴무도 없는 상태면 거부.
- */
-function wouldViolateGridRules(
-  ctx: ConstraintContext,
-  driverId: number,
-  date: string,
-  shift: ShiftSlot,
-  policy: CompanyPolicy,
-  monthStart: Date,
-  monthEnd: Date,
-): boolean {
-  const constitutional = policy.constitutional;
-  const existing = ctx.driverSlots.get(driverId) ?? [];
-
-  // noNightStreak — 현재 ctx 기준으로 야간 연속 일수 시뮬레이션
-  const nightRule = constitutional?.noNightStreak;
-  if (nightRule?.enabled && nightRule.nightShifts.includes(shift)) {
-    // 추가하려는 날 기준으로 뒤/앞 연속 야간 일수를 계산
-    const nightDates = new Set(
-      existing.filter((s) => nightRule.nightShifts.includes(s.shift)).map((s) => s.date),
-    );
-    let backward = 0;
-    let cursor = parseDate(date);
-    for (let i = 0; i < nightRule.maxConsecutive; i++) {
-      cursor.setUTCDate(cursor.getUTCDate() - 1);
-      if (nightDates.has(formatDate(cursor))) backward++;
-      else break;
-    }
-    let forward = 0;
-    cursor = parseDate(date);
-    for (let i = 0; i < nightRule.maxConsecutive; i++) {
-      cursor.setUTCDate(cursor.getUTCDate() + 1);
-      if (nightDates.has(formatDate(cursor))) forward++;
-      else break;
-    }
-    if (backward + 1 + forward > nightRule.maxConsecutive) return true;
-  }
-
-  // weeklyMaxWorkDays — 해당 주 현재 근무일 수 확인
-  // weeklyCount is the PRE-fill count (existing slots only, candidate not included).
-  // Post-fill count = weeklyCount + 1. validateFullGrid flags when final count > maxDays,
-  // so the fill is illegal iff (weeklyCount + 1) > maxDays ⟺ weeklyCount >= maxDays.
-  // The >= comparison is therefore correct and intentional.
-  const weeklyRule = constitutional?.weeklyMaxWorkDays;
-  if (weeklyRule?.enabled) {
-    const d = parseDate(date);
-    const dayOfWeek = d.getUTCDay();
-    const weekStartDate = new Date(d);
-    weekStartDate.setUTCDate(d.getUTCDate() - dayOfWeek);
-    const weekEndDate = new Date(weekStartDate);
-    weekEndDate.setUTCDate(weekStartDate.getUTCDate() + 6);
-    const weekStartIso = formatDate(weekStartDate);
-    const weekEndIso = formatDate(weekEndDate);
-    const weeklyCount = existing.filter(
-      (s) => s.date >= weekStartIso && s.date <= weekEndIso,
-    ).length;
-    if (weeklyCount >= weeklyRule.maxDays) return true;
-  }
-
-  // guaranteedWeekendOff — 주말 슬롯이고 드라이버가 아직 이달 주말 휴무가 없는 경우 거부
-  // (월 내 총 주말 일수 중 workedWeekends + 1 이 모두 채워지면 minPerMonth 보장 불가)
-  const weekendRule = constitutional?.guaranteedWeekendOff;
-  if (weekendRule?.enabled && isWeekend(date)) {
-    const monthStartIso = formatDate(monthStart);
-    const monthEndIso = formatDate(monthEnd);
-    const totalWeekendDays = countWeekendDays(monthStart, monthEnd);
-    const workedWeekends = existing.filter(
-      (s) => s.date >= monthStartIso && s.date <= monthEndIso && isWeekend(s.date),
-    ).length;
-    // 이 슬롯을 추가하면 workedWeekends+1 이 되는데, 남은 주말 휴무 가능 일수 확인
-    // totalWeekendDays - (workedWeekends+1) < minPerMonth → 거부
-    if (totalWeekendDays - (workedWeekends + 1) < weekendRule.minPerMonth) return true;
-  }
-
-  return false;
-}
 
 // ─────────────────────────────────────────────
 // Phase C: 로컬 서치
@@ -865,6 +1005,8 @@ function localSearch(
   monthStart: Date,
   rng: Rng,
   monthEnd: Date,
+  /** Phase A 가 세운 휴무 계획 — 5일 근무/2일 휴무 블록의 근거 */
+  restPlan: RestPlan,
 ): number {
   let swaps = 0;
   let currentObj = objective(slots, drivers, weights, policy, unfilled.length);
@@ -883,10 +1025,12 @@ function localSearch(
     const sb = slots[b];
     if (sa.driverId === sb.driverId) continue;
 
-    // 다양한 swap 종류 허용 (이전: 같은 routeId + 같은 shift 만):
-    //   - 기본: 같은 노선 (familiarity 보존)
-    //   - 시프트는 다를 수 있음 (TWO_SHIFT 의 AM↔PM 도 한 노선 내라면 허용)
+    // 같은 노선 안에서만 교환 (familiarity 보존)
     if (sa.routeId !== sb.routeId) continue;
+    // 시프트가 다른 슬롯끼리는 바꾸지 않는다 — Phase B 가 맞춰 놓은 연속 근무
+    // 블록의 시프트(5일 내리 오후)를 지역 탐색이 되돌려 놓기 때문이다.
+    // 근무일수 균형은 같은 시프트 안에서의 교환·REASSIGN 으로도 충분히 잡힌다.
+    if (sa.shift !== sb.shift) continue;
 
     if (!canSwap(ctx, sa, sb, restCycle, policy, monthStart, monthEnd)) continue;
 
@@ -920,11 +1064,17 @@ function localSearch(
       }
 
       // Filter to feasible: all hard constraints + grid-level rules (shared predicate)
-      const feasible = drivers.filter(
+      const allFeasible = drivers.filter(
         (d) =>
           routeDriverSet.has(d.id) &&
           canAssignFill(ctx, d.id, U.date, U.shift, U.routeId, restCycle, policy, monthStart, monthEnd),
       );
+      // 계획 휴무일에는 넣지 않는다 — Phase A 가 세운 5일 근무/2일 휴무 블록을
+      // 지키기 위함이다. 이 걸러내기가 없으면 빈자리 메우기가 휴무 블록을 잘라
+      // "3일 일하고 하루 쉬고 또…" 처럼 근무가 잘게 부서진다.
+      // 다만 아무도 없으면 미배정(운영 사고)보다는 낫기에 허용한다.
+      const offPlanFeasible = allFeasible.filter((d) => !restPlan.restDays.get(d.id)?.has(U.date));
+      const feasible = offPlanFeasible.length > 0 ? offPlanFeasible : allFeasible;
       if (feasible.length === 0) continue;
 
       // Pick most under-loaded driver; tie-break by id asc (deterministic)
@@ -1041,6 +1191,8 @@ function localSearch(
       const bSweetMin = bEval.appliedSweetRange.min;
       // Recipient: must be under-loaded (below sweet min)
       if (bCount >= bSweetMin) continue;
+      // 계획 휴무일에는 재배치하지 않는다 (휴무 블록 보존)
+      if (restPlan.restDays.get(B.id)?.has(S.date)) continue;
       // Must pass all hard constraints with S.date/shift/routeId
       if (!canAssignFill(ctx, B.id, S.date, S.shift, S.routeId, restCycle, policy, monthStart, monthEnd)) continue;
       // Pick the most under-loaded (fewest slots); tie-break by id asc

@@ -31,10 +31,12 @@ import driverPreferenceRoutes from './routes/driverPreferences';
 import agentDecisionRoutes from './routes/agentDecisions';
 import dailyReportRoutes from './routes/dailyReports';
 import errorReportRoutes from './routes/error-report';
+import engineRoutes from './routes/engine';
 import { errorHandler } from './middleware/errorHandler';
 import { globalLimiter, apiLimiter, uploadLimiter } from './middleware/rateLimits';
 import { sanitizeInput } from './middleware/security';
 import logger from './utils/logger';
+import { allowedOrigins } from './config/allowedOrigins';
 import { prisma } from './utils/prisma';
 
 const app = express();
@@ -50,16 +52,16 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // --------------- CORS ---------------
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || 'http://localhost:3000')
-  .split(',')
-  .map((o) => o.trim());
-
+// 허용 origin 목록은 config/allowedOrigins 에서 관리(Socket.IO 와 공유).
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, curl, health checks)
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
-    callback(new Error(`CORS: origin ${origin} not allowed`));
+    // 허용되지 않은 origin: 에러를 throw 하면 cors 가 next(err) 로 넘겨 글로벌 핸들러가
+    // 모든 브라우저 요청을 500 으로 만든다(실제 장애 원인). → CORS 헤더만 빼고 정상 통과.
+    logger.warn('CORS: 허용되지 않은 origin', { origin });
+    callback(null, false);
   },
   credentials: true,
 }));
@@ -193,6 +195,10 @@ v1.use('/driver-tags', standardApiBody, apiLimiter, sanitizeInput, driverTagRout
 v1.use('/driver-preferences', standardApiBody, apiLimiter, sanitizeInput, driverPreferenceRoutes);
 v1.use('/agents', standardApiBody, apiLimiter, sanitizeInput, agentDecisionRoutes);
 v1.use('/daily-reports', standardApiBody, apiLimiter, sanitizeInput, dailyReportRoutes);
+
+// --- Python 배차 엔진 프록시: multipart(엑셀) 그대로 전달해야 하므로 raw body ---
+// sanitizeInput 미적용 — 바디를 파싱하지 않고 엔진에 패스스루한다 (엔진이 검증).
+v1.use('/engine', express.raw({ type: '*/*', limit: '30mb' }), uploadLimiter, engineRoutes);
 
 // --- Error report: no auth required, small body, own rate limit ---
 v1.use('/error-report', express.json({ limit: '16kb' }), sanitizeInput, errorReportRoutes);

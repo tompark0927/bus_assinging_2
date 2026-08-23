@@ -28,6 +28,7 @@ const AuditLogPage = lazy(() => import('./pages/AuditLogPage'));
 const DailyReportsPage = lazy(() => import('./pages/DailyReportsPage'));
 const BasicDataPage = lazy(() => import('./pages/BasicDataPage'));
 const DispatchSettingsPage = lazy(() => import('./pages/DispatchSettingsPage'));
+const InspectPage = lazy(() => import('./pages/InspectPage'));
 const TodayOperationPage = lazy(() => import('./pages/TodayOperationPage'));
 const AccountsPage = lazy(() => import('./pages/AccountsPage'));
 const CompanyInfoPage = lazy(() => import('./pages/CompanyInfoPage'));
@@ -74,6 +75,9 @@ export default function App() {
               <Route path="data" element={<Suspense fallback={<PageLoadingFallback />}><BasicDataPage /></Suspense>} />
               <Route path="today" element={<Suspense fallback={<PageLoadingFallback />}><TodayOperationPage /></Suspense>} />
               <Route path="settings" element={<Suspense fallback={<PageLoadingFallback />}><DispatchSettingsPage /></Suspense>} />
+              {/* AI 엔진 설정은 배차 설정의 '엔진 튜닝' 탭으로 통합됐다 (북마크 호환) */}
+              <Route path="engine" element={<Navigate to="/dashboard/settings?tab=engine" replace />} />
+              <Route path="inspect" element={<Suspense fallback={<PageLoadingFallback />}><InspectPage /></Suspense>} />
               <Route path="accounts" element={<Suspense fallback={<PageLoadingFallback />}><AccountsPage /></Suspense>} />
               <Route path="company" element={<Suspense fallback={<PageLoadingFallback />}><CompanyInfoPage /></Suspense>} />
               {/* OWNER/DIRECTOR 전용 — 사이드바 하단 작은 링크로만 노출 */}

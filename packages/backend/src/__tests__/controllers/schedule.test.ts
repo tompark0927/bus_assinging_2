@@ -291,7 +291,15 @@ describe('generateSchedule controller', () => {
 // ─────────────────────────────────────────
 
 describe('publishSchedule controller', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // 발행 게이트 — 기본은 중복·공석·법규 위반 없음
+    mockPrisma.scheduleSlot.groupBy.mockResolvedValue([]);
+    mockPrisma.scheduleSlot.findMany.mockResolvedValue([]);
+    // 공석(E2) 검사: 운행 패턴 없음 = 검사 대상 아님, notes 도 비어 있음
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([]);
+    mockPrisma.schedule.findUnique.mockResolvedValue({ notes: null });
+  });
 
   it('should publish latest DRAFT (no scheduleId in body) and notify drivers', async () => {
     const req = createAuthReq({ params: { year: '2026', month: '3' } });
@@ -414,6 +422,148 @@ describe('publishSchedule controller', () => {
     await publishSchedule(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  // ── 발행 게이트: 같은 날 같은 기사 중복 배정 ──
+
+  const DUPS = [
+    { driverId: 42, date: new Date('2026-03-05T00:00:00.000Z') },
+    { driverId: 42, date: new Date('2026-03-09T00:00:00.000Z') },
+  ];
+
+  function arrangeDraftWithDups() {
+    mockPrisma.schedule.findFirst
+      .mockResolvedValueOnce({ id: 1, year: 2026, month: 3, status: 'DRAFT', companyId: 1 })
+      .mockResolvedValueOnce(null);
+    mockPrisma.scheduleSlot.groupBy.mockResolvedValue(DUPS);
+    mockPrisma.user.findMany.mockResolvedValue([{ id: 42, name: '김영수' }]);
+    mockPrisma.schedule.update.mockResolvedValue({ id: 1, year: 2026, month: 3, status: 'PUBLISHED' });
+  }
+
+  it('중복 배정이 있으면 409로 차단하고 발행·알림을 하지 않는다', async () => {
+    const req = createAuthReq({ params: { year: '2026', month: '3' } });
+    const res = createMockRes();
+    arrangeDraftWithDups();
+
+    await publishSchedule(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        data: expect.objectContaining({
+          duplicates: expect.arrayContaining([
+            expect.objectContaining({ driverName: '김영수', date: '2026-03-05' }),
+          ]),
+        }),
+      }),
+    );
+    expect(mockPrisma.schedule.update).not.toHaveBeenCalled();
+    const { sendBulkPushNotifications } = jest.requireMock('../../services/notificationService');
+    expect(sendBulkPushNotifications).not.toHaveBeenCalled();
+  });
+
+  it('중복 검사는 휴무·드랍·결근을 제외한다 (화면 배너와 동일한 술어)', async () => {
+    const req = createAuthReq({ params: { year: '2026', month: '3' } });
+    const res = createMockRes();
+    mockPrisma.schedule.findFirst
+      .mockResolvedValueOnce({ id: 1, year: 2026, month: 3, status: 'DRAFT', companyId: 1 })
+      .mockResolvedValueOnce(null);
+    mockPrisma.schedule.update.mockResolvedValue({ id: 1, status: 'PUBLISHED' });
+    mockPrisma.user.findMany.mockResolvedValue([]);
+
+    await publishSchedule(req, res);
+
+    expect(mockPrisma.scheduleSlot.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          isRestDay: false,
+          status: { notIn: ['DROPPED', 'ABSENT'] },
+        }),
+      }),
+    );
+  });
+
+  it('중복이 없어도 연속근무 초과(E3)가 있으면 409로 차단한다', async () => {
+    const req = createAuthReq({ params: { year: '2026', month: '3' } });
+    const res = createMockRes();
+    mockPrisma.schedule.findFirst
+      .mockResolvedValueOnce({ id: 1, year: 2026, month: 3, status: 'DRAFT', companyId: 1 })
+      .mockResolvedValueOnce(null);
+    // 김영수 3/1~3/7 연속 7일 종일 근무
+    mockPrisma.scheduleSlot.findMany.mockResolvedValue(
+      Array.from({ length: 7 }, (_, i) => ({
+        driverId: 42,
+        date: new Date(`2026-03-0${i + 1}T00:00:00.000Z`),
+        shift: 'FULL_DAY',
+        driver: { name: '김영수' },
+      })),
+    );
+    mockPrisma.user.findMany.mockResolvedValue([]);
+
+    await publishSchedule(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('연속근무 초과'),
+        data: expect.objectContaining({
+          violations: expect.arrayContaining([
+            expect.objectContaining({ rule: 'E3', driverName: '김영수' }),
+          ]),
+        }),
+      }),
+    );
+    expect(mockPrisma.schedule.update).not.toHaveBeenCalled();
+  });
+
+  it('공석(운행 차량인데 기사 없음)이 있으면 409로 차단한다 — 버스가 못 나가는 배차표', async () => {
+    const req = createAuthReq({ params: { year: '2026', month: '3' } });
+    const res = createMockRes();
+    mockPrisma.schedule.findFirst
+      .mockResolvedValueOnce({ id: 1, year: 2026, month: 3, status: 'DRAFT', companyId: 1 })
+      .mockResolvedValueOnce(null);
+    // 2292호가 3/1 운행 예정인데 배정 슬롯이 없다
+    mockPrisma.schedulePattern.findMany.mockResolvedValue([
+      { date: new Date('2026-03-01T00:00:00.000Z'), busId: 10, bus: { busNumber: '2292' } },
+    ]);
+    mockPrisma.user.findMany.mockResolvedValue([]);
+
+    await publishSchedule(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('공석 2칸'),
+        data: expect.objectContaining({
+          counts: expect.objectContaining({ vacant: 2 }),
+        }),
+      }),
+    );
+    expect(mockPrisma.schedule.update).not.toHaveBeenCalled();
+    const { sendBulkPushNotifications } = jest.requireMock('../../services/notificationService');
+    expect(sendBulkPushNotifications).not.toHaveBeenCalled();
+  });
+
+  it('force=true 면 발행하되 감사 로그에 강제 발행을 남긴다', async () => {
+    const req = createAuthReq({ params: { year: '2026', month: '3' }, body: { force: true } });
+    const res = createMockRes();
+    arrangeDraftWithDups();
+
+    await publishSchedule(req, res);
+
+    expect(mockPrisma.schedule.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: 'PUBLISHED' } }),
+    );
+    const { createAuditLog } = jest.requireMock('../../utils/auditLog');
+    expect(createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: expect.objectContaining({
+          forcedDuplicates: { old: null, new: DUPS.length },
+        }),
+      }),
+    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 });
 

@@ -6,6 +6,7 @@ import { companyInfoApi } from '../services/api';
 import {
   LayoutDashboard, Calendar, AlertTriangle, Database, LogOut,
   Settings,
+  ShieldCheck,
   CalendarOff, Bus, UserCog, Building2, ScrollText,
   PanelLeftClose, PanelLeft,
 } from 'lucide-react';
@@ -48,6 +49,7 @@ const navGroups: NavGroup[] = [
       { to: '/dashboard/emergency', labelKey: '대타 관리', icon: AlertTriangle, roles: ['DISPATCH'] },
       { to: '/dashboard/dayoff', labelKey: '휴무 요청', icon: CalendarOff, roles: ['DISPATCH', 'HR'] },
       { to: '/dashboard/today', labelKey: '오늘 운행 현황', icon: Bus, roles: ['DISPATCH'] },
+      { to: '/dashboard/inspect', labelKey: '배차표 검산', icon: ShieldCheck, roles: ['DISPATCH'] },
     ],
   },
   {

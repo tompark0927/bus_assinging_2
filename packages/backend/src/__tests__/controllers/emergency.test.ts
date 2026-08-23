@@ -398,6 +398,69 @@ describe('acceptEmergencySlot controller', () => {
 
     expect(res.status).toHaveBeenCalledWith(400);
   });
+
+  // ── 자가 수락 동일일자 가드 — 이중 배정의 최단 경로 차단 ──
+
+  it('같은 날 이미 근무가 있으면 409로 거부하고 슬롯을 건드리지 않는다', async () => {
+    const req = createAuthReq({
+      params: { id: '5' },
+      user: { id: 20, companyId: 1, email: 'sub@test.com', role: 'DRIVER', name: '이기사' },
+    } as any);
+    const res = createMockRes();
+
+    mockPrisma.emergencyDrop.findUnique.mockResolvedValue({
+      id: 5, status: 'OPEN', slotId: 100, driverId: 10,
+      slot: { date: new Date('2026-03-20'), route: { routeNumber: '780' } },
+      driver: { id: 10, name: '김기사', companyId: 1 },
+    });
+    // 수락하려는 기사(20)가 같은 날 다른 슬롯에 이미 배정됨
+    mockPrisma.scheduleSlot.findFirst.mockResolvedValue({ id: 777 });
+
+    await acceptEmergencySlot(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('이미 배정된 근무') }),
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('충돌 검사는 관리자 경로와 같은 술어를 쓴다 (휴무·드랍 제외, 본인 슬롯 제외)', async () => {
+    const req = createAuthReq({
+      params: { id: '5' },
+      user: { id: 20, companyId: 1, email: 'sub@test.com', role: 'DRIVER', name: '이기사' },
+    } as any);
+    const res = createMockRes();
+
+    mockPrisma.emergencyDrop.findUnique.mockResolvedValue({
+      id: 5, status: 'OPEN', slotId: 100, driverId: 10,
+      slot: { date: new Date('2026-03-20'), route: { routeNumber: '780' } },
+      driver: { id: 10, name: '김기사', companyId: 1 },
+    });
+    mockPrisma.scheduleSlot.findFirst.mockResolvedValue(null);
+    (prisma.$transaction as jest.Mock).mockImplementationOnce(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        emergencyDrop: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        scheduleSlot: { update: jest.fn().mockResolvedValue({ id: 100 }) },
+      }),
+    );
+    mockPrisma.user.findMany.mockResolvedValue([{ id: 1 }]);
+
+    await acceptEmergencySlot(req, res);
+
+    expect(mockPrisma.scheduleSlot.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          driverId: 20,
+          isRestDay: false,
+          id: { not: 100 },
+          status: { in: ['SCHEDULED', 'FILLED'] },
+          schedule: { companyId: 1 },
+        }),
+      }),
+    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
 });
 
 // ─────────────────────────────────────────

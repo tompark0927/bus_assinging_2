@@ -10,6 +10,7 @@ import { parseIdParam } from '../utils/helpers';
 import { createAuditLog } from '../utils/auditLog';
 import { getPagination, paginatedResponse } from '../utils/pagination';
 import { emitToCompany } from '../services/socketService';
+import { inspectScheduleForPublish } from '../services/publishInspectionService';
 
 export const getScheduleList = async (req: AuthRequest, res: Response) => {
   try {
@@ -297,6 +298,13 @@ export const createScheduleSlot = async (req: AuthRequest, res: Response) => {
 
     return res.status(201).json({ success: true, data: slot });
   } catch (error) {
+    // 셀 유니크 제약(scheduleId, date, busId, shift) 충돌 — 같은 칸에 이미 배정 존재
+    if ((error as { code?: string })?.code === 'P2002') {
+      return res.status(409).json({
+        success: false,
+        message: '그 차량의 해당 날짜·시프트 칸에는 이미 배정이 있습니다. 기존 배정을 수정하거나 지운 뒤 추가해주세요.',
+      });
+    }
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
   }
@@ -421,6 +429,58 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    // ── 발행 게이트: 같은 날 같은 기사 중복 배정 검사 ──
+    // 발행되면 기사앱은 같은 날 슬롯 중 하나만 보여준다(달력 last-wins,
+    // 홈 first-wins). 즉 중복은 발행 후엔 화면에서 보이지도 않는다 —
+    // 여기서 못 막으면 아무도 못 막는다. 화면 배너(duplicateInfo)와
+    // 술어를 동일하게 유지할 것: 휴무·드랍·결근 제외.
+    const dupGroups = await prisma.scheduleSlot.groupBy({
+      by: ['driverId', 'date'],
+      where: {
+        scheduleId: existing.id,
+        isRestDay: false,
+        status: { notIn: ['DROPPED', 'ABSENT'] },
+      },
+      having: { driverId: { _count: { gt: 1 } } },
+    });
+    // 법규·정책 검산 — 연속근무(E3)·면허 만료(E4)·승인 휴무 배정(E5) 등을
+    // 저장된 최종본에 적용한다. AI 엔진은 면허·휴무를 보지 않으므로
+    // (엔진에 그 개념이 없다) 발행이 마지막 방어선이다.
+    const inspection = await inspectScheduleForPublish(existing.id);
+
+    const forcePublish = (req.body as { force?: boolean } | undefined)?.force === true;
+    if ((dupGroups.length > 0 || inspection.errors.length > 0) && !forcePublish) {
+      const dupDrivers = await prisma.user.findMany({
+        where: { id: { in: [...new Set(dupGroups.map((g) => g.driverId))] } },
+        select: { id: true, name: true },
+      });
+      const nameOf = new Map(dupDrivers.map((d) => [d.id, d.name]));
+      const duplicates = dupGroups.map((g) => ({
+        driverId: g.driverId,
+        driverName: nameOf.get(g.driverId) ?? `기사#${g.driverId}`,
+        date: g.date.toISOString().slice(0, 10),
+      }));
+      const c = inspection.counts;
+      const parts = [
+        dupGroups.length > 0 ? `같은 날 중복 배정 ${dupGroups.length}건` : null,
+        c.vacant > 0 ? `공석 ${c.vacant}칸(버스가 나갈 수 없음)` : null,
+        c.unregistered > 0 ? `미등록 기사 칸 ${c.unregistered}칸` : null,
+        c.consecutive > 0 ? `연속근무 초과 ${c.consecutive}건` : null,
+        c.expiredLicense > 0 ? `면허·자격 만료 배정 ${c.expiredLicense}건` : null,
+        c.approvedOff > 0 ? `승인 휴무일 배정 ${c.approvedOff}건` : null,
+      ].filter(Boolean);
+      return res.status(409).json({
+        success: false,
+        message: `${parts.join(', ')} — 해소한 뒤 발행해주세요.`,
+        data: {
+          duplicates,
+          violations: inspection.errors,
+          warnings: inspection.warnings,
+          counts: inspection.counts,
+        },
+      });
+    }
+
     const schedule = await prisma.schedule.update({
       where: { id: existing.id },
       data: { status: 'PUBLISHED' },
@@ -435,6 +495,21 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
         status: { old: existing.status, new: 'PUBLISHED' },
         year: { old: null, new: year },
         month: { old: null, new: month },
+        // 중복·법규 위반을 알고도 강제 발행한 경우 — 반드시 감사 기록에 남긴다
+        ...(dupGroups.length > 0
+          ? { forcedDuplicates: { old: null, new: dupGroups.length } }
+          : {}),
+        ...(inspection.errors.length > 0
+          ? {
+              forcedViolations: {
+                old: null,
+                new:
+                  `공석${inspection.counts.vacant}/미등록${inspection.counts.unregistered}` +
+                  `/연속근무${inspection.counts.consecutive}` +
+                  `/면허만료${inspection.counts.expiredLicense}/승인휴무${inspection.counts.approvedOff}`,
+              },
+            }
+          : {}),
       },
     });
 
@@ -462,6 +537,8 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
     return res.json({
       success: true,
       data: schedule,
+      // 경고(짧은 휴식 등)는 발행을 막지 않지만 담당자에게 보여준다
+      warnings: inspection.warnings,
       message: `${year}년 ${month}월 배차표가 발행되었습니다.`,
     });
   } catch (error) {

@@ -9,6 +9,11 @@ import { DEFAULT_POLICY, POLICY_PRESETS } from '../agents/_solvers/types';
 import { generateUniqueCompanyCode } from '../utils/companyCode';
 import { sendEmail, companyCodeEmailHtml } from '../services/emailService';
 import { normalizePhone } from '../utils/initialPassword';
+import {
+  loadEnginePolicy,
+  saveEnginePolicy,
+  EnginePolicyValidationError,
+} from '../services/enginePolicyStore';
 
 function generateEmployeeId(): string {
   return 'ADM' + Math.random().toString(36).substr(2, 6).toUpperCase();
@@ -282,6 +287,44 @@ export const updateCompanyPolicy = async (req: AuthRequest, res: Response) => {
     logger.info(`[CompanyPolicy] 정책 업데이트 — companyId=${companyId} preset=${policy.preset ?? 'CUSTOM'}`);
     return res.json({ success: true, data: { policy }, message: '정책이 저장되었습니다.' });
   } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+/**
+ * GET /api/v1/companies/engine-policy
+ * AI 배차 엔진 튜닝 정책(순번 로테이션·감차·짝궁 교대·예비·공정성·공휴일).
+ * 저장소는 DB 이며, 엔진 파일에만 남아 있던 회사는 여기서 한 번 이관된다.
+ */
+export const getEnginePolicy = async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user!.companyId;
+    const policy = await loadEnginePolicy(companyId);
+    const isDefault = Object.keys(policy.values ?? {}).length === 0;
+    return res.json({ success: true, data: { policy, isDefault } });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+/**
+ * PUT /api/v1/companies/engine-policy
+ * 엔진 카탈로그에 없는 키는 거부한다 (엔진이 꺼져 있으면 형식 검증만).
+ */
+export const updateEnginePolicy = async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user!.companyId;
+    const saved = await saveEnginePolicy(companyId, req.body?.policy ?? req.body);
+    logger.info(
+      `[EnginePolicy] 엔진 정책 업데이트 — companyId=${companyId} keys=${Object.keys(saved.values ?? {}).length}`,
+    );
+    return res.json({ success: true, data: { policy: saved }, message: '엔진 설정이 저장되었습니다.' });
+  } catch (error) {
+    if (error instanceof EnginePolicyValidationError) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
   }

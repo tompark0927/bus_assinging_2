@@ -482,12 +482,22 @@ describe('solveMonthlyGrid v2', () => {
       expect(policy.constitutional.noNightStreak.enabled).toBe(false);
     });
 
-    test('CITY_2SHIFT 의 noNightStreak=enabled: PM 4일 연속 시 위반', () => {
+    test('CITY_2SHIFT: 오후는 야간이 아니므로 연속 오후 근무를 막지 않는다', () => {
       const { POLICY_PRESETS } = require('../types');
       const policy = POLICY_PRESETS.CITY_2SHIFT;
-      expect(policy.constitutional.noNightStreak.enabled).toBe(true);
-      expect(policy.constitutional.noNightStreak.nightShifts).toEqual(['PM']);
-      // maxConsecutive=3 → 4일째부터 위반
+      // 시내 2교대의 '오후'는 저녁에 끝나는 주간 근무다. 이를 야간으로 보고
+      // "3일 연속 금지"를 걸면 5일 근무 사이클과 충돌해 5일 연속 오후가
+      // 구조적으로 불가능해지고, 솔버가 블록 중간에 오전을 끼워넣는다
+      // (오후·오후·오전·오후·오후) → 그 자리에서 오후→다음날 오전이 생긴다.
+      expect(policy.constitutional.noNightStreak.enabled).toBe(false);
+      expect(policy.restCycle.workDays).toBe(5); // 5일 연속 같은 시프트가 가능해야 한다
+    });
+
+    test('CITY_2SHIFT: 오후→다음날 오전 금지가 켜져 있다 (법 제44조의6)', () => {
+      const { POLICY_PRESETS } = require('../types');
+      const policy = POLICY_PRESETS.CITY_2SHIFT;
+      expect(policy.constitutional.minRestBetweenShifts.enabled).toBe(true);
+      expect(policy.constitutional.minRestBetweenShifts.minHours).toBe(8);
     });
 
     test('정책 override 로 weeklyMaxWorkDays 룰 비활성화', () => {

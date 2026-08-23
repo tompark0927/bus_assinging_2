@@ -175,10 +175,10 @@ export const authValidation = {
 
   // 회사 코드 찾기
   findCompanyCode: validate([
-    body('phone')
+    body('email')
       .trim()
-      .notEmpty().withMessage('전화번호는 필수입니다.')
-      .matches(/^01[016789]-?\d{3,4}-?\d{4}$/).withMessage('유효한 전화번호 형식이어야 합니다. (01X-XXXX-XXXX)'),
+      .notEmpty().withMessage('이메일은 필수입니다.')
+      .isEmail().withMessage('유효한 이메일 형식이어야 합니다.'),
   ]),
 
   // 이메일 인증 — OTP 발송
@@ -294,6 +294,13 @@ export const busValidation = {
       .isInt({ min: 1990, max: 2100 }).withMessage('연식은 1990~2100 범위여야 합니다.')
       .toInt(),
     optionalInt('routeId', '노선 ID'),
+    // 출발 그룹 — 빈 문자열/null 은 "구분 없음"으로 지운다는 뜻이라 허용
+    body('groupType')
+      .custom((v) => v == null || (typeof v === 'string' && v.length <= 20))
+      .withMessage('출발 그룹은 20자 이내여야 합니다.'),
+    body('orderInGroup')
+      .custom((v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 99))
+      .withMessage('그룹 내 순번은 1~99 범위여야 합니다.'),
   ]),
 
   update: validate([
@@ -309,6 +316,12 @@ export const busValidation = {
     body('isActive')
       .optional()
       .isBoolean().withMessage('활성 상태는 boolean이어야 합니다.'),
+    body('groupType')
+      .custom((v) => v == null || (typeof v === 'string' && v.length <= 20))
+      .withMessage('출발 그룹은 20자 이내여야 합니다.'),
+    body('orderInGroup')
+      .custom((v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 99))
+      .withMessage('그룹 내 순번은 1~99 범위여야 합니다.'),
   ]),
 
   delete: validate([
@@ -346,6 +359,12 @@ export const routeValidation = {
     optionalString('description', '설명'),
     optionalString('startPoint', '출발지', { max: 100 }),
     optionalString('endPoint', '도착지', { max: 100 }),
+    // 요일별 운행 대수 — 빈 값은 '미설정'이라 허용한다
+    ...(['weekdayBuses', 'saturdayBuses', 'holidayBuses'] as const).map((f) =>
+      body(f)
+        .custom((v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 999))
+        .withMessage('운행 대수는 0~999 범위여야 합니다.'),
+    ),
   ]),
 
   update: validate([
@@ -355,6 +374,12 @@ export const routeValidation = {
     optionalString('description', '설명'),
     optionalString('startPoint', '출발지', { max: 100 }),
     optionalString('endPoint', '도착지', { max: 100 }),
+    // 요일별 운행 대수 — 빈 값은 '미설정'이라 허용한다
+    ...(['weekdayBuses', 'saturdayBuses', 'holidayBuses'] as const).map((f) =>
+      body(f)
+        .custom((v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 999))
+        .withMessage('운행 대수는 0~999 범위여야 합니다.'),
+    ),
     body('isActive')
       .optional()
       .isBoolean().withMessage('활성 상태는 boolean이어야 합니다.'),
