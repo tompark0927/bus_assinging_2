@@ -443,8 +443,9 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
       },
       having: { driverId: { _count: { gt: 1 } } },
     });
-    // 법규 검산 — 연속근무 초과(E3)·짧은 휴식(W1). 엔진 inspector 와 같은
-    // 규칙을 저장된 최종본에 적용한다. 발행이 마지막 방어선이다.
+    // 법규·정책 검산 — 연속근무(E3)·면허 만료(E4)·승인 휴무 배정(E5) 등을
+    // 저장된 최종본에 적용한다. AI 엔진은 면허·휴무를 보지 않으므로
+    // (엔진에 그 개념이 없다) 발행이 마지막 방어선이다.
     const inspection = await inspectScheduleForPublish(existing.id);
 
     const forcePublish = (req.body as { force?: boolean } | undefined)?.force === true;
@@ -465,6 +466,8 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
         c.vacant > 0 ? `공석 ${c.vacant}칸(버스가 나갈 수 없음)` : null,
         c.unregistered > 0 ? `미등록 기사 칸 ${c.unregistered}칸` : null,
         c.consecutive > 0 ? `연속근무 초과 ${c.consecutive}건` : null,
+        c.expiredLicense > 0 ? `면허·자격 만료 배정 ${c.expiredLicense}건` : null,
+        c.approvedOff > 0 ? `승인 휴무일 배정 ${c.approvedOff}건` : null,
       ].filter(Boolean);
       return res.status(409).json({
         success: false,
@@ -496,11 +499,14 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
         ...(dupGroups.length > 0
           ? { forcedDuplicates: { old: null, new: dupGroups.length } }
           : {}),
-        ...(inspection.counts.vacant + inspection.counts.unregistered + inspection.counts.consecutive > 0
+        ...(inspection.errors.length > 0
           ? {
               forcedViolations: {
                 old: null,
-                new: `공석${inspection.counts.vacant}/미등록${inspection.counts.unregistered}/연속근무${inspection.counts.consecutive}`,
+                new:
+                  `공석${inspection.counts.vacant}/미등록${inspection.counts.unregistered}` +
+                  `/연속근무${inspection.counts.consecutive}` +
+                  `/면허만료${inspection.counts.expiredLicense}/승인휴무${inspection.counts.approvedOff}`,
               },
             }
           : {}),

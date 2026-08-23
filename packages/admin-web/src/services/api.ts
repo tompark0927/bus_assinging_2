@@ -220,6 +220,12 @@ export const routesApi = {
 export const companyPolicyApi = {
   get: () => api.get('/companies/policy'),
   update: (policy: Record<string, unknown>) => api.put('/companies/policy', { policy }),
+  // AI 엔진 튜닝 정책 — 저장소는 DB(Company.enginePolicy).
+  // 엔진 프로세스는 요청마다 policy_json 을 받는 stateless 계산기라, 엔진이
+  // 꺼져 있어도 설정 저장은 된다. (카탈로그 조회만 엔진이 필요하다)
+  getEngine: () => api.get('/companies/engine-policy'),
+  updateEngine: (policy: Record<string, unknown>) =>
+    api.put('/companies/engine-policy', { policy }),
 };
 
 /**
@@ -250,8 +256,8 @@ engineClient.interceptors.request.use((config) => {
 // AI 배차 엔진 (Python dispatch-engine 프록시 — /api/v1/engine/*)
 export const engineApi = {
   catalog: () => engineClient.get('/engine/catalog'),
-  getPolicy: () => engineClient.get('/engine/policy'),
-  putPolicy: (policy: Record<string, unknown>) => engineClient.put('/engine/policy', { policy }),
+  // 정책 읽기/쓰기는 companyPolicyApi.getEngine/updateEngine (DB) 를 쓴다.
+  // 엔진의 /policy 는 구버전 데이터 이관 경로로만 백엔드가 호출한다.
   // 엑셀 분석은 파일 업로드 + 솔버 분석이라 타임아웃 여유
   analyze: (form: FormData) =>
     engineClient.post('/engine/analyze', form, {

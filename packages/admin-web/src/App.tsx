@@ -28,7 +28,6 @@ const AuditLogPage = lazy(() => import('./pages/AuditLogPage'));
 const DailyReportsPage = lazy(() => import('./pages/DailyReportsPage'));
 const BasicDataPage = lazy(() => import('./pages/BasicDataPage'));
 const DispatchSettingsPage = lazy(() => import('./pages/DispatchSettingsPage'));
-const EngineSettingsPage = lazy(() => import('./pages/EngineSettingsPage'));
 const InspectPage = lazy(() => import('./pages/InspectPage'));
 const TodayOperationPage = lazy(() => import('./pages/TodayOperationPage'));
 const AccountsPage = lazy(() => import('./pages/AccountsPage'));
@@ -76,7 +75,8 @@ export default function App() {
               <Route path="data" element={<Suspense fallback={<PageLoadingFallback />}><BasicDataPage /></Suspense>} />
               <Route path="today" element={<Suspense fallback={<PageLoadingFallback />}><TodayOperationPage /></Suspense>} />
               <Route path="settings" element={<Suspense fallback={<PageLoadingFallback />}><DispatchSettingsPage /></Suspense>} />
-              <Route path="engine" element={<Suspense fallback={<PageLoadingFallback />}><EngineSettingsPage /></Suspense>} />
+              {/* AI 엔진 설정은 배차 설정의 '엔진 튜닝' 탭으로 통합됐다 (북마크 호환) */}
+              <Route path="engine" element={<Navigate to="/dashboard/settings?tab=engine" replace />} />
               <Route path="inspect" element={<Suspense fallback={<PageLoadingFallback />}><InspectPage /></Suspense>} />
               <Route path="accounts" element={<Suspense fallback={<PageLoadingFallback />}><AccountsPage /></Suspense>} />
               <Route path="company" element={<Suspense fallback={<PageLoadingFallback />}><CompanyInfoPage /></Suspense>} />

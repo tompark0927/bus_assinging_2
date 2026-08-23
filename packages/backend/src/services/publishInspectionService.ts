@@ -1,6 +1,7 @@
 import { prisma } from '../utils/prisma';
 import { parseScheduleMeta } from './vehicleOffService';
 import { operatingCells } from './operatingPlanService';
+import { loadCompanyPolicy } from './solverDispatchService';
 
 /**
  * 발행 전 안전 검산 — 저장된 배차표(ScheduleSlot)를 직접 검사한다.
@@ -18,22 +19,73 @@ import { operatingCells } from './operatingPlanService';
  *                    (해결: '미등록 기사 한번에 등록' 한 번)
  *     VACANT       — 이름 자체가 없음 (해결: 사람을 배정해야 함)
  * E3 연속근무 — 최대 연속 근무일 초과 (주 52시간제의 실무 안전선)
+ * E4 면허·자격 만료 — 만료일이 지난 기사를 그 날짜에 배정. **무면허 운행**이라
+ *   가장 무거운 위반이다. AI 엔진은 면허를 보지 않고 배차하므로(엔진에 그
+ *   개념이 없다) 여기가 유일한 방어선이다.
+ * E5 승인 휴무 배정 — 회사가 승인해 준 휴무일에 배정. 기사앱에는 '승인'으로
+ *   떠 있는데 배차표엔 근무로 들어가 있는 상태 — 현장에서 그대로 사고가 된다.
  * W1 짧은 휴식 — 오후 근무 뒤 다음날 오전 근무. 여객자동차 운수사업법
  *   시행규칙 제44조의6: 퇴근 전 마지막 운행 종료 ~ 다음 출근 첫 운행 사이
  *   8시간(광역급행·직행좌석 10시간) 이상 보장 — 이 조합이 그 간격을 위협한다.
+ * W2 주말휴무 부족 — 한 달 동안 토·일 휴무가 정책 하한에 못 미친다.
  *
- * 정책값은 엔진 기본값과 동일한 상수로 시작한다. 회사별 커스텀이 필요해지면
- * CompanyRule 로 옮긴다.
+ * E4·E5·W2 는 [배차 설정]의 헌법 룰 토글(noExpiredLicense /
+ * noExpiredQualification / noAssignOnApprovedOff / guaranteedWeekendOff)을
+ * 따른다 — 꺼 둔 회사에서는 검사하지 않는다.
+ *
+ * 연속근무 상한은 [배차 설정]의 헌법 룰 weeklyMaxWorkDays 를 따른다 —
+ * 담당자가 설정 화면에서 바꾼 값이 생성(엔진)과 발행 게이트에서 같이 먹어야
+ * 하기 때문이다. 정책을 못 읽으면 엔진 기본값(6)으로 검사한다.
  */
 
-/** 엔진 기본값과 동일 (inspector.py: max_consecutive_days=6) */
-const MAX_CONSECUTIVE_DAYS = 6;
+/** 폴백 — 엔진 기본값과 동일 (inspector.py: max_consecutive_days=6) */
+const DEFAULT_MAX_CONSECUTIVE_DAYS = 6;
+
+/** 검산에 필요한 정책값 — 배차 설정이 단일 소스, 못 읽으면 안전한 기본값 */
+interface InspectionPolicy {
+  maxConsecutiveDays: number;
+  checkExpiredLicense: boolean;
+  checkExpiredQualification: boolean;
+  checkApprovedOff: boolean;
+  minWeekendOff: number; // 0 = 검사 안 함
+}
+
+const DEFAULT_INSPECTION_POLICY: InspectionPolicy = {
+  maxConsecutiveDays: DEFAULT_MAX_CONSECUTIVE_DAYS,
+  checkExpiredLicense: true,
+  checkExpiredQualification: true,
+  checkApprovedOff: true,
+  minWeekendOff: 1,
+};
+
+async function inspectionPolicyFor(companyId: number | undefined): Promise<InspectionPolicy> {
+  if (!companyId) return DEFAULT_INSPECTION_POLICY;
+  try {
+    const policy = await loadCompanyPolicy(companyId);
+    const c = policy.constitutional;
+    const weekly = c?.weeklyMaxWorkDays;
+    const weekend = c?.guaranteedWeekendOff;
+    return {
+      maxConsecutiveDays:
+        weekly?.enabled && Number.isFinite(weekly.maxDays)
+          ? Math.min(10, Math.max(3, Math.round(weekly.maxDays)))
+          : DEFAULT_MAX_CONSECUTIVE_DAYS,
+      checkExpiredLicense: c?.noExpiredLicense?.enabled ?? true,
+      checkExpiredQualification: c?.noExpiredQualification?.enabled ?? true,
+      checkApprovedOff: c?.noAssignOnApprovedOff?.enabled ?? true,
+      minWeekendOff: weekend?.enabled ? Math.max(0, Math.round(weekend.minPerMonth ?? 1)) : 0,
+    };
+  } catch {
+    // 정책 로드 실패로 발행 검산을 막지는 않는다
+    return DEFAULT_INSPECTION_POLICY;
+  }
+}
 
 /** 응답에 담는 목록 상한 — 전체 건수는 counts 로 따로 준다 */
 const MAX_LIST = 50;
 
 export interface PublishViolation {
-  rule: 'E2' | 'E3' | 'W1';
+  rule: 'E2' | 'E3' | 'E4' | 'E5' | 'W1' | 'W2';
   severity: 'error' | 'warn';
   /** E2 하위 구분 — 해결 방법이 다르다 */
   kind?: 'UNREGISTERED' | 'VACANT';
@@ -59,6 +111,12 @@ export interface PublishInspection {
     unregistered: number;
     consecutive: number;
     shortRest: number;
+    /** 면허·자격 만료 상태로 배정된 (기사×사유) 건수 */
+    expiredLicense: number;
+    /** 승인된 휴무일에 배정된 건수 */
+    approvedOff: number;
+    /** 월 최소 주말휴무에 못 미치는 기사 수 */
+    weekendOff: number;
   };
 }
 
@@ -87,17 +145,46 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
         date: true,
         shift: true,
         busId: true,
-        driver: { select: { name: true } },
+        driver: {
+          select: { name: true, licenseExpiresAt: true, qualificationExpiresAt: true },
+        },
       },
     }),
     // 그날 운행해야 하는 (날짜×차량) — 패턴 우선, 없으면 활성 차량×전일
     operatingCells(scheduleId),
-    prisma.schedule.findUnique({ where: { id: scheduleId }, select: { notes: true } }),
+    prisma.schedule.findUnique({
+      where: { id: scheduleId },
+      select: { notes: true, companyId: true, year: true, month: true },
+    }),
   ]);
+
+  // 검산 기준 — 배차 설정(헌법 룰)이 단일 소스
+  const pol = await inspectionPolicyFor(schedule?.companyId);
+  const maxConsecutiveDays = pol.maxConsecutiveDays;
+
+  // 승인된 휴무 (기사ID|날짜) — 이 달 것만. 기사앱엔 '승인'인데 배차표엔
+  // 근무로 남아 있는 상태를 잡는다.
+  const approvedOff = new Set<string>();
+  if (pol.checkApprovedOff && schedule?.companyId && schedule.year && schedule.month) {
+    const from = new Date(Date.UTC(schedule.year, schedule.month - 1, 1));
+    const to = new Date(Date.UTC(schedule.year, schedule.month, 1));
+    const offs = await prisma.dayOffRequest.findMany({
+      where: {
+        companyId: schedule.companyId,
+        status: 'APPROVED',
+        date: { gte: from, lt: to },
+      },
+      select: { driverId: true, date: true },
+    });
+    for (const o of offs) approvedOff.add(`${o.driverId}|${dateKey(o.date)}`);
+  }
 
   const errors: PublishViolation[] = [];
   const warnings: PublishViolation[] = [];
-  const counts = { vacant: 0, unregistered: 0, consecutive: 0, shortRest: 0 };
+  const counts = {
+    vacant: 0, unregistered: 0, consecutive: 0, shortRest: 0,
+    expiredLicense: 0, approvedOff: 0, weekendOff: 0,
+  };
 
   // 기사별 근무일 집합 + (기사, 날짜)별 시프트 집합 + (날짜, 차량, 시프트) 채움 여부
   const workDays = new Map<number, Set<string>>();
@@ -158,7 +245,7 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
     while (cursor <= end) {
       if (days.has(cursor)) run.push(cursor);
       else run = [];
-      if (run.length === MAX_CONSECUTIVE_DAYS + 1) {
+      if (run.length === maxConsecutiveDays + 1) {
         counts.consecutive++;
         consecutive.push({
           rule: 'E3',
@@ -168,10 +255,100 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
           date: run[0],
           message:
             `${nameOf.get(driverId)} — ${md(run[0])}부터 ` +
-            `연속 ${MAX_CONSECUTIVE_DAYS + 1}일 근무. 중간에 휴무를 넣어야 합니다.`,
+            `연속 ${maxConsecutiveDays + 1}일 근무. 중간에 휴무를 넣어야 합니다.`,
         });
       }
       cursor = nextDay(cursor);
+    }
+  }
+
+  // 심각도 순으로 목록 앞자리를 다투는 위반들 — 공석(E2)에 밀려 안 보이면 안 된다
+  const expired: PublishViolation[] = [];
+  const onApprovedOff: PublishViolation[] = [];
+
+  // ── E4 면허·자격 만료 — 만료일이 지난 날짜에 배정 (무면허 운행) ──
+  // 기사×사유 단위로 1건만 보고한다. 한 사람이 20일 배정돼 있다고 20줄이
+  // 뜨면 정작 다른 위반이 목록에서 밀려난다.
+  if (pol.checkExpiredLicense || pol.checkExpiredQualification) {
+    const firstBad = new Map<string, { driverId: number; label: string; date: string; until: string }>();
+    for (const s of slots) {
+      const dk = dateKey(s.date);
+      const checks: [boolean, Date | null, string][] = [
+        [pol.checkExpiredLicense, s.driver.licenseExpiresAt, '운전면허'],
+        [pol.checkExpiredQualification, s.driver.qualificationExpiresAt, '버스운전자격'],
+      ];
+      for (const [enabled, expiry, label] of checks) {
+        if (!enabled || !expiry) continue;
+        const until = dateKey(expiry);
+        if (dk <= until) continue; // 만료일 당일까지는 유효
+        const key = `${s.driverId}|${label}`;
+        const prev = firstBad.get(key);
+        if (!prev || dk < prev.date) {
+          firstBad.set(key, { driverId: s.driverId, label, date: dk, until });
+        }
+      }
+    }
+    for (const v of firstBad.values()) {
+      counts.expiredLicense++;
+      expired.push({
+        rule: 'E4',
+        severity: 'error',
+        driverId: v.driverId,
+        driverName: nameOf.get(v.driverId) ?? `기사#${v.driverId}`,
+        date: v.date,
+        message:
+          `${nameOf.get(v.driverId)} — ${v.label}이 ${v.until} 만료인데 ` +
+          `${md(v.date)}부터 배정돼 있습니다. 갱신 확인 전에는 배차할 수 없습니다.`,
+      });
+    }
+  }
+
+  // ── E5 승인 휴무 배정 — 회사가 승인한 휴무일인데 근무로 들어가 있다 ──
+  if (approvedOff.size > 0) {
+    for (const s of slots) {
+      const dk = dateKey(s.date);
+      if (!approvedOff.has(`${s.driverId}|${dk}`)) continue;
+      counts.approvedOff++;
+      if (onApprovedOff.length < MAX_LIST) {
+        onApprovedOff.push({
+          rule: 'E5',
+          severity: 'error',
+          driverId: s.driverId,
+          driverName: s.driver.name,
+          date: dk,
+          message:
+            `${s.driver.name} — ${md(dk)}은 승인된 휴무일인데 배정돼 있습니다. ` +
+            `기사앱에는 '승인'으로 표시됩니다.`,
+        });
+      }
+    }
+  }
+
+  // ── W2 주말휴무 부족 — 토·일 중 쉬는 날이 정책 하한에 못 미친다 ──
+  if (pol.minWeekendOff > 0 && schedule?.year && schedule.month) {
+    const weekendDays: string[] = [];
+    const cursorDate = new Date(Date.UTC(schedule.year, schedule.month - 1, 1));
+    while (cursorDate.getUTCMonth() === schedule.month - 1) {
+      const dow = cursorDate.getUTCDay();
+      if (dow === 0 || dow === 6) weekendDays.push(dateKey(cursorDate));
+      cursorDate.setUTCDate(cursorDate.getUTCDate() + 1);
+    }
+    for (const [driverId, days] of workDays) {
+      const off = weekendDays.filter((d) => !days.has(d)).length;
+      if (off >= pol.minWeekendOff) continue;
+      counts.weekendOff++;
+      if (warnings.length < MAX_LIST) {
+        warnings.push({
+          rule: 'W2',
+          severity: 'warn',
+          driverId,
+          driverName: nameOf.get(driverId) ?? `기사#${driverId}`,
+          date: weekendDays[0] ?? `${schedule.year}-${String(schedule.month).padStart(2, '0')}-01`,
+          message:
+            `${nameOf.get(driverId)} — 이 달 주말 휴무 ${off}일. ` +
+            `정책 하한 ${pol.minWeekendOff}일에 못 미칩니다.`,
+        });
+      }
     }
   }
 
@@ -203,10 +380,13 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
       ? (a.driverName ?? a.vehicle ?? '').localeCompare(b.driverName ?? b.vehicle ?? '', 'ko')
       : a.date.localeCompare(b.date);
 
-  // 연속근무는 건수가 적고 위험도가 높아 목록 앞쪽에 오도록 합친다
+  // 위험한 순서대로 앞에 놓는다 — 무면허(E4) > 과로(E3) > 승인휴무 무시(E5) >
+  // 공석(E2). 목록은 MAX_LIST 에서 잘리므로 순서가 곧 '무엇을 먼저 보여줄까'다.
+  expired.sort(byDate);
   consecutive.sort(byDate);
+  onApprovedOff.sort(byDate);
   errors.sort(byDate);
-  const merged = [...consecutive, ...errors].slice(0, MAX_LIST);
+  const merged = [...expired, ...consecutive, ...onApprovedOff, ...errors].slice(0, MAX_LIST);
   warnings.sort(byDate);
 
   return { errors: merged, warnings, counts };

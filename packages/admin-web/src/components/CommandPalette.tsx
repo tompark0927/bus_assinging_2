@@ -59,6 +59,7 @@ const PAGE_ITEMS: SearchResult[] = [
   // 일일 보고서 — 정식 출시 전까지 숨김
   { id: 'page-data', category: '페이지', icon: Users, title: '기초 데이터', subtitle: '기사·버스·노선 관리', path: '/dashboard/data' },
   { id: 'page-settings', category: '페이지', icon: Settings, title: '배차 설정', subtitle: '회사 운영 정책 편집', path: '/dashboard/settings' },
+  { id: 'page-engine', category: '페이지', icon: Settings, title: '엔진 튜닝', subtitle: '순번 로테이션·감차·공정성 (배차 설정 탭)', path: '/dashboard/settings?tab=engine' },
   { id: 'page-accounts', category: '페이지', icon: UserCog, title: '계정 관리', subtitle: '직원 계정 추가·수정', path: '/dashboard/accounts' },
   { id: 'page-company', category: '페이지', icon: Building2, title: '회사 정보', subtitle: '회사 이름·코드·등록 현황', path: '/dashboard/company' },
 ];
