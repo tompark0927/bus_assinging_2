@@ -13,6 +13,7 @@ import {
   loadEnginePolicy,
   saveEnginePolicy,
   EnginePolicyValidationError,
+  ENGINE_TUNING_KEY,
 } from '../services/enginePolicyStore';
 
 function generateEmployeeId(): string {
@@ -225,7 +226,13 @@ export const getCompanyPolicy = async (req: AuthRequest, res: Response) => {
     if (!company) {
       return res.status(404).json({ success: false, message: '회사 정보를 찾을 수 없습니다.' });
     }
-    let policy: unknown = company.policy && typeof company.policy === 'object' ? company.policy : null;
+    // 엔진 튜닝은 같은 JSON 안에 살지만 이 응답의 소관이 아니다.
+    // 빼지 않으면 설정 화면이 그대로 되돌려 보내면서 서로 덮어쓴다.
+    let policy: unknown = null;
+    if (company.policy && typeof company.policy === 'object' && !Array.isArray(company.policy)) {
+      const { [ENGINE_TUNING_KEY]: _engineTuning, ...rest } = company.policy as Record<string, unknown>;
+      policy = rest;
+    }
     let isDefault = false;
     if (!policy) {
       isDefault = true;
@@ -280,9 +287,20 @@ export const updateCompanyPolicy = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, message: 'crewModel.size 는 1~3 만 허용됩니다.' });
     }
 
+    // 엔진 튜닝은 같은 JSON 안에 있으므로 통째로 덮어쓰면 지워진다 — 옮겨 싣는다
+    const current = await prisma.company.findUnique({
+      where: { id: companyId },
+      select: { policy: true },
+    });
+    const carried =
+      current?.policy && typeof current.policy === 'object' && !Array.isArray(current.policy)
+        ? (current.policy as Record<string, unknown>)[ENGINE_TUNING_KEY]
+        : undefined;
+    const next = carried === undefined ? policy : { ...policy, [ENGINE_TUNING_KEY]: carried };
+
     await prisma.company.update({
       where: { id: companyId },
-      data: { policy },
+      data: { policy: next },
     });
     logger.info(`[CompanyPolicy] 정책 업데이트 — companyId=${companyId} preset=${policy.preset ?? 'CUSTOM'}`);
     return res.json({ success: true, data: { policy }, message: '정책이 저장되었습니다.' });
