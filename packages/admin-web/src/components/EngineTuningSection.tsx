@@ -6,7 +6,6 @@ import {
   ChevronDown,
   FileSpreadsheet,
   Loader2,
-  Save,
   Sparkles,
   Upload,
 } from 'lucide-react';
@@ -176,7 +175,15 @@ function confidenceBadge(c: number) {
   return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${color}`}>신뢰도 {pct}%</span>;
 }
 
-export default function EngineTuningSection({ onGoToPolicy }: { onGoToPolicy: () => void }) {
+export default function EngineTuningSection({
+  onGoToPolicy,
+  onSaveStateChange,
+}: {
+  onGoToPolicy: () => void;
+  /** 저장 상태·핸들러를 부모(배차 설정 페이지)에 올려 헤더 저장 버튼을 그리게 한다.
+   *  운영 정책 탭과 저장 위치를 통일하기 위함. */
+  onSaveStateChange?: (state: { dirty: boolean; saving: boolean; save: () => void }) => void;
+}) {
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [values, setValues] = useState<PolicyValues>({});
@@ -254,6 +261,16 @@ export default function EngineTuningSection({ onGoToPolicy }: { onGoToPolicy: ()
           '저장에 실패했습니다.',
       ),
   });
+
+  // 저장 버튼은 부모(배차 설정 헤더)에서 그린다 — 운영 정책 탭과 위치를 통일.
+  // dirty·저장중 상태가 바뀔 때마다 최신 save 핸들러와 함께 부모에 보고한다.
+  useEffect(() => {
+    onSaveStateChange?.({
+      dirty,
+      saving: saveMutation.isPending,
+      save: () => saveMutation.mutate(),
+    });
+  }, [dirty, saveMutation.isPending, onSaveStateChange]);
 
   const analyzeMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -336,22 +353,13 @@ export default function EngineTuningSection({ onGoToPolicy }: { onGoToPolicy: ()
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <BrainCircuit className="mt-0.5 text-blue-600 dark:text-blue-400" size={22} />
-          <p className="max-w-3xl text-[14px] leading-relaxed text-gray-600 dark:text-gray-300">
-            순번 로테이션·감차·짝궁 교대·예비 운영·공정성 등 <b>엔진 고유 규칙</b>을 관리합니다.
-            근무일수·연속근무·최소 휴식은 <b>운영 정책</b> 탭이 주인이며, 배차표를 생성할 때 그 값이 적용됩니다.
-          </p>
-        </div>
-        <button
-          onClick={() => saveMutation.mutate()}
-          disabled={!dirty || saveMutation.isPending}
-          className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {saveMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-          저장
-        </button>
+      <div className="flex items-start gap-3">
+        <BrainCircuit className="mt-0.5 text-blue-600 dark:text-blue-400" size={22} />
+        <p className="max-w-3xl text-[14px] leading-relaxed text-gray-600 dark:text-gray-300">
+          순번 로테이션·감차·짝궁 교대·예비 운영·공정성 등 <b>엔진 고유 규칙</b>을 관리합니다.
+          근무일수·연속근무·최소 휴식은 <b>운영 정책</b> 탭이 주인이며, 배차표를 생성할 때 그 값이 적용됩니다.
+          변경 후 우측 상단 <b>저장</b> 버튼으로 확정하세요.
+        </p>
       </div>
 
       {/* ── 온보딩: 엑셀 분석 + 추천 ── */}
