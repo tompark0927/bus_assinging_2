@@ -42,6 +42,7 @@ async function main() {
       where: { email: staff.email },
       update: {},
       create: {
+        companyId: company.id,
         name: staff.name,
         email: staff.email,
         phone: staff.phone,
@@ -164,6 +165,7 @@ async function main() {
       where: { email: driverInfo.email },
       update: {},
       create: {
+        companyId: company.id,
         name: driverInfo.name,
         email: driverInfo.email,
         phone: driverInfo.phone,
@@ -226,14 +228,14 @@ async function main() {
     await prisma.companyRule.upsert({
       where: { id: -1 }, // Force create
       update: {},
-      create: rule,
+      create: { ...rule, companyId: company.id },
     }).catch(async () => {
       // If upsert fails, just create
       const exists = await prisma.companyRule.findFirst({
-        where: { title: rule.title },
+        where: { title: rule.title, companyId: company.id },
       });
       if (!exists) {
-        await prisma.companyRule.create({ data: rule });
+        await prisma.companyRule.create({ data: { ...rule, companyId: company.id } });
       }
     });
   }

@@ -74,12 +74,19 @@ Notifications.setNotificationHandler({
     const channelSettings = settings.channels[channelKey];
 
     // Check if user has muted this type or all
+    // SDK 54: shouldShowAlert → shouldShowBanner(전면 배너) + shouldShowList(알림 센터)
     if (settings.muteAll || channelSettings?.muted) {
-      return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
+      return {
+        shouldShowBanner: false,
+        shouldShowList: false,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
     }
 
     return {
-      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
       shouldPlaySound: channel.sound,
       shouldSetBadge: true,
     };

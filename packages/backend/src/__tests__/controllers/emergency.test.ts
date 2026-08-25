@@ -30,6 +30,21 @@ jest.mock('../../services/socketService', () => ({
   emitToCompany: jest.fn(),
 }));
 
+// 주휴일 자격 검사는 별도 단위 테스트(weeklyRestEligibility.unit)에서 검증한다.
+// 컨트롤러 테스트에서는 "적격(통과)" 로 스텁해 컨트롤러 로직에 집중한다.
+jest.mock('../../services/weeklyRestEligibility', () => ({
+  wouldExceedWeeklyWork: jest
+    .fn()
+    .mockResolvedValue({ eligible: true, weeklyWorkDays: 0, maxDays: 6, ruleEnabled: true }),
+  filterEligibleDropsForDriver: jest.fn((_driverId: number, drops: unknown[]) =>
+    Promise.resolve(drops),
+  ),
+}));
+
+jest.mock('../../services/solverDispatchService', () => ({
+  loadCompanyPolicy: jest.fn().mockResolvedValue({}),
+}));
+
 const mockPrisma = prisma as unknown as Record<string, Record<string, jest.Mock>>;
 
 function createMockRes(): Response {
@@ -253,10 +268,51 @@ describe('createEmergencyDrop controller', () => {
     expect(notifyAdminsNewDrop).toHaveBeenCalledWith(
       expect.objectContaining({ companyId: 1, dropId: 5, routeNumber: '780' }),
     );
+    // 드랍 기사 = 슬롯 주인 (본인 드랍이므로 req.user.id 와 동일한 10)
+    expect(mockPrisma.emergencyDrop.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ slotId: 100, driverId: 10, status: 'OPEN' }),
+      }),
+    );
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: true }),
     );
+  });
+
+  it('관리자가 다른 기사 슬롯을 드랍하면 드랍 기사=슬롯 주인(요청자 아님)', async () => {
+    // 관리자(id 99)가 기사(id 10)의 슬롯을 대신 드랍
+    const req = createAuthReq({
+      user: { id: 99, companyId: 1, email: 'admin@test', role: 'ADMIN', name: '관리자' },
+      body: { slotId: 100, reason: '관리자 대행 드랍' },
+    } as never);
+    const res = createMockRes();
+
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 30);
+
+    mockPrisma.scheduleSlot.findUnique.mockResolvedValue({
+      id: 100, driverId: 10, isRestDay: false,
+      date: futureDate, shift: 'FULL_DAY', routeId: 1,
+      route: { routeNumber: '780' },
+      driver: { name: '김기사' },
+      schedule: { companyId: 1 },
+    });
+    mockPrisma.emergencyDrop.findUnique.mockResolvedValue(null);
+    mockPrisma.emergencyDrop.create.mockResolvedValue({ id: 6, slotId: 100, driverId: 10, status: 'OPEN' });
+    mockPrisma.scheduleSlot.update.mockResolvedValue({ id: 100, status: 'DROPPED' });
+
+    await createEmergencyDrop(req, res);
+
+    // 핵심: driverId 가 요청 관리자(99)가 아니라 슬롯 주인(10) 이어야 한다
+    expect(mockPrisma.emergencyDrop.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ slotId: 100, driverId: 10 }),
+      }),
+    );
+    const createArg = mockPrisma.emergencyDrop.create.mock.calls[0][0];
+    expect(createArg.data.driverId).not.toBe(99);
+    expect(res.status).toHaveBeenCalledWith(201);
   });
 
   it('should return 500 on error', async () => {

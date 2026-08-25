@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import {
-  AlertCircle, AlertTriangle, CheckCircle2, FileSpreadsheet, Info, Loader2, Upload,
+  AlertCircle, AlertTriangle, CheckCircle2, FileSpreadsheet, Info, Loader2, Upload, ShieldCheck,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { engineApi } from '../services/api';
+import PageHeader from '../components/PageHeader';
+import { inspectHelp } from '../help/helpContent';
 
 /**
  * 배차표 검산 — 이미 짜 놓은 엑셀을 올려서 빠진 곳만 찾아준다.
@@ -89,16 +91,20 @@ export default function InspectPage() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
-      <header>
-        <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">배차표 검산</h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          짜 놓으신 배차표 엑셀을 올리면 규칙에 어긋난 곳만 찾아 드립니다.
-          <span className="font-medium text-gray-700 dark:text-gray-300">
-            {' '}배차표를 고치지도, 저장하지도 않습니다.
-          </span>
-        </p>
-      </header>
+    <div className="space-y-6">
+      <PageHeader
+        icon={ShieldCheck}
+        title="배차표 검산"
+        help={inspectHelp}
+        description={
+          <>
+            짜 놓으신 배차표 엑셀을 올리면 규칙에 어긋난 곳만 찾아 드립니다.
+            <span className="font-medium text-gray-700 dark:text-gray-300">
+              {' '}배차표를 고치지도, 저장하지도 않습니다.
+            </span>
+          </>
+        }
+      />
 
       {/* 업로드 */}
       <div
