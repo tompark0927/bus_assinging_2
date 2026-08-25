@@ -129,6 +129,8 @@ export default function DispatchSettingsPage() {
 
   const [policy, setPolicy] = useState<CompanyPolicy | null>(null);
   const [dirty, setDirty] = useState(false);
+  // 엔진 튜닝 탭의 저장 상태 — 두 탭 저장 버튼을 헤더 한곳에서 그리기 위해 자식이 보고한다.
+  const [engineSave, setEngineSave] = useState<{ dirty: boolean; saving: boolean; save: () => void } | null>(null);
 
   useEffect(() => {
     if (data?.policy && !policy) {
@@ -213,6 +215,16 @@ export default function DispatchSettingsPage() {
                 저장
               </button>
             )}
+            {tab === 'engine' && engineSave && (
+              <button
+                onClick={engineSave.save}
+                disabled={!engineSave.dirty || engineSave.saving}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-2 text-[15px] font-medium"
+              >
+                {engineSave.saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                저장
+              </button>
+            )}
           </>
         }
       >
@@ -252,23 +264,20 @@ export default function DispatchSettingsPage() {
         <div className="flex items-start gap-3">
           <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
           <div className="text-[14px] leading-relaxed text-blue-900 dark:text-blue-200">
-            <p className="font-semibold mb-1">생성할 때 엔진에 전달되는 항목</p>
+            <p className="font-semibold mb-1">생성에 적용되는 항목</p>
             <p>
-              월 근무일수 범위 · 주간 최대 근무일(연속근무 상한) · 운행 후 최소 휴식(오후→다음날 오전 금지)
-              · 1인 승무/1교대 여부 · <b>승인된 휴무</b> — 배차표를 생성할 때마다 이 값이 적용됩니다.
+              월 근무일수 범위, 주간 최대 근무일, 최소 휴식 시간, 1인 승무 여부, 승인된 휴무
             </p>
-            <p className="font-semibold mt-2 mb-1">발행 전 안전 검산이 막는 항목</p>
+            <p className="font-semibold mt-2 mb-1">발행 검산</p>
             <p>
-              면허·자격 만료 기사 배정(발행 차단) · 승인 휴무일 배정(발행 차단) · 연속근무 초과(발행 차단)
-              · 월 최소 주말휴무 부족(경고) — 엔진이 짜든 엑셀로 가져오든, 손으로 고친 최종본까지 검사합니다.
+              면허 만료 배정 금지, 승인 휴무일 배정 금지, 연속근무 초과, 월 최소 주말휴무 부족
             </p>
-            <p className="font-semibold mt-2 mb-1">아직 자동 반영되지 않는 항목</p>
+            <p className="font-semibold mt-2 mb-1">아직 지원하지 않음</p>
             <p>
-              3교대·격일제, 승무 인원수(TRIO), 신규기사 단독 배정 금지, 사고 노선 금지 — 엔진은 오전/오후
-              2교대 짝궁 구조를 전제로 생성하므로, 이 규칙들은 생성 후 배차표에서 직접 확인해야 합니다.
+              3교대, 격일제, 승무 인원수(TRIO), 신규기사 단독 금지, 사고 노선 금지. 엔진은 2교대 짝궁 구조를 전제로 생성합니다.
             </p>
             <p className="mt-2">
-              순번 로테이션 · 주말 감차 · 짝궁 교대 · 예비 운영 · 공정성은{' '}
+              순번 로테이션, 주말 감차, 짝궁 교대, 예비 운영, 공정성은{' '}
               <button
                 type="button"
                 onClick={() => setTab('engine')}
@@ -653,7 +662,7 @@ export default function DispatchSettingsPage() {
         </Section>
           </>
         ) : (
-          <EngineTuningSection onGoToPolicy={() => setTab('policy')} />
+          <EngineTuningSection onGoToPolicy={() => setTab('policy')} onSaveStateChange={setEngineSave} />
         )}
     </div>
   );
