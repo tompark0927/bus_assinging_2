@@ -98,7 +98,10 @@ export const createEmergencyDrop = async (req: AuthRequest, res: Response) => {
       prisma.emergencyDrop.create({
         data: {
           slotId,
-          driverId: req.user!.id,
+          // 드랍 기사 = 슬롯의 실제 주인 (요청자가 아님).
+          // 관리자가 다른 기사의 슬롯을 대신 드랍하면 req.user.id 는 관리자이므로
+          // 반드시 slot.driverId 를 써야 "드랍 기사" 필드가 올바르게 표시된다.
+          driverId: slot.driverId,
           reason,
           status: 'OPEN',
         },

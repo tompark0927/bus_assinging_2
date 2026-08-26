@@ -414,7 +414,7 @@ router.post('/by-id/:id/rematch-drivers', requireRole('DISPATCH'), async (req: A
  * @swagger
  * /schedules/by-id/{id}/cell-explain:
  *   get:
- *     summary: "왜 이 기사가 이 칸인가" — 저장된 배차표에서 배정 근거 재구성
+ *     summary: '"왜 이 기사가 이 칸인가" — 저장된 배차표에서 배정 근거 재구성'
  *     description: 엔진 초안이 사라진 뒤에도, 담당자가 손으로 고친 칸까지 설명한다.
  *     tags: [Schedules]
  */

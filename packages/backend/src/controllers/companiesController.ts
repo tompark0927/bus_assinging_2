@@ -63,19 +63,43 @@ export const registerCompany = async (req: Request, res: Response) => {
       return res.status(409).json({ success: false, message: '이미 사용 중인 전화번호입니다.' });
     }
 
-    // 회사 코드는 회사명으로부터 자동 생성한다 (예: 진호버스 → JHBUS, 충돌 시 JHOBUS).
-    const companyCode = await generateUniqueCompanyCode(
-      companyName,
-      async (code) => !!(await prisma.company.findUnique({ where: { code } })),
-    );
-
     const hashedPassword = await bcrypt.hash(adminPassword, 10);
     const employeeId = generateEmployeeId();
 
-    // batch transaction: $use 미들웨어와 interactive transaction 충돌 회피
-    const company = await prisma.company.create({
-      data: { name: companyName, code: companyCode },
-    });
+    // 회사 코드는 회사명으로부터 자동 생성한다 (예: 진호버스 → JHBUS, 충돌 시 JHOBUS).
+    // "비었나 확인 → 생성"은 원자적이지 않다: 비슷한 이름의 두 회사가 동시에 가입하면
+    // 둘 다 같은 코드를 비어 있다고 보고 한쪽이 unique 위반(P2002)으로 500 이 났다.
+    // 충돌하면 이미 찜한 코드들을 제외하고 다시 뽑아 재시도한다.
+    const claimed = new Set<string>();
+    let company: Awaited<ReturnType<typeof prisma.company.create>> | undefined;
+    let companyCode = '';
+    for (let attempt = 0; attempt < 5 && !company; attempt++) {
+      companyCode = await generateUniqueCompanyCode(
+        companyName,
+        async (code) =>
+          claimed.has(code) || !!(await prisma.company.findUnique({ where: { code } })),
+      );
+      try {
+        // batch transaction: $use 미들웨어와 interactive transaction 충돌 회피
+        company = await prisma.company.create({
+          data: { name: companyName, code: companyCode },
+        });
+      } catch (createError) {
+        const code = (createError as { code?: string })?.code;
+        const target = (createError as { meta?: { target?: string[] } })?.meta?.target ?? [];
+        if (code === 'P2002' && target.includes('code')) {
+          claimed.add(companyCode);
+          continue;
+        }
+        throw createError;
+      }
+    }
+    if (!company) {
+      return res.status(409).json({
+        success: false,
+        message: '회사 코드 생성에 실패했습니다. 회사명을 조금 다르게 입력해 다시 시도해주세요.',
+      });
+    }
 
     let user;
     try {

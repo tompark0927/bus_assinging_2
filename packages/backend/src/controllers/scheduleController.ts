@@ -451,7 +451,12 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
     const forcePublish = (req.body as { force?: boolean } | undefined)?.force === true;
     if ((dupGroups.length > 0 || inspection.errors.length > 0) && !forcePublish) {
       const dupDrivers = await prisma.user.findMany({
-        where: { id: { in: [...new Set(dupGroups.map((g) => g.driverId))] } },
+        // companyId 를 반드시 함께 건다 — 멀티테넌시 가드(dev: throw)에 걸려
+        // 발행 게이트의 409 응답이 500 으로 바뀌던 자리다.
+        where: {
+          companyId: req.user!.companyId,
+          id: { in: [...new Set(dupGroups.map((g) => g.driverId))] },
+        },
         select: { id: true, name: true },
       });
       const nameOf = new Map(dupDrivers.map((d) => [d.id, d.name]));

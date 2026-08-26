@@ -127,6 +127,12 @@ export const getInspectionStats = async (req: AuthRequest, res: Response) => {
     const { year, month } = req.query;
     const companyId = req.user!.companyId;
 
+    // year/month 가 없으면 new Date(NaN) 이 되어 Prisma 가 던지고 500 이 났다.
+    // attendanceController 와 같은 기준으로 400 을 돌려준다.
+    if (!year || !month || isNaN(Number(year)) || isNaN(Number(month))) {
+      return res.status(400).json({ success: false, message: 'year, month 파라미터가 필요합니다.' });
+    }
+
     const startDate = new Date(Number(year), Number(month) - 1, 1);
     const endDate = new Date(Number(year), Number(month), 0);
 
