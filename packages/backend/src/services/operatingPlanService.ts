@@ -1,5 +1,5 @@
 import { prisma } from '../utils/prisma';
-import { getHolidaysForMonth } from '../utils/holidays';
+import { getAppliedHolidaysForMonth } from './holidayPolicyService';
 
 /**
  * 운행 계획 — "그날 어느 차가 나가는가".
@@ -108,7 +108,8 @@ export async function buildOperatingPlan(
   month: number,
 ): Promise<OperatingPlan> {
   const rules = await getRouteOperatingRules(companyId);
-  const holidays = getHolidaysForMonth(year, month);
+  // 회사가 확정한 공휴일 기준 — 아직 확인하지 않은 해는 법정공휴일 전부가 기본값이다.
+  const holidays = await getAppliedHolidaysForMonth(companyId, year, month);
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
 
   const busOperatingDates = new Map<number, string[]>();

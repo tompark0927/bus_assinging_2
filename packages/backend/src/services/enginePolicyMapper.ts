@@ -77,6 +77,11 @@ export interface EnginePolicyDoc {
   values?: Record<string, unknown>;
   holidays?: string[];
   special_reductions?: [string, string, string][];
+  /**
+   * 연도별 공휴일 확인 이력 (holidayPolicyService 소관).
+   * DB 에만 남는 값이라 mergeEnginePolicy 가 만드는 엔진 요청 본문에는 넣지 않는다.
+   */
+  holiday_review?: Record<string, unknown>;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import HolidayReviewPanel from './HolidayReviewPanel';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   BrainCircuit,
@@ -187,7 +188,6 @@ export default function EngineTuningSection({
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [values, setValues] = useState<PolicyValues>({});
-  const [holidays, setHolidays] = useState<string>('');
   const [dirty, setDirty] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
@@ -211,7 +211,6 @@ export default function EngineTuningSection({
   useEffect(() => {
     if (policyData?.policy) {
       setValues({ ...(policyData.policy.values ?? {}) });
-      setHolidays((policyData.policy.holidays ?? []).join(', '));
       setDirty(false);
     }
   }, [policyData]);
@@ -240,13 +239,11 @@ export default function EngineTuningSection({
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const holidayList = holidays
-        .split(/[,\s]+/)
-        .map(x => x.trim())
-        .filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x));
+      // 공휴일은 HolidayReviewPanel 이 별도 엔드포인트로 저장한다.
+      // 여기서는 이미 저장된 값을 그대로 실어 보내 덮어쓰지 않게만 한다.
       return companyPolicyApi.updateEngine({
         values,
-        holidays: holidayList,
+        holidays: policyData?.policy?.holidays ?? [],
         special_reductions: policyData?.policy?.special_reductions ?? [],
       });
     },
@@ -547,21 +544,7 @@ export default function EngineTuningSection({
         );
       })}
 
-      {/* ── 공휴일 캘린더 ── */}
-      <section className="rounded-xl border border-gray-200 bg-white p-5">
-        <h3 className="text-sm font-semibold text-gray-900">공휴일 (감차 적용일)</h3>
-        <p className="mt-0.5 text-xs text-gray-500">
-          주말 외 감차를 적용할 날짜를 쉼표로 구분해 입력하세요 (예: 2026-08-15, 2026-10-03).
-          아시아드·선거일 같은 특별 감차일도 여기에 추가합니다.
-        </p>
-        <textarea
-          value={holidays}
-          onChange={e => { setHolidays(e.target.value); setDirty(true); }}
-          rows={2}
-          placeholder="2026-08-15, 2026-10-03"
-          className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-        />
-      </section>
+      <HolidayReviewPanel />
 
       <button
         onClick={() => setShowAdvanced(v => !v)}

@@ -15,6 +15,11 @@ import {
   EnginePolicyValidationError,
   ENGINE_TUNING_KEY,
 } from '../services/enginePolicyStore';
+import {
+  getHolidayReview,
+  saveHolidayReview,
+  HolidayReviewValidationError,
+} from '../services/holidayPolicyService';
 
 function generateEmployeeId(): string {
   return 'ADM' + Math.random().toString(36).substr(2, 6).toUpperCase();
@@ -341,6 +346,57 @@ export const updateEnginePolicy = async (req: AuthRequest, res: Response) => {
     return res.json({ success: true, data: { policy: saved }, message: '엔진 설정이 저장되었습니다.' });
   } catch (error) {
     if (error instanceof EnginePolicyValidationError) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+/**
+ * GET /api/v1/companies/holidays/:year
+ * 그 해의 빨간날 후보 전체 + 이 회사가 무엇을 적용 중인지.
+ * 아직 확인하지 않은 해면 confirmed=false 로 내려가고, 화면이 확인을 요청한다.
+ */
+export const getCompanyHolidays = async (req: AuthRequest, res: Response) => {
+  try {
+    const year = Number(req.params.year);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      return res.status(400).json({ success: false, message: '연도가 올바르지 않습니다.' });
+    }
+    const review = await getHolidayReview(req.user!.companyId, year);
+    return res.json({ success: true, data: review });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+/**
+ * PUT /api/v1/companies/holidays/:year
+ * body: { applied: string[], extra?: { date, name }[] }
+ */
+export const updateCompanyHolidays = async (req: AuthRequest, res: Response) => {
+  try {
+    const year = Number(req.params.year);
+    const body = (req.body ?? {}) as { applied?: unknown; extra?: unknown };
+    if (!Array.isArray(body.applied)) {
+      return res.status(400).json({ success: false, message: '적용할 날짜 목록(applied)이 필요합니다.' });
+    }
+    const review = await saveHolidayReview(req.user!.companyId, year, {
+      applied: body.applied as string[],
+      extra: Array.isArray(body.extra) ? (body.extra as { date: string; name: string }[]) : [],
+    });
+    logger.info(
+      `[Holidays] ${year}년 공휴일 확정 — companyId=${req.user!.companyId} 적용 ${review.appliedCount}일`,
+    );
+    return res.json({
+      success: true,
+      data: review,
+      message: `${year}년 공휴일 ${review.appliedCount}일을 적용했습니다.`,
+    });
+  } catch (error) {
+    if (error instanceof HolidayReviewValidationError) {
       return res.status(400).json({ success: false, message: error.message });
     }
     logger.error(error);

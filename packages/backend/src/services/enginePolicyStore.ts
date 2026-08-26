@@ -47,6 +47,12 @@ function coerce(raw: unknown): EnginePolicyDoc | null {
     special_reductions: Array.isArray(doc.special_reductions)
       ? (doc.special_reductions as [string, string, string][])
       : [],
+    // 공휴일 확인 이력은 형식을 여기서 따지지 않는다 — holidayPolicyService 가
+    // 읽을 때 검증한다. 여기서 떨어뜨리면 저장할 때마다 이력이 날아간다.
+    holiday_review:
+      doc.holiday_review && typeof doc.holiday_review === 'object' && !Array.isArray(doc.holiday_review)
+        ? (doc.holiday_review as Record<string, unknown>)
+        : undefined,
   };
 }
 
@@ -145,9 +151,18 @@ export async function saveEnginePolicy(
     values: doc.values ?? {},
     holidays,
     special_reductions: special,
+    holiday_review: doc.holiday_review,
   };
   await persist(companyId, next);
   return next;
+}
+
+/**
+ * 검증 없이 문서를 그대로 저장한다 — 이미 검증을 마친 호출자용
+ * (holidayPolicyService 처럼 자기 형식을 스스로 검증하는 쪽).
+ */
+export async function persistEnginePolicy(companyId: number, doc: EnginePolicyDoc): Promise<void> {
+  await persist(companyId, doc);
 }
 
 /**

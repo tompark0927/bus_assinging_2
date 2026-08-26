@@ -7,6 +7,8 @@ import {
   updateCompanyPolicy,
   getEnginePolicy,
   updateEnginePolicy,
+  getCompanyHolidays,
+  updateCompanyHolidays,
   getCompanyInfo,
   updateCompanyInfo,
 } from '../controllers/companiesController';
@@ -29,5 +31,9 @@ router.put('/policy', authenticate, requireRole('DISPATCH'), updateCompanyPolicy
 // AI 엔진 튜닝 정책 — 저장소는 DB (엔진은 요청마다 policy_json 을 받는 stateless 계산기)
 router.get('/engine-policy', authenticate, getEnginePolicy);
 router.put('/engine-policy', authenticate, requireRole('DISPATCH'), updateEnginePolicy);
+
+// 공휴일(감차 적용일) 확인 — 조회는 로그인만, 확정은 배차 담당 이상
+router.get('/holidays/:year', authenticate, getCompanyHolidays);
+router.put('/holidays/:year', authenticate, requireRole('DISPATCH'), updateCompanyHolidays);
 
 export default router;

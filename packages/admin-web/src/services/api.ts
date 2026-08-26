@@ -226,6 +226,13 @@ export const companyPolicyApi = {
   getEngine: () => api.get('/companies/engine-policy'),
   updateEngine: (policy: Record<string, unknown>) =>
     api.put('/companies/engine-policy', { policy }),
+  // 공휴일(감차 적용일)은 엔진 정책과 별도 엔드포인트다 — 해마다 확인하는
+  // 흐름이라 저장 시점이 다르고, 엔진 튜닝을 저장할 때 딸려 덮이면 안 된다.
+  getHolidays: (year: number) => api.get(`/companies/holidays/${year}`),
+  saveHolidays: (
+    year: number,
+    body: { applied: string[]; extra: { date: string; name: string }[] },
+  ) => api.put(`/companies/holidays/${year}`, body),
 };
 
 /**
