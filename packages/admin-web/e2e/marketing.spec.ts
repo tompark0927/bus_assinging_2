@@ -5,7 +5,8 @@ import { test, expect } from '@playwright/test';
  * Covers landing, pricing, support and the cross-page navigation between them.
  */
 test.describe('마케팅 페이지', () => {
-  test('홈에서 요금제 페이지로 이동', async ({ page }) => {
+  // 요금제 페이지는 현재 의도적으로 숨김 — /pricing 은 홈으로 리다이렉트된다(App.tsx).
+  test.skip('홈에서 요금제 페이지로 이동', async ({ page }) => {
     await page.goto('/');
     await page
       .getByRole('button', { name: /요금제/ })
@@ -15,7 +16,8 @@ test.describe('마케팅 페이지', () => {
     await expect(page.getByRole('heading', { name: /요금제를 고르세요/ })).toBeVisible();
   });
 
-  test('요금제 페이지: 월간/연간 토글', async ({ page }) => {
+  // 요금제 페이지는 현재 의도적으로 숨김 — /pricing 은 홈으로 리다이렉트된다(App.tsx).
+  test.skip('요금제 페이지: 월간/연간 토글', async ({ page }) => {
     await page.goto('/pricing');
     // Default: monthly
     await expect(page.getByText(/Pro/).first()).toBeVisible();
@@ -26,14 +28,16 @@ test.describe('마케팅 페이지', () => {
     await expect(page.getByText(/\/년/).first()).toBeVisible();
   });
 
-  test('요금제: 추천 플랜 CTA → 회원가입 이동', async ({ page }) => {
+  // 요금제 페이지는 현재 의도적으로 숨김 — /pricing 은 홈으로 리다이렉트된다(App.tsx).
+  test.skip('요금제: 추천 플랜 CTA → 회원가입 이동', async ({ page }) => {
     await page.goto('/pricing');
     // Pick the first 무료 시작 button (Starter) to keep selector simple.
     await page.getByRole('button', { name: /14일 무료 시작/ }).first().click();
     await expect(page).toHaveURL(/\/register/);
   });
 
-  test('요금제 → Enterprise CTA → 고객 지원 이동', async ({ page }) => {
+  // 요금제 페이지는 현재 의도적으로 숨김 — /pricing 은 홈으로 리다이렉트된다(App.tsx).
+  test.skip('요금제 → Enterprise CTA → 고객 지원 이동', async ({ page }) => {
     await page.goto('/pricing');
     await page.getByRole('button', { name: /도입 상담 신청/ }).click();
     await expect(page).toHaveURL(/\/support/);
@@ -43,7 +47,7 @@ test.describe('마케팅 페이지', () => {
     await page.goto('/support');
     await expect(page.getByRole('heading', { name: /언제든 도와드립니다/ })).toBeVisible();
     await expect(page.getByText(/032-000-0000/)).toBeVisible();
-    await expect(page.getByText(/support@busync\.co\.kr/)).toBeVisible();
+    await expect(page.getByText(/support\.busync@gmail\.com/).first()).toBeVisible();
     await expect(page.getByRole('button', { name: /문의 보내기/ })).toBeVisible();
   });
 

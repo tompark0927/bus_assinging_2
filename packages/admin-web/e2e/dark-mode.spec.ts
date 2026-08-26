@@ -1,15 +1,17 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('다크 모드', () => {
+// 다크 모드 토글은 현재 앱에 없다 — tailwind darkMode:'class' 와 dark: 클래스만 남아 있고
+// 클래스를 켜 주는 themeStore/토글 버튼이 없어 항상 라이트 모드다. 토글이 생기면 skip 해제.
+test.describe.skip('다크 모드', () => {
   test.beforeEach(async ({ page }) => {
     // Login before each test
     await page.goto('/login');
-    await page.getByLabel(/회사 코드/).clear();
-    await page.getByLabel(/회사 코드/).fill('DEMO');
-    await page.getByLabel(/이메일/).clear();
-    await page.getByLabel(/이메일/).fill('admin@demo.busync.kr');
-    await page.getByLabel(/비밀번호/).clear();
-    await page.getByLabel(/비밀번호/).fill('admin123!');
+    await page.getByLabel('회사 코드', { exact: true }).clear();
+    await page.getByLabel('회사 코드', { exact: true }).fill('DEMO');
+    await page.getByLabel('이메일', { exact: true }).clear();
+    await page.getByLabel('이메일', { exact: true }).fill('admin@demo.busync.kr');
+    await page.getByLabel('비밀번호', { exact: true }).clear();
+    await page.getByLabel('비밀번호', { exact: true }).fill('admin123!');
     await page.getByRole('button', { name: /로그인/ }).click();
     await expect(page).toHaveURL(/dashboard/, { timeout: 10000 });
   });

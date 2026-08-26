@@ -1,5 +1,6 @@
 import request from 'supertest';
 import app from '../app';
+import { makeEmailVerifyToken, uniquePhone } from './helpers/emailVerify';
 
 /**
  * 멀티테넌시 격리 테스트
@@ -16,8 +17,9 @@ async function registerCompany(suffix: string) {
       companyCode: code,
       adminName: `관리자${suffix}`,
       adminEmail: email,
-      adminPhone: '010-0000-0000',
+      adminPhone: uniquePhone(),
       adminPassword: 'TestPass123!',
+      emailVerifyToken: makeEmailVerifyToken(email),
     });
 
   if (res.status !== 201) throw new Error(`Company registration failed: ${JSON.stringify(res.body)}`);
@@ -30,10 +32,9 @@ describe('Multitenancy Isolation', () => {
   let companyB: { token: string; companyId: number };
 
   beforeAll(async () => {
-    [companyA, companyB] = await Promise.all([
-      registerCompany('A'),
-      registerCompany('B'),
-    ]);
+    // 순차 등록 — 회사 코드는 회사명에서 파생되므로 동시 등록 시 코드 충돌(P2002)이 난다.
+    companyA = await registerCompany('A');
+    companyB = await registerCompany('B');
   });
 
   it('GET /users - Company A cannot see Company B users', async () => {

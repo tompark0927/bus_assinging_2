@@ -1,7 +1,10 @@
 import request from 'supertest';
 import app from '../app';
+import { makeEmailVerifyToken, uniquePhone } from './helpers/emailVerify';
 
 const TEST_COMPANY_CODE = ('TC' + Date.now().toString().slice(-6)).slice(0, 10);
+const FIRST_ADMIN_EMAIL = `admin${Date.now()}@test.com`;
+const WEAK_EMAIL = `weak${Date.now()}@test.com`;
 let adminToken: string;
 let driverToken: string;
 let companyId: number;
@@ -15,9 +18,10 @@ describe('Auth API', () => {
           companyName: '테스트버스',
           companyCode: TEST_COMPANY_CODE,
           adminName: '관리자',
-          adminEmail: `admin${Date.now()}@test.com`,
-          adminPhone: '010-1234-5678',
+          adminEmail: FIRST_ADMIN_EMAIL,
+          adminPhone: uniquePhone(),
           adminPassword: 'TestPass123!',
+          emailVerifyToken: makeEmailVerifyToken(FIRST_ADMIN_EMAIL),
         });
 
       expect(res.status).toBe(201);
@@ -28,16 +32,17 @@ describe('Auth API', () => {
       companyId = d.user?.companyId || d.company?.id;
     });
 
-    it('should reject duplicate company code', async () => {
+    // 회사 코드는 서버가 회사명에서 자동 생성한다(요청값 무시) → 중복 판정 기준은 관리자 이메일.
+    it('should reject duplicate admin email', async () => {
       const res = await request(app)
         .post('/api/v1/companies/register')
         .send({
           companyName: '테스트버스2',
-          companyCode: TEST_COMPANY_CODE,
           adminName: '관리자2',
-          adminEmail: `admin2${Date.now()}@test.com`,
-          adminPhone: '010-9999-9999',
+          adminEmail: FIRST_ADMIN_EMAIL,
+          adminPhone: uniquePhone(),
           adminPassword: 'TestPass123!',
+          emailVerifyToken: makeEmailVerifyToken(FIRST_ADMIN_EMAIL),
         });
 
       expect(res.status).toBe(409);
@@ -50,9 +55,10 @@ describe('Auth API', () => {
           companyName: '테스트',
           companyCode: ('WK' + Date.now().toString().slice(-6)).slice(0, 10),
           adminName: '관리자',
-          adminEmail: `weak${Date.now()}@test.com`,
-          adminPhone: '010-0000-0000',
+          adminEmail: WEAK_EMAIL,
+          adminPhone: uniquePhone(),
           adminPassword: '123',
+          emailVerifyToken: makeEmailVerifyToken(WEAK_EMAIL),
         });
 
       expect(res.status).toBe(400);
@@ -71,8 +77,9 @@ describe('Auth API', () => {
           companyCode: ('LG' + Date.now().toString().slice(-6)).slice(0, 10),
           adminName: '로그인관리자',
           adminEmail: email,
-          adminPhone: '010-1111-2222',
+          adminPhone: uniquePhone(),
           adminPassword: 'TestPass123!',
+          emailVerifyToken: makeEmailVerifyToken(email),
         });
 
       expect(regRes.status).toBe(201);

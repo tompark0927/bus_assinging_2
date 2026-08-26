@@ -1,46 +1,71 @@
 import { test, expect } from '@playwright/test';
 
+/** 사이드바로 범위를 좁힌다 — 대시보드 본문에도 같은 이름의 바로가기 링크가 있다. */
+const sidebar = (page: import('@playwright/test').Page) =>
+  page.getByRole('navigation', { name: /메인 네비게이션/ });
+
 test.describe('사이드바 네비게이션', () => {
   test.beforeEach(async ({ page }) => {
     // Login before each test
     await page.goto('/login');
-    await page.getByLabel(/회사 코드/).clear();
-    await page.getByLabel(/회사 코드/).fill('DEMO');
-    await page.getByLabel(/이메일/).clear();
-    await page.getByLabel(/이메일/).fill('admin@demo.busync.kr');
-    await page.getByLabel(/비밀번호/).clear();
-    await page.getByLabel(/비밀번호/).fill('admin123!');
+    await page.getByLabel('회사 코드', { exact: true }).clear();
+    await page.getByLabel('회사 코드', { exact: true }).fill('DEMO');
+    await page.getByLabel('이메일', { exact: true }).clear();
+    await page.getByLabel('이메일', { exact: true }).fill('admin@demo.busync.kr');
+    await page.getByLabel('비밀번호', { exact: true }).clear();
+    await page.getByLabel('비밀번호', { exact: true }).fill('admin123!');
     await page.getByRole('button', { name: /로그인/ }).click();
     await expect(page).toHaveURL(/dashboard/, { timeout: 10000 });
   });
 
   test('대시보드 링크가 활성화됨', async ({ page }) => {
-    const dashboardLink = page.getByRole('link', { name: '대시보드' });
+    const dashboardLink = sidebar(page).getByRole('link', { name: '대시보드' });
     await expect(dashboardLink).toBeVisible();
   });
 
   test('배차표 페이지로 이동', async ({ page }) => {
-    await page.getByRole('link', { name: '배차표' }).click();
+    await sidebar(page).getByRole('link', { name: '배차표 관리', exact: true }).click();
     await expect(page).toHaveURL(/schedule/);
   });
 
-  test('기사 관리 페이지로 이동', async ({ page }) => {
-    await page.getByRole('link', { name: '기사 관리' }).click();
-    await expect(page).toHaveURL(/drivers/);
+  // 기사/버스/노선 관리는 '기초 데이터' 한 페이지로 통합됐다 (구 /drivers, /buses, /routes 없음).
+  test('기초 데이터 페이지로 이동', async ({ page }) => {
+    await sidebar(page).getByRole('link', { name: '기초 데이터', exact: true }).click();
+    await expect(page).toHaveURL(/data/);
   });
 
-  test('버스 관리 페이지로 이동', async ({ page }) => {
-    await page.getByRole('link', { name: '버스 관리' }).click();
-    await expect(page).toHaveURL(/buses/);
+  test('대타 관리 페이지로 이동', async ({ page }) => {
+    await sidebar(page).getByRole('link', { name: '대타 관리', exact: true }).click();
+    await expect(page).toHaveURL(/emergency/);
   });
 
-  test('노선 관리 페이지로 이동', async ({ page }) => {
-    await page.getByRole('link', { name: '노선 관리' }).click();
-    await expect(page).toHaveURL(/routes/);
+  test('오늘 운행 현황 페이지로 이동', async ({ page }) => {
+    await sidebar(page).getByRole('link', { name: '오늘 운행 현황', exact: true }).click();
+    await expect(page).toHaveURL(/today/);
+  });
+
+  test('배차표 검산 페이지로 이동', async ({ page }) => {
+    await sidebar(page).getByRole('link', { name: '배차표 검산', exact: true }).click();
+    await expect(page).toHaveURL(/inspect/);
+  });
+
+  test('배차 설정 페이지로 이동', async ({ page }) => {
+    await sidebar(page).getByRole('link', { name: '배차 설정', exact: true }).click();
+    await expect(page).toHaveURL(/settings/);
+  });
+
+  test('계정 관리 페이지로 이동', async ({ page }) => {
+    await sidebar(page).getByRole('link', { name: '계정 관리', exact: true }).click();
+    await expect(page).toHaveURL(/accounts/);
+  });
+
+  test('회사 정보 페이지로 이동', async ({ page }) => {
+    await sidebar(page).getByRole('link', { name: '회사 정보', exact: true }).click();
+    await expect(page).toHaveURL(/company/);
   });
 
   test('휴무 요청 페이지로 이동', async ({ page }) => {
-    await page.getByRole('link', { name: '휴무 요청' }).click();
+    await sidebar(page).getByRole('link', { name: '휴무 요청', exact: true }).click();
     await expect(page).toHaveURL(/dayoff/);
   });
 
