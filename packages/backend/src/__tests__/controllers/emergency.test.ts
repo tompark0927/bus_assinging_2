@@ -4,7 +4,13 @@ import {
   createEmergencyDrop,
   acceptEmergencySlot,
   cancelEmergencyDrop,
+  getManualFillCandidates,
+  manualFillEmergency,
 } from '../../controllers/emergencyController';
+import {
+  wouldExceedWeeklyWork,
+  filterEligibleDropsForDriver,
+} from '../../services/weeklyRestEligibility';
 import { prisma } from '../../utils/prisma';
 import { AuthRequest } from '../../middleware/auth';
 
@@ -510,5 +516,228 @@ describe('cancelEmergencyDrop controller', () => {
     await cancelEmergencyDrop(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+
+// ─────────────────────────────────────────
+// 주휴일(근로기준법 제55조) 가드
+//
+// 이 가드는 2026-07 에 넣었다가 머지에서 통째로 유실된 적이 있다(6b2f8ea →
+// aff1296). 그때 살아남은 건 테스트 한 건뿐이었고, 서비스 코드와 화면 배지는
+// 남아 있는데 컨트롤러만 검사를 안 하는 상태로 몇 주를 갔다.
+// 그래서 "컨트롤러가 검사를 부르는가" 자체를 경로별로 못 박아 둔다.
+// ─────────────────────────────────────────
+
+const mockRestCheck = wouldExceedWeeklyWork as unknown as jest.Mock;
+const mockDropFilter = filterEligibleDropsForDriver as unknown as jest.Mock;
+
+/** 그 주 상한(6일)에 도달한 기사 */
+const AT_LIMIT = { eligible: false, weeklyWorkDays: 6, maxDays: 6, ruleEnabled: true };
+/** 아직 여유가 있는 기사 */
+const OK = { eligible: true, weeklyWorkDays: 3, maxDays: 6, ruleEnabled: true };
+
+describe('주휴일 가드 — 기사 앱 대타 목록', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDropFilter.mockImplementation((_d: number, drops: unknown[]) => Promise.resolve(drops));
+  });
+
+  it('기사에게는 주휴일 위반이 되는 대타를 목록에서 뺀다', async () => {
+    const req = createAuthReq({ query: {} }); // role: DRIVER, status 기본 OPEN
+    const res = createMockRes();
+    const drops = [
+      { id: 1, driverId: 99, slot: { date: new Date('2026-03-21') } },
+      { id: 2, driverId: 98, slot: { date: new Date('2026-03-28') } },
+    ];
+    mockPrisma.emergencyDrop.findMany.mockResolvedValue(drops);
+    mockPrisma.emergencyDrop.count.mockResolvedValue(2);
+    // 첫 건은 그 주 상한이라 걸러진다
+    mockDropFilter.mockResolvedValue([drops[1]]);
+
+    await getEmergencyDrops(req, res);
+
+    expect(mockDropFilter).toHaveBeenCalledWith(10, drops, 1);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ data: [drops[1]] }));
+  });
+
+  it('관리자에게는 전체 현황을 그대로 보여준다 (필터하지 않는다)', async () => {
+    const req = createAuthReq({
+      query: {},
+      user: { id: 1, companyId: 1, email: 'a@t.com', role: 'ADMIN', name: '관리자' },
+    } as never);
+    const res = createMockRes();
+    const drops = [{ id: 1, driverId: 99, slot: { date: new Date('2026-03-21') } }];
+    mockPrisma.emergencyDrop.findMany.mockResolvedValue(drops);
+    mockPrisma.emergencyDrop.count.mockResolvedValue(1);
+
+    await getEmergencyDrops(req, res);
+
+    expect(mockDropFilter).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ data: drops }));
+  });
+});
+
+describe('주휴일 가드 — 기사 자가 수락', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.scheduleSlot.findFirst.mockResolvedValue(null); // 같은 날 중복 없음
+    (prisma.$transaction as jest.Mock).mockImplementation(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        emergencyDrop: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        scheduleSlot: { update: jest.fn().mockResolvedValue({ id: 100 }) },
+      }),
+    );
+    mockPrisma.user.findMany.mockResolvedValue([]);
+  });
+
+  const openDrop = () =>
+    mockPrisma.emergencyDrop.findUnique.mockResolvedValue({
+      id: 5, status: 'OPEN', slotId: 100, driverId: 99,
+      slot: { date: new Date('2026-03-20'), route: { routeNumber: '780' } },
+      driver: { id: 99, name: '김기사', companyId: 1 },
+    });
+
+  it('그 주 상한에 도달한 기사의 수락을 409 로 막는다', async () => {
+    openDrop();
+    mockRestCheck.mockResolvedValue(AT_LIMIT);
+    const res = createMockRes();
+
+    await acceptEmergencySlot(createAuthReq({ params: { id: '5' } }), res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, code: 'WEEKLY_REST_VIOLATION' }),
+    );
+  });
+
+  it('검사는 트랜잭션 안에서 돈다 — 동시 수락 경쟁을 막기 위함', async () => {
+    openDrop();
+    mockRestCheck.mockResolvedValue(OK);
+    const res = createMockRes();
+
+    await acceptEmergencySlot(createAuthReq({ params: { id: '5' } }), res);
+
+    // 첫 인자가 prisma 본체가 아니라 트랜잭션 클라이언트(tx)여야 한다
+    const [db] = mockRestCheck.mock.calls[0];
+    expect(db).not.toBe(prisma);
+    expect(db).toHaveProperty('emergencyDrop');
+  });
+
+  it('여유가 있으면 정상 수락된다', async () => {
+    openDrop();
+    mockRestCheck.mockResolvedValue(OK);
+    const res = createMockRes();
+
+    await acceptEmergencySlot(createAuthReq({ params: { id: '5' } }), res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+});
+
+describe('주휴일 가드 — 관리자 수동 배정', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.scheduleSlot.findFirst.mockResolvedValue(null);
+    mockPrisma.emergencyDrop.findUnique.mockResolvedValue({
+      id: 5, status: 'OPEN', slotId: 100, driverId: 99,
+      slot: { id: 100, date: new Date('2026-03-20'), route: { routeNumber: '780' } },
+      driver: { id: 99, name: '김기사', companyId: 1 },
+    });
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 20, name: '이기사', companyId: 1, role: 'DRIVER', isActive: true,
+    });
+  });
+
+  const adminReq = (body: Record<string, unknown>) =>
+    createAuthReq({
+      params: { id: '5' },
+      body,
+      user: { id: 1, companyId: 1, email: 'a@t.com', role: 'ADMIN', name: '관리자' },
+    } as never);
+
+  it('후보 목록에 위반 여부를 표시한다 — 후보에서 빼지는 않는다', async () => {
+    const res = createMockRes();
+    mockPrisma.scheduleSlot.findMany.mockResolvedValue([]);
+    mockPrisma.user.findMany.mockResolvedValue([
+      { id: 20, name: '이기사', employeeId: 'DRV020', driverType: 'MAIN', isActive: true },
+    ]);
+    mockRestCheck.mockResolvedValue(AT_LIMIT);
+
+    await getManualFillCandidates(adminReq({}), res);
+
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [
+        expect.objectContaining({
+          id: 20,
+          weeklyRestViolation: true,
+          weeklyWorkDays: 6,
+          maxWeeklyWorkDays: 6,
+        }),
+      ],
+    });
+  });
+
+  it('사유 없이 위반 기사를 배정하면 409 로 사유를 요구한다', async () => {
+    const res = createMockRes();
+    mockRestCheck.mockResolvedValue(AT_LIMIT);
+
+    await manualFillEmergency(adminReq({ driverId: 20 }), res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'WEEKLY_REST_OVERRIDE_REQUIRED',
+        requiresOverride: true,
+        weeklyWorkDays: 6,
+      }),
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('사유를 입력하면 강제 배정하되 슬롯에 사유를 남긴다', async () => {
+    const res = createMockRes();
+    mockRestCheck.mockResolvedValue(AT_LIMIT);
+    const slotUpdate = jest.fn().mockResolvedValue({ id: 100 });
+    (prisma.$transaction as jest.Mock).mockImplementation(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        emergencyDrop: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        scheduleSlot: { update: slotUpdate },
+      }),
+    );
+
+    await manualFillEmergency(
+      adminReq({ driverId: 20, override: true, overrideReason: '대체 인력 없음' }),
+      res,
+    );
+
+    expect(slotUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          driverId: 20,
+          isManualOverride: true,
+          overrideReason: expect.stringContaining('대체 인력 없음'),
+        }),
+      }),
+    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  it('위반이 아니면 오버라이드 기록을 남기지 않는다', async () => {
+    const res = createMockRes();
+    mockRestCheck.mockResolvedValue(OK);
+    const slotUpdate = jest.fn().mockResolvedValue({ id: 100 });
+    (prisma.$transaction as jest.Mock).mockImplementation(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        emergencyDrop: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        scheduleSlot: { update: slotUpdate },
+      }),
+    );
+
+    await manualFillEmergency(adminReq({ driverId: 20 }), res);
+
+    expect(slotUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { driverId: 20, status: 'FILLED' } }),
+    );
   });
 });
