@@ -71,7 +71,7 @@ describe('saveEngineDraft — 덮어쓰기 확인 게이트', () => {
     mockPrisma.bus.findMany.mockResolvedValue([]);
     mockPrisma.user.findMany.mockResolvedValue([]);
 
-    await expect(saveEngineDraft(1, 1, PAYLOAD)).rejects.toThrow('차량번호가 하나도 일치하지');
+    await expect(saveEngineDraft(1, 1, PAYLOAD)).rejects.toThrow('차량번호가 기초 데이터와 하나도 일치하지 않습니다');
     expect(mockPrisma.scheduleSlot.count).not.toHaveBeenCalled();
   });
 
@@ -81,7 +81,7 @@ describe('saveEngineDraft — 덮어쓰기 확인 게이트', () => {
 
     await expect(
       saveEngineDraft(1, 1, { ...PAYLOAD, confirmOverwrite: true }),
-    ).rejects.toThrow('차량번호가 하나도 일치하지');
+    ).rejects.toThrow('차량번호가 기초 데이터와 하나도 일치하지 않습니다');
     // 게이트의 동명 초안 조회가 실행되지 않았다
     expect(mockPrisma.schedule.findFirst).not.toHaveBeenCalled();
   });

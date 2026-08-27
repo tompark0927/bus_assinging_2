@@ -44,6 +44,7 @@ from busync_engine.importer.monthly import (
     looks_like_monthly_sheet,
     parse_monthly_sheet,
 )
+from busync_engine.importer.daily_detail import has_daily_detail, parse_daily_detail
 from busync_engine.importer.weekly import SHEET_YM_RE, parse_workbook_month
 from busync_engine.policy import CompanyPolicy, catalog_as_json
 from busync_engine.recommend import analyze
@@ -116,6 +117,16 @@ def _load_rosters(path: str, division: str, sheets: list[str]) -> list:
 
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
+        # Busync 가 내보낸 파일이면 '일별 상세' 시트를 우선한다.
+        # 그 파일의 첫 시트는 행=기사 / 셀=노선번호라 아래 차량 중심 파서로는
+        # 한 글자도 안 읽힌다 — 그러면 빈 결과가 나가고 백엔드가 애먼 기초
+        # 데이터를 의심하게 만든다. '일별 상세' 는 (날짜×차량×오전/오후×기사)를
+        # 한 행씩 갖고 있어 오히려 원본 양식보다 정확하다.
+        if has_daily_detail(wb):
+            roster = parse_daily_detail(wb, division)
+            if roster is not None:
+                return [roster]
+
         out = []
         for name in sheets:
             ws = wb[name]
@@ -326,6 +337,16 @@ async def import_endpoint(
         raise HTTPException(422, "시트에서 배차 데이터를 읽지 못했습니다")
 
     roster = rosters[-1]
+    # 시트는 찾았는데 한 칸도 못 읽은 경우 — 여기서 막지 않으면 빈 cells 가
+    # 그대로 나가고, 백엔드는 "차량번호가 하나도 일치하지 않습니다"라며
+    # 엉뚱하게 기초 데이터를 의심하게 만든다. 원인은 파일 양식이다.
+    if not roster.entries:
+        raise HTTPException(
+            422,
+            f"'{names[-1]}' 시트에서 배차 내용을 한 칸도 읽지 못했습니다. "
+            "이 파일이 배차표 양식(행=차량, 칸=기사 이름)인지 확인해 주세요. "
+            "Busync 에서 내보낸 파일이라면 '일별 상세' 시트가 함께 있어야 읽을 수 있습니다.",
+        )
     cells: dict = defaultdict(dict)
     filled = 0
     for (d, v), e in sorted(roster.entries.items()):

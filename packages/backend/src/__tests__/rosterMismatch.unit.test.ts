@@ -112,3 +112,30 @@ describe('saveEngineDraft — 명단 대조 게이트', () => {
     }
   });
 });
+
+/**
+ * 실제 사고 회귀 — 담당자가 7월 배차표를 [Excel 내보내기]로 받아 8월 생성에
+ * 올렸더니 "차량번호가 하나도 일치하지 않습니다 (예: )"가 떴다. 괄호가 빈 건
+ * 파일에서 차량번호를 **한 개도 못 읽었다**는 뜻인데, 메시지는 기초 데이터를
+ * 가리켜서 멀쩡한 데이터를 뒤지게 만들었다. 두 경우를 갈라서 말해야 한다.
+ */
+describe('saveEngineDraft — 차량번호를 못 읽은 경우와 안 맞는 경우를 구분한다', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('파일에서 차량번호를 하나도 못 읽으면 양식(파일) 문제로 안내한다', async () => {
+    // 파일에 차번이 하나도 없으면 조회는 busNumber IN () 이라 결과가 비어 온다
+    // (기초 데이터에 차량이 있든 없든 마찬가지 — 그래서 이건 파일 쪽 문제다)
+    arrangeDb(['김영수'], 0);
+    // cells 가 비어 있다 = 엔진이 그 시트에서 한 칸도 못 읽었다
+    await expect(
+      saveEngineDraft(1, 1, { year: 2026, month: 8, cells: {}, confirmOverwrite: true }),
+    ).rejects.toThrow('차량번호를 하나도 읽지 못했습니다');
+  });
+
+  it('차량번호는 읽었는데 우리 회사 차가 아니면 데이터 문제로 안내한다', async () => {
+    arrangeDb(['김영수'], 0); // 파일엔 차번이 있지만 기초 데이터에 그 차가 없다
+    await expect(saveEngineDraft(1, 1, payloadWith(['김영수']))).rejects.toThrow(
+      '차량번호가 기초 데이터와 하나도 일치하지 않습니다',
+    );
+  });
+});
