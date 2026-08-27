@@ -119,3 +119,32 @@ def test_한_칸도_못_읽으면_조용히_빈결과를_주지_않는다(tmp_pa
         r = client.post("/import", files={"file": ("x.xlsx", f, "application/vnd.ms-excel")})
     assert r.status_code == 422
     assert "한 칸도 읽지 못했습니다" in r.json()["detail"]
+
+
+def test_순번이_없는_파일로_새로_짜기를_하면_무엇을_해야_하는지_알려준다(tmp_path):
+    """짐작으로 순번을 만들면 현장이 그 순번대로 차를 낸다 — 막고 안내한다."""
+    from fastapi.testclient import TestClient
+    import service
+
+    # 실제 성민버스처럼 '등록 3대 중 매일 2대만 운행'을 만든다. 감차가 있으면
+    # 전 차량이 순번을 가진 날이 하루도 없어 시트에서 회전을 읽을 수 없다.
+    fleet = ["2506", "2507", "2508"]
+    rows = []
+    for day in range(1, 32):
+        running = [v for i, v in enumerate(fleet) if i != day % 3]  # 매일 한 대씩 감차
+        for v in running:
+            rows.append([f"2026.07.{day:02d}", "수", "16", f"기사{v}", "D1", "메인", v, "오전", "정상"])
+            rows.append([f"2026.07.{day:02d}", "수", "16", f"부기사{v}", "D2", "메인", v, "오후", "정상"])
+    p = _make_export(tmp_path, rows)
+
+    client = TestClient(service.app)
+    with open(p, "rb") as f:
+        r = client.post(
+            "/generate",
+            files={"file": ("export.xlsx", f, "application/vnd.ms-excel")},
+            data={"year": "2026", "month": "8"},
+        )
+    assert r.status_code >= 400
+    detail = str(r.json().get("detail", ""))
+    assert "순번" in detail
+    assert "그대로 가져오기" in detail

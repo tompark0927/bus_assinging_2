@@ -20,6 +20,7 @@ from .audit import AuditReport, audit
 from .config import DayClass, ReductionCalendar
 from .fairness import FairnessReport, build_report
 from .importer.inference import (
+    RotationRule,
     infer_reduction_model,
     infer_rotation,
     replay_underlying,
@@ -91,6 +92,9 @@ def generate_month(
     prev_t = MonthlyRoster(
         year=prev.year, month=prev.month,
         division=prev.division, groups=prev.groups,
+        # 순번이 시트에서 온 것인지 파서가 부여한 것인지는 잘라낸 사본에도
+        # 그대로 따라가야 한다 — 아래 로테이션 추론이 이 값으로 갈린다
+        slots_are_synthetic=prev.slots_are_synthetic,
     )
     prev_t.entries = {
         (d, v): e for (d, v), e in prev.entries.items() if d <= last_prev_day
@@ -109,6 +113,17 @@ def generate_month(
     reduction_on = bool(policy.get("weekend_reduction_enabled"))
     for g in prev_t.groups:
         rule = infer_rotation(prev_t, g)
+        if rule is None and prev_t.slots_are_synthetic:
+            # 순번 열이 없는 양식(Busync 내보내기)이다. 여기서 설정값으로
+            # 적당히 회전시켜 넘어가면 **틀린 순번의 배차표**가 나오고, 현장은
+            # 그 순번대로 차를 낸다. 짐작으로 채우느니 무엇을 해야 하는지
+            # 알려주고 멈춘다 — '그대로 가져오기'는 이 파일로도 잘 된다.
+            raise ValueError(
+                "이 파일에는 순번(로테이션) 정보가 없어 새 배차표를 짤 수 없습니다. "
+                "Busync 에서 [Excel 내보내기]로 받은 파일에는 순번 열이 없습니다.\n"
+                "· 이 파일 내용을 그대로 쓰시려면 '이미 짠 표 그대로 가져오기'를 선택하세요.\n"
+                "· 엔진으로 새로 짜시려면 순번(순번·차번 열)이 있는 월간배차 원본 파일이 필요합니다."
+            )
         if rule is None:
             raise ValueError(f"{g.name}: 로테이션 규칙 추론 실패 — 온보딩 위저드에서 확인 필요")
         if not rotation_on:

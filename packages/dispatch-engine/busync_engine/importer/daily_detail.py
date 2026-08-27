@@ -141,4 +141,7 @@ def parse_daily_detail(wb, division: str = "") -> Optional[MonthlyRoster]:
         division=division,
         groups=groups,
         entries=entries,
+        # 순번은 이 양식에 없어 위에서 차번순으로 부여했다 — 시트에서 회전을
+        # 읽어낼 수 없는 게 정상이라는 표시
+        slots_are_synthetic=True,
     )

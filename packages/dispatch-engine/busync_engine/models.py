@@ -89,6 +89,11 @@ class MonthlyRoster:
     division: str                          # 간선/지선 …
     groups: list[DepotGroup] = field(default_factory=list)
     entries: dict[tuple[dt.date, str], DayEntry] = field(default_factory=dict)
+    #: 순번(slot_index)을 시트에서 읽은 게 아니라 파서가 임의로 부여했는가.
+    #: True 면 시트에서 로테이션 회전을 읽어낼 수 없는 게 **정상**이므로,
+    #: 추론 실패를 오류로 보지 말고 설정된 회전 칸수를 써야 한다.
+    #: (Busync 내보내기의 '일별 상세' 시트에는 순번 열이 아예 없다)
+    slots_are_synthetic: bool = False
 
     def dates(self) -> list[dt.date]:
         return sorted({d for d, _ in self.entries})
