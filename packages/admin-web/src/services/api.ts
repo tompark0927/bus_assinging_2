@@ -347,6 +347,12 @@ export const schedulesApi = {
   rename: (scheduleId: number, name: string) => api.put(`/schedules/by-id/${scheduleId}/rename`, { name }),
   generate: (data: { year: number; month: number; workDays?: number; restDays?: number; serviceType?: ScheduleServiceType }) =>
     api.post('/schedules/generate', data),
+  /**
+   * 지난달 배차표로 이번 달 짜기 — 파일 업로드 없이.
+   * 지난달 배차표는 이미 DB 에 있고 순번까지 저장돼 있다.
+   */
+  generateFromPrevious: (data: { year: number; month: number; serviceType?: ScheduleServiceType }) =>
+    api.post('/schedules/generate-from-previous', data, { timeout: 300000 }),
   // AI 배차 엔진(Python) 생성 결과를 배차표 초안으로 저장
   saveFromEngine: (data: {
     year: number; month: number; name?: string;

@@ -32,7 +32,12 @@ import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
 import { computeManpowerPlan } from '../services/manpowerService';
-import { parseServiceType } from '../utils/serviceType';
+import { parseServiceType, serviceTypeLabel } from '../utils/serviceType';
+import { monthScheduleAsCells } from '../services/scheduleToCellsService';
+import { loadEnginePolicy } from '../services/enginePolicyStore';
+import { mergeEnginePolicy } from '../services/enginePolicyMapper';
+import { loadCompanyPolicy } from '../services/solverDispatchService';
+import { approvedLeavesByName } from './engine';
 
 const router = Router();
 
@@ -254,6 +259,96 @@ router.post(
  *       매칭 실패 항목은 unmatched로 전부 돌려준다.
  *     tags: [Schedules]
  */
+/**
+ * @swagger
+ * /schedules/generate-from-previous:
+ *   post:
+ *     summary: 지난달 배차표로 이번 달 짜기 (파일 업로드 없이)
+ *     description: >
+ *       지난달 배차표는 이미 DB 에 있고 순번(SchedulePattern)까지 저장돼 있다.
+ *       내보내기 → 다시 업로드라는 왕복은 그 과정에서 순번을 잃어 "로테이션
+ *       추론 실패"를 만든다. DB 에서 직접 읽어 엔진에 넘긴다.
+ *     tags: [Schedules]
+ */
+router.post('/generate-from-previous', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  const engineUrl = process.env.ENGINE_URL;
+  if (!engineUrl) {
+    return res.status(503).json({ success: false, message: '배차 엔진이 설정되지 않았습니다 (ENGINE_URL 미설정).' });
+  }
+  try {
+    const { year, month } = req.body ?? {};
+    const serviceType = parseServiceType((req.body as { serviceType?: string })?.serviceType);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+      return res.status(400).json({ success: false, message: 'year/month 가 필요합니다.' });
+    }
+    const companyId = req.user!.companyId;
+
+    // 직전 달 (1월이면 전년 12월)
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevMonth = month === 1 ? 12 : month - 1;
+
+    const prev = await monthScheduleAsCells(companyId, prevYear, prevMonth, serviceType);
+    if (!prev || prev.dateCount === 0) {
+      const label = serviceType ? `${serviceTypeLabel(serviceType)} ` : '';
+      return res.status(422).json({
+        success: false,
+        message:
+          `${prevYear}년 ${prevMonth}월 ${label}배차표가 없어 이어받을 수 없습니다. ` +
+          '먼저 지난달 배차표를 만들거나, 지난달이 담긴 엑셀을 올려 생성해 주세요.',
+      });
+    }
+
+    const [enginePolicy, companyPolicy, leaves] = await Promise.all([
+      loadEnginePolicy(companyId),
+      loadCompanyPolicy(companyId),
+      approvedLeavesByName(companyId, year, month),
+    ]);
+
+    const upstream = await fetch(`${engineUrl}/generate-from-cells`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-company-id': String(companyId) },
+      body: JSON.stringify({
+        year, month,
+        history: [{ year: prev.year, month: prev.month, cells: prev.cells, groups: prev.groups }],
+        policy: mergeEnginePolicy(enginePolicy, companyPolicy),
+        leaves,
+      }),
+    });
+    const text = await upstream.text();
+    if (!upstream.ok) {
+      let detail = text;
+      try { detail = JSON.parse(text).detail ?? text; } catch { /* 원문 사용 */ }
+      return res.status(upstream.status === 422 ? 422 : 502).json({ success: false, message: String(detail) });
+    }
+    const data = JSON.parse(text);
+
+    // 순번이 없으면 엔진이 '차량 순서대로 새로 시작' 한다 — 담당자가 그 사실을
+    // 알아야 게시 전에 순번을 확인한다
+    return res.json({
+      success: true,
+      data: {
+        ...data,
+        source: {
+          scheduleId: prev.scheduleId,
+          year: prev.year,
+          month: prev.month,
+          hasSlotPatterns: prev.hasSlotPatterns,
+          vehicles: prev.vehicleCount,
+          dates: prev.dateCount,
+          filledCells: prev.filledCells,
+        },
+      },
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`[schedules/generate-from-previous] ${msg}`);
+    return res.status(502).json({
+      success: false,
+      message: `배차 엔진에 연결하지 못했습니다: ${msg}`,
+    });
+  }
+});
+
 router.post('/from-engine', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {
     const { year, month, name, cells, confirmOverwrite, confirmMismatch, serviceType } = req.body ?? {};

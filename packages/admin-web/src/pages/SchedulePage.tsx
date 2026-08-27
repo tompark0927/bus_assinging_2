@@ -626,7 +626,10 @@ export default function SchedulePage() {
    * import   = 이미 짜 놓은 배차표를 그대로 읽어온다 (솔버 미실행)
    * 엔진을 쓰지 않는 회사도 화면·인쇄물·기사앱·안전검사를 그대로 쓰게 하는 경로.
    */
-  const [engineMode, setEngineMode] = useState<'generate' | 'import'>('generate');
+  // 'previous' = 파일 없이 지난달 배차표(DB)에서 이어받기. 기본값으로 둔다 —
+  // 담당자가 가장 자주 하는 일이 "지난달 걸로 이번 달 짜 주세요" 이고,
+  // 그 일에 내보내기→재업로드 왕복은 필요 없다.
+  const [engineMode, setEngineMode] = useState<'previous' | 'generate' | 'import'>('previous');
   const [engineUnmatched, setEngineUnmatched] = useState<{ vehicles: string[]; drivers: string[] } | null>(null);
   const engineFileRef = useRef<HTMLInputElement>(null);
 
@@ -648,6 +651,31 @@ export default function SchedulePage() {
   const engineGenerateMutation = useMutation({
     mutationFn: async (opts?: { confirmOverwrite?: boolean; confirmMismatch?: boolean }) => {
       let draft = (opts?.confirmOverwrite || opts?.confirmMismatch) ? pendingEngineDraftRef.current : null;
+      if (!draft && engineMode === 'previous') {
+        // 파일 없이 — 지난달 배차표가 이미 DB 에 있다. 내보내기→재업로드 왕복은
+        // 그 과정에서 순번을 잃어 "로테이션 추론 실패"를 만들던 길이다.
+        const res = (await schedulesApi.generateFromPrevious({ year, month, serviceType })).data.data as {
+          cells: Record<string, Record<string, unknown>>;
+          audit: { ok: boolean; violations: unknown[] };
+          warnings: string[];
+          source: { year: number; month: number; vehicles: number; dates: number; filledCells: number; hasSlotPatterns: boolean };
+        };
+        draft = { cells: res.cells, audit: res.audit, warnings: res.warnings ?? [] };
+        pendingEngineDraftRef.current = draft;
+        const src = res.source;
+        toast.success(
+          `${src.year}년 ${src.month}월 배차표에서 이어받았습니다 ` +
+          `(${src.vehicles}대 · ${src.dates}일 · 배정 ${src.filledCells}칸).`,
+        );
+        // 순번이 없으면 새로 시작한다 — 담당자가 게시 전에 확인해야 한다
+        if (!src.hasSlotPatterns) {
+          toast(
+            '지난달 배차표에 순번(로테이션) 정보가 없어 순번을 차량 순서대로 새로 시작했습니다. ' +
+            '게시 전에 순번을 확인해 주세요.',
+            { icon: '⚠️', duration: 10000 },
+          );
+        }
+      }
       if (!draft) {
         if (!engineFile) throw new Error('배차표 엑셀을 선택해 주세요.');
         const form = new FormData();
@@ -2776,7 +2804,8 @@ export default function SchedulePage() {
             {/* 만드는 방식 — 엔진이 짜기 / 이미 짠 표 그대로 가져오기 */}
             <div className="flex gap-2">
               {([
-                ['generate', 'AI 엔진으로 짜기', '과거 배차표에서 규칙을 이어받아 새로 생성'],
+                ['previous', '지난달 배차표로 짜기', '파일 없이 — 지난달 것을 그대로 이어받습니다'],
+                ['generate', '엑셀 올려서 짜기', '과거 배차표 파일에서 규칙을 이어받아 새로 생성'],
                 ['import', '엑셀 그대로 가져오기', '이미 짜 놓은 배차표를 그대로 읽어옴'],
               ] as const).map(([mode, label, desc]) => (
                 <button
@@ -2795,7 +2824,20 @@ export default function SchedulePage() {
               ))}
             </div>
 
+            {engineMode === 'previous' && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-4 text-[14px] text-gray-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-gray-200">
+                <p className="font-semibold text-gray-800 dark:text-gray-100">
+                  {month === 1 ? year - 1 : year}년 {month === 1 ? 12 : month - 1}월 배차표를 이어받습니다
+                </p>
+                <p className="mt-1 text-gray-600 dark:text-gray-400">
+                  이미 저장된 배차표를 그대로 씁니다 — 엑셀을 내보내고 다시 올릴 필요가 없습니다.
+                  지난달 배차표에 순번(로테이션)이 없으면 순번을 차량 순서대로 새로 시작하고 그 사실을 알려드립니다.
+                </p>
+              </div>
+            )}
+
             {/* 엑셀 업로드 — 모드에 따라 요구하는 파일이 다르다 */}
+            {engineMode !== 'previous' && (
             <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-800 dark:bg-blue-900/20">
               <label className="block text-base font-semibold text-gray-800 dark:text-gray-200 mb-1">
                 {engineMode === 'import' ? '가져올 배차표 엑셀' : '과거 배차표 엑셀'}{' '}
@@ -2831,6 +2873,7 @@ export default function SchedulePage() {
                 {engineFile ? engineFile.name : '엑셀 선택'}
               </button>
             </div>
+            )}
 
             <div>
               <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">
@@ -2968,7 +3011,7 @@ export default function SchedulePage() {
             </button>
             <button
               onClick={() => engineGenerateMutation.mutate({})}
-              disabled={engineGenerateMutation.isPending || !engineFile}
+              disabled={engineGenerateMutation.isPending || (engineMode !== 'previous' && !engineFile)}
               className="btn-primary flex-1 text-base py-3 min-h-[52px] inline-flex items-center justify-center gap-2 disabled:opacity-40"
             >
               {engineGenerateMutation.isPending ? (
@@ -2976,11 +3019,17 @@ export default function SchedulePage() {
                   <Loader2 size={20} className="animate-spin" />{' '}
                   {engineMode === 'import'
                     ? '엑셀을 읽어 배차표로 저장하고 있습니다…'
+                    : engineMode === 'previous'
+                    ? '지난달 배차표를 이어받아 계산하고 있습니다… (최대 3분)'
                     : 'AI가 최적 배차를 계산하고 있습니다... (최대 3분)'}
                 </>
               ) : engineMode === 'import' ? (
                 <>
                   <Upload size={20} /> 엑셀 그대로 가져오기
+                </>
+              ) : engineMode === 'previous' ? (
+                <>
+                  <Sparkles size={20} /> 지난달 배차표로 짜기
                 </>
               ) : (
                 <>
