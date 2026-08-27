@@ -10,6 +10,8 @@ const mockDayOffRequestFindMany = jest.fn();
 const mockDayOffRequestCount = jest.fn();
 const mockScheduleSlotCount = jest.fn();
 const mockScheduleFindFirst = jest.fn();
+const mockScheduleFindMany = jest.fn();
+const mockScheduleSlotFindMany = jest.fn();
 const mockUserFindMany = jest.fn();
 const mockAgentDecisionFindMany = jest.fn();
 const mockAgentDecisionAggregate = jest.fn();
@@ -22,8 +24,14 @@ jest.mock('../../utils/prisma', () => ({
       findMany: (...a: unknown[]) => mockDayOffRequestFindMany(...a),
       count: (...a: unknown[]) => mockDayOffRequestCount(...a),
     },
-    scheduleSlot: { count: (...a: unknown[]) => mockScheduleSlotCount(...a) },
-    schedule: { findFirst: (...a: unknown[]) => mockScheduleFindFirst(...a) },
+    scheduleSlot: {
+      count: (...a: unknown[]) => mockScheduleSlotCount(...a),
+      findMany: (...a: unknown[]) => mockScheduleSlotFindMany(...a),
+    },
+    schedule: {
+      findFirst: (...a: unknown[]) => mockScheduleFindFirst(...a),
+      findMany: (...a: unknown[]) => mockScheduleFindMany(...a),
+    },
     user: { findMany: (...a: unknown[]) => mockUserFindMany(...a) },
     agentDecision: {
       findMany: (...a: unknown[]) => mockAgentDecisionFindMany(...a),
@@ -243,10 +251,14 @@ describe('get_fairness_drift', () => {
       status: 'SCHEDULED',
     }));
 
-    // 멀티 초안: 월별로 PUBLISHED findFirst 가 먼저 — 발행본이 있으면 fallback findFirst 는 호출되지 않음
-    mockScheduleFindFirst
-      .mockResolvedValueOnce(mockSchedule(currentSlots))
-      .mockResolvedValueOnce(mockSchedule(previousSlots));
+    // 간선·지선·광역이 따로 발행되므로 그 달 배차표는 여러 개다.
+    // 종류별 대표를 모아(schedule.findMany) 슬롯을 합쳐서(scheduleSlot.findMany) 계산한다.
+    mockScheduleFindMany
+      .mockResolvedValueOnce([{ id: 1, serviceType: 'TRUNK', status: 'PUBLISHED' }])
+      .mockResolvedValueOnce([{ id: 2, serviceType: 'TRUNK', status: 'PUBLISHED' }]);
+    mockScheduleSlotFindMany
+      .mockResolvedValueOnce(currentSlots)
+      .mockResolvedValueOnce(previousSlots);
 
     const result = (await tool().handler({ year: 2026, month: 4 }, ctx)) as {
       currentMonth: { exists: boolean; fairnessScore: number };
@@ -260,8 +272,9 @@ describe('get_fairness_drift', () => {
     expect(result.drift).toBeDefined();
   });
 
-  it('현재 월 없음 → exists=false (PUBLISHED → 최근 초안 fallback 2단계 조회)', async () => {
-    mockScheduleFindFirst.mockResolvedValue(null);
+  it('현재 월 없음 → exists=false (그 달 배차표가 종류별로 하나도 없음)', async () => {
+    mockScheduleFindMany.mockResolvedValue([]);
+    mockScheduleSlotFindMany.mockResolvedValue([]);
 
     const result = (await tool().handler({ year: 2026, month: 4 }, ctx)) as {
       currentMonth: { exists: boolean };
@@ -273,10 +286,10 @@ describe('get_fairness_drift', () => {
     expect(result.drift).toBeNull();
     expect(result.driftSignal).toBe('NORMAL');
 
-    // 두 달 × (발행본 조회 → 최근 초안 fallback) = 4회 호출
-    expect(mockScheduleFindFirst).toHaveBeenCalledTimes(4);
-    expect(mockScheduleFindFirst.mock.calls[0][0].where.status).toBe('PUBLISHED');
-    expect(mockScheduleFindFirst.mock.calls[1][0].orderBy).toEqual({ updatedAt: 'desc' });
+    // 두 달 × (그 달 배차표 전부 조회) = 2회. 종류별 대표 선별은 조회 결과에서 한다.
+    expect(mockScheduleFindMany).toHaveBeenCalledTimes(2);
+    expect(mockScheduleFindMany.mock.calls[0][0].where).toMatchObject({ year: 2026, month: 4 });
+    expect(mockScheduleFindMany.mock.calls[1][0].where).toMatchObject({ year: 2026, month: 3 });
   });
 });
 

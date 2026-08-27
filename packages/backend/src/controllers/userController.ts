@@ -7,6 +7,18 @@ import { getPagination, paginatedResponse } from '../utils/pagination';
 import { createAuditLog } from '../utils/auditLog';
 import { generateInitialPassword, normalizePhone } from '../utils/initialPassword';
 
+/** 간선/지선/광역 — 빈 문자열은 "미지정(null)"으로 본다 */
+const nullableServiceType = (v: unknown): 'TRUNK' | 'BRANCH' | 'WIDE_AREA' | null | undefined =>
+  v === undefined ? undefined : v === null || v === '' ? null : (v as 'TRUNK' | 'BRANCH' | 'WIDE_AREA');
+
+/** 입사일 — 'YYYY-MM-DD' 또는 빈 값. 빈 값은 미입력(null) */
+const nullableDate = (v: unknown): Date | null | undefined => {
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  const d = new Date(String(v));
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
 const userSelect = {
   id: true,
   name: true,
@@ -16,6 +28,9 @@ const userSelect = {
   employeeId: true,
   licenseNumber: true,
   driverType: true,
+  serviceType: true, // 간선/지선/광역
+  hireDate: true, // 입사일
+  assignedBusNumber: true,
   isActive: true,
   vacationDays: true,
   createdAt: true,
@@ -112,7 +127,8 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
 
 export const createUser = async (req: AuthRequest, res: Response) => {
   try {
-    const { name, email, phone, role, licenseNumber, driverType, password, vacationDays } = req.body;
+    const { name, email, phone, role, licenseNumber, driverType, password, vacationDays,
+            serviceType, hireDate, assignedBusNumber } = req.body;
     let { employeeId } = req.body;
 
     const effectiveRole = role || 'DRIVER';
@@ -185,6 +201,11 @@ export const createUser = async (req: AuthRequest, res: Response) => {
         employeeId,
         licenseNumber,
         driverType,
+        serviceType: nullableServiceType(serviceType),
+        hireDate: nullableDate(hireDate),
+        ...(assignedBusNumber !== undefined
+          ? { assignedBusNumber: assignedBusNumber || null }
+          : {}),
         ...(vacationDays !== undefined ? { vacationDays } : {}),
         password: hashedPassword,
         mustChangePassword: isDriverAutoPw,
@@ -237,7 +258,8 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ success: false, message: '권한이 없습니다.' });
     }
 
-    const { name, phone, licenseNumber, driverType, isActive, role, email, vacationDays } = req.body;
+    const { name, phone, licenseNumber, driverType, isActive, role, email, vacationDays,
+            serviceType, hireDate, assignedBusNumber } = req.body;
 
     const updateData: Record<string, unknown> = { name, licenseNumber };
 
@@ -272,6 +294,9 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     // 민감 필드(역할/활성 상태/기사 유형) 는 full-access 역할만 변경 가능
     if (isAdmin) {
       if (driverType !== undefined) updateData.driverType = driverType;
+      if (serviceType !== undefined) updateData.serviceType = nullableServiceType(serviceType);
+      if (hireDate !== undefined) updateData.hireDate = nullableDate(hireDate);
+      if (assignedBusNumber !== undefined) updateData.assignedBusNumber = assignedBusNumber || null;
       if (isActive !== undefined) updateData.isActive = isActive;
       if (vacationDays !== undefined) updateData.vacationDays = vacationDays;
       // 역할은 "실제로 바뀔 때만" 처리한다. (수정 모달이 현재 역할을 그대로 담아 보내도,
@@ -291,6 +316,9 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     if (phone !== undefined) auditChanges.phone = { old: existingUser.phone, new: phone };
     if (licenseNumber !== undefined) auditChanges.licenseNumber = { old: existingUser.licenseNumber, new: licenseNumber };
     if (driverType !== undefined) auditChanges.driverType = { old: existingUser.driverType, new: driverType };
+    if (serviceType !== undefined) auditChanges.serviceType = { old: existingUser.serviceType, new: serviceType || null };
+    if (hireDate !== undefined) auditChanges.hireDate = { old: existingUser.hireDate, new: hireDate || null };
+    if (assignedBusNumber !== undefined) auditChanges.assignedBusNumber = { old: existingUser.assignedBusNumber, new: assignedBusNumber || null };
     if (isActive !== undefined) auditChanges.isActive = { old: existingUser.isActive, new: isActive };
     if (vacationDays !== undefined) auditChanges.vacationDays = { old: existingUser.vacationDays, new: vacationDays };
     if (role !== undefined) auditChanges.role = { old: existingUser.role, new: role };

@@ -1,5 +1,6 @@
 import { ShiftType } from '@prisma/client';
 import { prisma } from '../utils/prisma';
+import { driverScopeFor } from '../utils/serviceType';
 import logger from '../utils/logger';
 
 /**
@@ -69,9 +70,15 @@ export async function getCellCandidates(
   });
   if (!bus) throw new Error(`차량 ${vehicle} 을(를) 찾을 수 없습니다.`);
 
+  // 이 배차표의 노선 종류 — 간선표 후보에 지선 기사가 뜨면 안 된다
+  const sched = await prisma.schedule.findFirst({
+    where: { id: scheduleId, companyId },
+    select: { serviceType: true },
+  });
+
   const [drivers, monthSlots] = await Promise.all([
     prisma.user.findMany({
-      where: { companyId, role: 'DRIVER' },
+      where: { companyId, role: 'DRIVER', ...driverScopeFor(sched?.serviceType ?? null) },
       select: { id: true, name: true, employeeId: true, driverType: true },
       orderBy: { name: 'asc' },
     }),

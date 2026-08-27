@@ -1,6 +1,8 @@
 import ExcelJS from 'exceljs';
 import { prisma } from '../utils/prisma';
 import { resolveMonthScheduleId } from './scheduleService';
+import { serviceTypeLabel } from '../utils/serviceType';
+import type { ServiceType } from '@prisma/client';
 
 const SHIFT_LABELS: Record<string, string> = {
   MORNING: '오전',
@@ -15,8 +17,9 @@ export async function generateScheduleExcel(
   year: number,
   month: number,
   scheduleId?: number,
+  serviceType: ServiceType | null = null,
 ): Promise<Buffer> {
-  const resolvedId = await resolveMonthScheduleId(companyId, year, month, scheduleId);
+  const resolvedId = await resolveMonthScheduleId(companyId, year, month, scheduleId, serviceType);
   if (resolvedId === null) throw new Error('배차표를 찾을 수 없습니다.');
   const schedule = await prisma.schedule.findFirst({
     where: { id: resolvedId, companyId },
@@ -36,13 +39,16 @@ export async function generateScheduleExcel(
 
   const company = await prisma.company.findUnique({ where: { id: companyId }, select: { name: true } });
   const companyName = company?.name || '배차관리';
+  // 간선·지선·광역을 따로 발행하면 파일이 셋이다. 시트명·제목에 종류가 없으면
+  // 열어봐도 어느 것인지 알 수 없다 (인쇄해서 붙이면 더더욱).
+  const typeTag = schedule.serviceType ? `${serviceTypeLabel(schedule.serviceType)} ` : '';
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = `${companyName} 배차 시스템`;
   workbook.created = new Date();
 
   // ─── Sheet 1: Monthly Overview ───
-  const overviewSheet = workbook.addWorksheet(`${year}년 ${month}월 배차표`, {
+  const overviewSheet = workbook.addWorksheet(`${year}년 ${month}월 ${typeTag}배차표`, {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1 },
   });
 
@@ -73,7 +79,7 @@ export async function generateScheduleExcel(
   // Title
   overviewSheet.mergeCells(1, 1, 1, daysInMonth + 3);
   const titleCell = overviewSheet.getCell(1, 1);
-  titleCell.value = `${companyName} ${year}년 ${month}월 배차표`;
+  titleCell.value = `${companyName} ${year}년 ${month}월 ${typeTag}배차표`;
   titleCell.font = { bold: true, size: 14 };
   titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1565C0' } };

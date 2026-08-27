@@ -1,5 +1,6 @@
 import { ShiftType } from '@prisma/client';
 import { prisma } from '../utils/prisma';
+import { driverScopeFor } from '../utils/serviceType';
 import logger from '../utils/logger';
 
 /**
@@ -39,7 +40,7 @@ export async function rematchUnmatchedCells(
 ): Promise<RegisterResult> {
   const schedule = await prisma.schedule.findFirst({
     where: { id: scheduleId, companyId },
-    select: { id: true, notes: true, status: true },
+    select: { id: true, notes: true, status: true, serviceType: true },
   });
   if (!schedule) throw new Error('배차표를 찾을 수 없습니다.');
   // 발행본에 슬롯을 끼워 넣으면 기사가 이미 본 배차가 알림 없이 바뀐다
@@ -61,8 +62,10 @@ export async function rematchUnmatchedCells(
 
   const names = [...new Set(entries.map(([, name]) => name))];
   // 기초 데이터 조회 — 여기서 만들지 않는다. 지금 등록되어 있는 사람만 쓴다.
+  // 이 배차표 종류의 기사만 — 간선표의 빈 칸을 지선 기사로 메우지 않는다
+  const driverScope = driverScopeFor(schedule.serviceType);
   const already = await prisma.user.findMany({
-    where: { companyId, name: { in: names }, role: 'DRIVER', isActive: true },
+    where: { companyId, name: { in: names }, role: 'DRIVER', isActive: true, ...driverScope },
     select: { name: true },
   });
   // 동명이인 — 어느 계정인지 추측할 수 없으므로 배정하지 않는다.
@@ -74,7 +77,7 @@ export async function rematchUnmatchedCells(
   // ── 비어 있던 칸 메우기 ──
   const [drivers, buses, existingSlots] = await Promise.all([
     prisma.user.findMany({
-      where: { companyId, name: { in: names }, role: 'DRIVER', isActive: true },
+      where: { companyId, name: { in: names }, role: 'DRIVER', isActive: true, ...driverScope },
       select: { id: true, name: true },
     }),
     prisma.bus.findMany({

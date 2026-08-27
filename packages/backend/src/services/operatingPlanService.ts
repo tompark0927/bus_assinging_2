@@ -1,4 +1,6 @@
 import { prisma } from '../utils/prisma';
+import { routeScopeFor } from '../utils/serviceType';
+import type { ServiceType } from '@prisma/client';
 import { getAppliedHolidaysForMonth } from './holidayPolicyService';
 
 /**
@@ -71,9 +73,12 @@ export function countForDate(
   return rule.weekdayBuses ?? all;
 }
 
-export async function getRouteOperatingRules(companyId: number): Promise<RouteOperatingRule[]> {
+export async function getRouteOperatingRules(
+  companyId: number,
+  serviceType: ServiceType | null = null,
+): Promise<RouteOperatingRule[]> {
   const routes = await prisma.route.findMany({
-    where: { companyId, isActive: true },
+    where: { companyId, isActive: true, ...routeScopeFor(serviceType) },
     select: {
       id: true, routeNumber: true,
       weekdayBuses: true, saturdayBuses: true, holidayBuses: true,
@@ -106,8 +111,10 @@ export async function buildOperatingPlan(
   companyId: number,
   year: number,
   month: number,
+  /** 간선/지선/광역 — 지정하면 그 종류 노선만으로 계획을 세운다. null = 전 노선 */
+  serviceType: ServiceType | null = null,
 ): Promise<OperatingPlan> {
-  const rules = await getRouteOperatingRules(companyId);
+  const rules = await getRouteOperatingRules(companyId, serviceType);
   // 회사가 확정한 공휴일 기준 — 아직 확인하지 않은 해는 법정공휴일 전부가 기본값이다.
   const holidays = await getAppliedHolidaysForMonth(companyId, year, month);
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
@@ -256,12 +263,19 @@ export async function operatingCells(
   // 패턴 없음 → 활성 차량 × 그 달 날짜에서, 명시적 감차만 제외
   const schedule = await prisma.schedule.findUnique({
     where: { id: scheduleId },
-    select: { companyId: true, year: true, month: true },
+    select: { companyId: true, year: true, month: true, serviceType: true },
   });
   if (!schedule) return [];
   const [buses, off] = await Promise.all([
     prisma.bus.findMany({
-      where: { companyId: schedule.companyId, isActive: true, NOT: { routeId: null } },
+      // 이 배차표 종류의 차량만 — 간선 배차표에서 지선·광역 차량까지 "공석"으로
+      // 잡으면, 공석 채우기가 간선 기사를 지선 차에 꽂으려 든다.
+      where: {
+        companyId: schedule.companyId,
+        isActive: true,
+        NOT: { routeId: null },
+        ...(schedule.serviceType ? { route: { serviceType: schedule.serviceType } } : {}),
+      },
       select: { id: true, busNumber: true },
     }),
     prisma.schedulePattern.findMany({

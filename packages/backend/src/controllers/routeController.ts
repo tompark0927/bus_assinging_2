@@ -8,6 +8,10 @@ import { getPagination, paginatedResponse } from '../utils/pagination';
 const nullableCount = (v: unknown): number | null | undefined =>
   v === undefined ? undefined : v === null || v === '' ? null : parseInt(String(v), 10);
 
+/** 노선 종류 — 빈 문자열/undefined 는 "구분 없음(null)" */
+const nullableServiceType = (v: unknown): 'TRUNK' | 'BRANCH' | 'WIDE_AREA' | null | undefined =>
+  v === undefined ? undefined : v === null || v === '' ? null : (v as 'TRUNK' | 'BRANCH' | 'WIDE_AREA');
+
 export const getRoutes = async (req: AuthRequest, res: Response) => {
   try {
     const where = { companyId: req.user!.companyId };
@@ -62,7 +66,7 @@ export const getRouteById = async (req: AuthRequest, res: Response) => {
 export const createRoute = async (req: AuthRequest, res: Response) => {
   try {
     const { routeNumber, name, description, startPoint, endPoint,
-            weekdayBuses, saturdayBuses, holidayBuses } = req.body;
+            weekdayBuses, saturdayBuses, holidayBuses, serviceType } = req.body;
 
     const route = await prisma.route.create({
       data: {
@@ -71,6 +75,7 @@ export const createRoute = async (req: AuthRequest, res: Response) => {
         weekdayBuses: nullableCount(weekdayBuses),
         saturdayBuses: nullableCount(saturdayBuses),
         holidayBuses: nullableCount(holidayBuses),
+        serviceType: nullableServiceType(serviceType),
       },
     });
 
@@ -84,7 +89,7 @@ export const createRoute = async (req: AuthRequest, res: Response) => {
 export const updateRoute = async (req: AuthRequest, res: Response) => {
   try {
     const { routeNumber, name, description, startPoint, endPoint, isActive,
-            weekdayBuses, saturdayBuses, holidayBuses } = req.body;
+            weekdayBuses, saturdayBuses, holidayBuses, serviceType } = req.body;
     const routeId = parseInt(req.params.id);
 
     const existing = await prisma.route.findFirst({ where: { id: routeId, companyId: req.user!.companyId } });
@@ -99,6 +104,7 @@ export const updateRoute = async (req: AuthRequest, res: Response) => {
         weekdayBuses: nullableCount(weekdayBuses),
         saturdayBuses: nullableCount(saturdayBuses),
         holidayBuses: nullableCount(holidayBuses),
+        serviceType: nullableServiceType(serviceType),
       },
     });
 

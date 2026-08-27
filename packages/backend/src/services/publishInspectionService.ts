@@ -1,4 +1,5 @@
 import { prisma } from '../utils/prisma';
+import { serviceTypeLabel } from '../utils/serviceType';
 import { parseScheduleMeta } from './vehicleOffService';
 import { operatingCells } from './operatingPlanService';
 import { loadCompanyPolicy } from './solverDispatchService';
@@ -85,7 +86,7 @@ async function inspectionPolicyFor(companyId: number | undefined): Promise<Inspe
 const MAX_LIST = 50;
 
 export interface PublishViolation {
-  rule: 'E2' | 'E3' | 'E4' | 'E5' | 'W1' | 'W2';
+  rule: 'E2' | 'E3' | 'E4' | 'E5' | 'E6' | 'W1' | 'W2';
   severity: 'error' | 'warn';
   /** E2 하위 구분 — 해결 방법이 다르다 */
   kind?: 'UNREGISTERED' | 'VACANT';
@@ -117,6 +118,8 @@ export interface PublishInspection {
     approvedOff: number;
     /** 월 최소 주말휴무에 못 미치는 기사 수 */
     weekendOff: number;
+    /** 이 배차표의 노선 종류와 다른 기사가 배정된 건수 */
+    serviceTypeMismatch: number;
   };
 }
 
@@ -146,7 +149,10 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
         shift: true,
         busId: true,
         driver: {
-          select: { name: true, licenseExpiresAt: true, qualificationExpiresAt: true },
+          select: {
+            name: true, licenseExpiresAt: true, qualificationExpiresAt: true,
+            serviceType: true,
+          },
         },
       },
     }),
@@ -154,7 +160,7 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
     operatingCells(scheduleId),
     prisma.schedule.findUnique({
       where: { id: scheduleId },
-      select: { notes: true, companyId: true, year: true, month: true },
+      select: { notes: true, companyId: true, year: true, month: true, serviceType: true },
     }),
   ]);
 
@@ -183,7 +189,7 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
   const warnings: PublishViolation[] = [];
   const counts = {
     vacant: 0, unregistered: 0, consecutive: 0, shortRest: 0,
-    expiredLicense: 0, approvedOff: 0, weekendOff: 0,
+    expiredLicense: 0, approvedOff: 0, weekendOff: 0, serviceTypeMismatch: 0,
   };
 
   // 기사별 근무일 집합 + (기사, 날짜)별 시프트 집합 + (날짜, 차량, 시프트) 채움 여부
@@ -324,6 +330,34 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
     }
   }
 
+  // ── E6 노선 종류 불일치 — 간선 배차표에 지선 기사가 들어가 있다 ──
+  // 생성·셀편집·공석채우기가 모두 종류로 걸러내지만, 기사의 종류를 나중에
+  // 바꾸면 이미 저장된 배차표가 어긋난다. 발행이 마지막 방어선이다.
+  const serviceMismatch: PublishViolation[] = [];
+  if (schedule?.serviceType) {
+    const seen = new Set<number>();
+    for (const s of slots) {
+      const ds = s.driver.serviceType;
+      if (!ds || ds === schedule.serviceType) continue;
+      counts.serviceTypeMismatch++;
+      if (seen.has(s.driverId)) continue; // 기사당 한 번만 보고 — 한 달치가 다 걸린다
+      seen.add(s.driverId);
+      if (serviceMismatch.length < MAX_LIST) {
+        serviceMismatch.push({
+          rule: 'E6',
+          severity: 'error',
+          driverId: s.driverId,
+          driverName: s.driver.name,
+          date: dateKey(s.date),
+          message:
+            `${s.driver.name} — ${serviceTypeLabel(ds)} 기사인데 ` +
+            `${serviceTypeLabel(schedule.serviceType)} 배차표에 배정돼 있습니다. ` +
+            '기사의 노선 종류를 고치거나 이 칸을 비워주세요.',
+        });
+      }
+    }
+  }
+
   // ── W2 주말휴무 부족 — 토·일 중 쉬는 날이 정책 하한에 못 미친다 ──
   if (pol.minWeekendOff > 0 && schedule?.year && schedule.month) {
     const weekendDays: string[] = [];
@@ -385,8 +419,11 @@ export async function inspectScheduleForPublish(scheduleId: number): Promise<Pub
   expired.sort(byDate);
   consecutive.sort(byDate);
   onApprovedOff.sort(byDate);
+  serviceMismatch.sort(byDate);
   errors.sort(byDate);
-  const merged = [...expired, ...consecutive, ...onApprovedOff, ...errors].slice(0, MAX_LIST);
+  const merged = [
+    ...expired, ...consecutive, ...onApprovedOff, ...serviceMismatch, ...errors,
+  ].slice(0, MAX_LIST);
   warnings.sort(byDate);
 
   return { errors: merged, warnings, counts };

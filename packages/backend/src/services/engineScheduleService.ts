@@ -1,6 +1,8 @@
 import { Prisma, ShiftType } from '@prisma/client';
+import type { ServiceType } from '@prisma/client';
 import { prisma } from '../utils/prisma';
 import logger from '../utils/logger';
+import { serviceTypeLabel } from '../utils/serviceType';
 
 /**
  * 배차 엔진(Python) 생성 결과를 DB 배차표로 영속화한다.
@@ -36,6 +38,8 @@ export interface EngineDraftPayload {
   confirmOverwrite?: boolean;
   /** 명단 불일치를 알고도 진행 — 없으면 RosterMismatchError */
   confirmMismatch?: boolean;
+  /** 간선/지선/광역 — 이 초안이 속할 탭. null = 구분 없음(전체) */
+  serviceType?: ServiceType | null;
 }
 
 /**
@@ -104,6 +108,12 @@ export interface SaveResult {
   };
   /** 동명이인이라 배정을 보류한 이름 — 담당자가 사번으로 구분해야 한다 */
   ambiguousNames: { name: string; candidates: { id: number; employeeId: string }[] }[];
+  /**
+   * 이 배차표의 노선 종류와 맞지 않아 배정하지 않은 기사.
+   * (예: 간선 배차표인데 파일에 지선 기사가 있음 — 기초 데이터가 틀렸거나
+   *  파일이 틀렸거나 둘 중 하나라 담당자가 판단해야 한다)
+   */
+  serviceTypeMismatch: { name: string; driverServiceType: string }[];
 }
 
 /** 엔진이 기사명 자리에 넣는 비-기사 토큰 (휴무·결행 표기) */
@@ -111,6 +121,20 @@ const NON_DRIVER_TOKENS = new Set([
   '휴', 'O휴', '0휴', 'o휴', '○휴', '연차', '병가', '사후', '교육',
   '결행', '미운행', '운휴', '○', 'O', '',
 ]);
+
+/** 파일에 등장한 이름 중 회사에 실제로 등록되어 있는 사람 수 (종류 불일치 포함) */
+function totalKnownNames(
+  fileNames: Set<string>,
+  matched: Map<string, number>,
+  ambiguous: Map<string, unknown>,
+  mismatched: Set<string>,
+): number {
+  let n = 0;
+  for (const name of fileNames) {
+    if (matched.has(name) || ambiguous.has(name) || mismatched.has(name)) n++;
+  }
+  return n;
+}
 
 function isDriverName(v: string | null | undefined): v is string {
   if (!v) return false;
@@ -129,6 +153,9 @@ export async function saveEngineDraft(
 ): Promise<SaveResult> {
   const { year, month, cells } = payload;
   const name = payload.name?.trim() || 'AI 엔진 초안';
+  // 동명 초안 판정은 같은 노선 종류 안에서만 한다 — 간선 초안이 지선 초안을
+  // 덮어쓰면 안 된다.
+  const serviceType = payload.serviceType ?? null;
 
   // ── 0. 같은 이름 초안 덮어쓰기 확인 게이트 ──
   // 아래 트랜잭션은 동명 초안을 통째로 삭제한다. 담당자가 쌓아둔 감차
@@ -136,7 +163,7 @@ export async function saveEngineDraft(
   // 승인(confirmOverwrite) 없이는 삭제될 내용을 알려주며 중단한다.
   if (!payload.confirmOverwrite) {
     const existingDraft = await prisma.schedule.findFirst({
-      where: { companyId, year, month, name, status: 'DRAFT' },
+      where: { companyId, year, month, serviceType, name, status: 'DRAFT' },
       select: { id: true },
     });
     if (existingDraft) {
@@ -178,17 +205,38 @@ export async function saveEngineDraft(
     }),
     prisma.user.findMany({
       where: { companyId, name: { in: [...driverNames] } },
-      select: { id: true, name: true, employeeId: true },
+      select: { id: true, name: true, employeeId: true, serviceType: true },
     }),
   ]);
 
   const busByNumber = new Map(buses.map((b) => [b.busNumber, b]));
+
+  // ── 노선 종류 게이트 ──
+  // 간선 기사는 간선 배차표에만 있어야 한다. 종류가 정해진 배차표에 다른 종류
+  // 기사가 들어오면 배정하지 않고 그 이름을 돌려준다 — 조용히 넣으면 지선
+  // 기사가 간선 배차표에서 일하게 되고, 조용히 버리면 그 칸이 왜 비었는지
+  // 아무도 모른다. (구분 미지정 기사는 이 배차표 종류로 보고 통과시킨다:
+  //  엑셀에 이름이 오른 이상 담당자가 이 표에 넣을 사람으로 지목한 것이다)
+  const serviceTypeMismatch: { name: string; driverServiceType: string }[] = [];
+  const eligibleDrivers = drivers.filter((d) => {
+    if (!serviceType || !d.serviceType || d.serviceType === serviceType) return true;
+    serviceTypeMismatch.push({ name: d.name, driverServiceType: d.serviceType });
+    return false;
+  });
+  if (serviceTypeMismatch.length) {
+    logger.warn(
+      `[engineSchedule] ${serviceTypeLabel(serviceType)} 배차표에 다른 종류 기사 ` +
+        `${serviceTypeMismatch.length}명 — 배정 제외: ` +
+        serviceTypeMismatch.map((m) => `${m.name}(${serviceTypeLabel(m.driverServiceType as never)})`).join(', '),
+    );
+  }
+
   // 동명이인은 **배정하지 않는다**. 첫 계정으로 추측 배정하면 김영수 A는
   // 과다 배차되고 김영수 B는 배차표·급여에서 사라지는데, 둘 다 조용히
   // 일어난다. 대신 그 이름의 셀을 미매칭으로 남겨 화면에 주황으로 드러내고,
   // 후보 사번 목록을 함께 돌려줘 담당자가 구분(개명·사번 표기)하게 한다.
   const byName = new Map<string, { id: number; employeeId: string }[]>();
-  for (const d of drivers) {
+  for (const d of eligibleDrivers) {
     const list = byName.get(d.name) ?? [];
     list.push({ id: d.id, employeeId: d.employeeId });
     byName.set(d.name, list);
@@ -207,7 +255,26 @@ export async function saveEngineDraft(
   }
 
   const unmatchedVehicles = [...vehicleNumbers].filter((v) => !busByNumber.has(v));
-  const unmatchedDrivers = [...driverNames].filter((n) => !driverByName.has(n) && !byName.has(n));
+  // 종류 불일치는 "기초 데이터에 없음"이 아니다 — 등록은 되어 있고 이 표에 못
+  // 들어갈 뿐이라, 미등록 목록에 섞으면 담당자가 엉뚱한 곳을 고치게 된다.
+  const mismatchNames = new Set(serviceTypeMismatch.map((m) => m.name));
+  const unmatchedDrivers = [...driverNames].filter(
+    (n) => !driverByName.has(n) && !byName.has(n) && !mismatchNames.has(n),
+  );
+
+  // ── 종류가 통째로 어긋난 파일 방어 ──
+  // 간선 탭에서 지선 배차표 파일을 올리면 전원이 걸러져 '배정 0건'인 빈
+  // 배차표가 조용히 저장된다. 회사에 등록된 이름 중 절반 넘게 다른 종류면
+  // 파일을 잘못 고른 것으로 보고 멈춘다.
+  const knownNames = totalKnownNames(driverNames, driverByName, byName, mismatchNames);
+  if (serviceType && knownNames > 0 && mismatchNames.size / knownNames > 0.5) {
+    const other = serviceTypeMismatch[0].driverServiceType as ServiceType;
+    throw new Error(
+      `${serviceTypeLabel(serviceType)} 배차표인데 파일의 기사 대부분(${mismatchNames.size}/${knownNames}명)이 ` +
+        `${serviceTypeLabel(other)} 기사입니다. ${serviceTypeLabel(other)} 탭에서 올리거나 ` +
+        '기초 데이터 > 기사의 노선 종류를 확인해 주세요.',
+    );
+  }
 
   // 매칭된 차량이 하나도 없으면 저장해봐야 빈 배차표다 — 원인을 알려주고 중단
   if (busByNumber.size === 0) {
@@ -293,7 +360,7 @@ export async function saveEngineDraft(
   // ── 4. 트랜잭션: 기존 동명 초안 교체 후 일괄 삽입 ──
   const scheduleId = await prisma.$transaction(async (tx) => {
     const existing = await tx.schedule.findFirst({
-      where: { companyId, year, month, name, status: 'DRAFT' },
+      where: { companyId, year, month, serviceType, name, status: 'DRAFT' },
       select: { id: true },
     });
     if (existing) {
@@ -305,7 +372,7 @@ export async function saveEngineDraft(
 
     const schedule = await tx.schedule.create({
       data: {
-        companyId, year, month, name, status: 'DRAFT', createdBy,
+        companyId, year, month, name, serviceType, status: 'DRAFT', createdBy,
         notes: JSON.stringify({
           source: 'engine',
           unmatchedCells,
@@ -349,6 +416,7 @@ export async function saveEngineDraft(
     slotCount: slotRows.length,
     unmatched: { vehicles: unmatchedVehicles, drivers: unmatchedDrivers },
     ambiguousNames,
+    serviceTypeMismatch,
   };
 }
 

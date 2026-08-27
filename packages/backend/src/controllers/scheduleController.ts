@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { prisma } from '../utils/prisma';
 import { AuthRequest } from '../middleware/auth';
-import { generateMonthlySchedule, getScheduleWithSlots, resolveMonthScheduleId, uniqueScheduleName, updateSlot, validateRestTime } from '../services/scheduleService';
+import { generateMonthlySchedule, getScheduleWithSlots, resolveMonthScheduleId, resolveMonthScheduleIdsAllTypes, uniqueScheduleName, updateSlot, validateRestTime } from '../services/scheduleService';
 import { generateScheduleExcel } from '../services/excelService';
 import { sendBulkPushNotifications } from '../services/notificationService';
 import { generateScheduleWithAI } from '../services/aiService';
@@ -11,6 +11,7 @@ import { createAuditLog } from '../utils/auditLog';
 import { getPagination, paginatedResponse } from '../utils/pagination';
 import { emitToCompany } from '../services/socketService';
 import { inspectScheduleForPublish } from '../services/publishInspectionService';
+import { parseServiceType, serviceTypeLabel } from '../utils/serviceType';
 
 export const getScheduleList = async (req: AuthRequest, res: Response) => {
   try {
@@ -21,7 +22,7 @@ export const getScheduleList = async (req: AuthRequest, res: Response) => {
         where,
         orderBy: [{ year: 'desc' }, { month: 'desc' }],
         select: {
-          id: true, year: true, month: true, status: true, createdAt: true,
+          id: true, year: true, month: true, status: true, serviceType: true, createdAt: true,
           _count: { select: { slots: true } },
         },
         skip: pagination.skip,
@@ -45,8 +46,14 @@ export const getSchedule = async (req: AuthRequest, res: Response) => {
     // (DRIVER 가 아닌 계정으로 기사 앱에 로그인해도 회사 전체 배차표가 노출되지 않도록 방어)
     const mineOnly = req.query.mine === '1' || req.user!.role === 'DRIVER';
     if (mineOnly) {
-      // 기사에게는 발행된 배차표만 노출 (초안 프로필은 관리자 전용)
-      const schedule = await prisma.schedule.findFirst({
+      // 기사에게는 발행된 배차표만 노출 (초안 프로필은 관리자 전용).
+      // 간선·지선·광역이 각각 따로 발행되므로 그 달 발행본은 여러 개일 수 있다.
+      // 기사의 슬롯을 **전부 합쳐서** 돌려준다 — 하나만 골라 주면 월 중 종류를
+      // 옮겼거나 옛 '전체' 발행본이 남아 있을 때 나머지 근무일이 앱에서 통째로
+      // 사라진다(기사는 "그 뒤로 배차가 없네" 하고 출근하지 않는다).
+      // getMyMonthlySummary 도 같은 기준으로 합산한다 — 두 화면의 숫자가
+      // 어긋나지 않게 술어를 반드시 같이 유지할 것.
+      const published = await prisma.schedule.findMany({
         where: { companyId: req.user!.companyId, year, month, status: 'PUBLISHED' },
         include: {
           slots: {
@@ -56,18 +63,106 @@ export const getSchedule = async (req: AuthRequest, res: Response) => {
           },
         },
       });
-      return res.json({ success: true, data: schedule });
+      // 배차표 메타(id/status)는 내 슬롯이 있는 것을 대표로 쓴다. 기사 앱은
+      // slots 만 보지만 응답 형태는 종전과 같게 유지한다.
+      const base = published.find((p) => p.slots.length > 0) ?? published[0] ?? null;
+      const mine = base
+        ? {
+            ...base,
+            slots: published
+              .flatMap((p) => p.slots)
+              .sort((a, b) => a.date.getTime() - b.date.getTime()),
+          }
+        : null;
+      return res.json({ success: true, data: mine });
     }
 
     // 관리자: ?scheduleId= 로 특정 초안 프로필 선택. 미지정 시 발행본 우선 → 최근 초안.
+    // ?serviceType= 은 간선/지선/광역 탭 — 미지정이면 '전체'(구분 없음) 버킷.
     const scheduleIdParam = parseInt(String(req.query.scheduleId ?? ''), 10);
     const schedule = await getScheduleWithSlots(
       req.user!.companyId,
       year,
       month,
       Number.isFinite(scheduleIdParam) && scheduleIdParam > 0 ? scheduleIdParam : undefined,
+      parseServiceType(req.query.serviceType),
     );
     return res.json({ success: true, data: schedule });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+// ─────────────────────────────────────────
+// 월 배차표 통합 조회 — 노선 종류를 가로질러 합친다
+// ─────────────────────────────────────────
+/**
+ * 대시보드·오늘 운행 현황처럼 "회사가 이번 달 어떻게 굴러가나"를 보는 화면용.
+ *
+ * 간선·지선·광역이 따로 발행되면서 그 달 배차표가 최대 4개가 됐다. 그런데 이
+ * 화면들은 종류를 나눠 볼 이유가 없다 — 오늘 나가는 차는 다 나가는 차다.
+ * 종류별 '대표' 배차표(발행본 우선 → 최근 초안)를 각각 고른 뒤 슬롯을 합쳐
+ * 하나로 돌려준다.
+ *
+ * `?publishedOnly=1` 이면 발행본만 — 초안이 현장 화면에 새는 것을 막는다.
+ *
+ * 이게 없으면 두 화면은 '전체'(구분 없음) 버킷만 보게 되어, 간선·지선으로만
+ * 발행한 회사에서 영원히 "배차표 없음"을 띄우거나 철 지난 옛 배차표를
+ * 오늘 현황이라고 보여준다.
+ */
+export const getMergedMonthSchedule = async (req: AuthRequest, res: Response) => {
+  try {
+    const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
+    const publishedOnly = req.query.publishedOnly === '1';
+    const companyId = req.user!.companyId;
+
+    const ids = await resolveMonthScheduleIdsAllTypes(companyId, year, month, publishedOnly);
+    const chosen = await prisma.schedule.findMany({
+      where: { id: { in: ids }, companyId },
+      select: {
+        id: true, name: true, serviceType: true, status: true,
+        createdAt: true, updatedAt: true,
+      },
+      orderBy: { serviceType: 'asc' },
+    });
+
+    if (chosen.length === 0) {
+      return res.json({ success: true, data: { schedules: [], status: null, slots: [] } });
+    }
+
+    const slots = await prisma.scheduleSlot.findMany({
+      where: { scheduleId: { in: chosen.map((c) => c.id) } },
+      include: { route: true, bus: true, emergencyDrop: true },
+      orderBy: [{ date: 'asc' }],
+    });
+
+    // 종류마다 상태가 다를 수 있다(간선 발행 + 지선 초안) → 'PARTIAL' 로 알린다.
+    const statuses = new Set(chosen.map((c) => c.status));
+    const status = statuses.size === 1 ? [...statuses][0] : 'PARTIAL';
+
+    const countByScheduleId = new Map<number, number>();
+    for (const sl of slots) {
+      countByScheduleId.set(sl.scheduleId, (countByScheduleId.get(sl.scheduleId) ?? 0) + 1);
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        schedules: chosen.map((c) => ({
+          id: c.id,
+          name: c.name,
+          serviceType: c.serviceType,
+          status: c.status,
+          createdAt: c.createdAt,
+          updatedAt: c.updatedAt,
+          slotCount: countByScheduleId.get(c.id) ?? 0,
+        })),
+        status,
+        slots,
+      },
+    });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
@@ -83,7 +178,8 @@ export const getMyMonthlySummary = async (req: AuthRequest, res: Response) => {
     const month = parseInt(req.params.month);
 
     // 본인 슬롯만 조회 (status/isRestDay 만 필요) — 발행된 배차표 기준
-    const schedule = await prisma.schedule.findFirst({
+    // 간선·지선·광역이 따로 발행되면 그 달 발행본이 여러 개다 — 전부 합산한다.
+    const schedules = await prisma.schedule.findMany({
       where: { companyId: req.user!.companyId, year, month, status: 'PUBLISHED' },
       include: {
         slots: {
@@ -94,7 +190,7 @@ export const getMyMonthlySummary = async (req: AuthRequest, res: Response) => {
     });
 
     // 내 배차 화면과 동일한 병합 규칙: 드랍은 휴무로 집계
-    const slots = schedule?.slots ?? [];
+    const slots = schedules.flatMap((s) => s.slots);
     const isRest = (s: { isRestDay: boolean; status: string }) =>
       s.isRestDay || s.status === 'DROPPED';
     const workDays = slots.filter((s) => !isRest(s)).length;
@@ -125,6 +221,8 @@ export const getMyMonthlySummary = async (req: AuthRequest, res: Response) => {
 export const generateSchedule = async (req: AuthRequest, res: Response) => {
   try {
     const { year, month, workDays, restDays } = req.body;
+    // 간선/지선/광역 — 지정하면 그 종류의 노선·기사만으로 짠다
+    const serviceType = parseServiceType((req.body as { serviceType?: string }).serviceType);
 
     if (!year || !month) {
       return res.status(400).json({ success: false, message: '연도와 월을 입력해주세요.' });
@@ -153,6 +251,7 @@ export const generateSchedule = async (req: AuthRequest, res: Response) => {
       workDays: ruleWorkDays || 5,
       restDays: ruleRestDays || 2,
       customRules: customRuleTexts.length > 0 ? customRuleTexts.join('\n') : undefined,
+      serviceType,
     });
 
     return res.status(201).json({
@@ -401,13 +500,15 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
     const month = parseInt(req.params.month);
 
     // 멀티 초안: body.scheduleId 로 발행할 초안 프로필을 지정. 미지정 시 최근 초안.
+    // 간선/지선/광역은 각각 따로 발행한다 — 미지정이면 '전체'(구분 없음) 버킷.
+    const serviceType = parseServiceType((req.body as { serviceType?: string } | undefined)?.serviceType);
     const bodyScheduleId = Number((req.body as { scheduleId?: number } | undefined)?.scheduleId);
     const existing = bodyScheduleId > 0
       ? await prisma.schedule.findFirst({
           where: { id: bodyScheduleId, companyId: req.user!.companyId, year, month },
         })
       : await prisma.schedule.findFirst({
-          where: { companyId: req.user!.companyId, year, month, status: 'DRAFT' },
+          where: { companyId: req.user!.companyId, year, month, serviceType, status: 'DRAFT' },
           orderBy: { updatedAt: 'desc' },
         });
     if (!existing) {
@@ -417,15 +518,21 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, message: '이미 발행된 배차표입니다.' });
     }
 
-    // 발행본은 월당 1개만 — 다른 초안이 이미 발행되어 있으면 차단
+    // 발행본은 (월 × 노선 종류)당 1개만 — 같은 종류의 다른 초안이 이미
+    // 발행되어 있으면 차단한다. 간선이 발행돼 있어도 지선은 따로 발행할 수 있다.
     const alreadyPublished = await prisma.schedule.findFirst({
-      where: { companyId: req.user!.companyId, year, month, status: 'PUBLISHED' },
+      where: {
+        companyId: req.user!.companyId, year, month,
+        serviceType: existing.serviceType,
+        status: 'PUBLISHED',
+      },
       select: { id: true, name: true },
     });
     if (alreadyPublished) {
+      const label = existing.serviceType ? `${serviceTypeLabel(existing.serviceType)} ` : '';
       return res.status(400).json({
         success: false,
-        message: `이미 발행된 ${year}년 ${month}월 배차표가 있습니다. 기존 발행본을 삭제한 후 발행해주세요.`,
+        message: `이미 발행된 ${year}년 ${month}월 ${label}배차표가 있습니다. 기존 발행본을 삭제한 후 발행해주세요.`,
       });
     }
 
@@ -473,6 +580,7 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
         c.consecutive > 0 ? `연속근무 초과 ${c.consecutive}건` : null,
         c.expiredLicense > 0 ? `면허·자격 만료 배정 ${c.expiredLicense}건` : null,
         c.approvedOff > 0 ? `승인 휴무일 배정 ${c.approvedOff}건` : null,
+        c.serviceTypeMismatch > 0 ? `다른 노선 종류 기사 배정 ${c.serviceTypeMismatch}건` : null,
       ].filter(Boolean);
       return res.status(409).json({
         success: false,
@@ -511,23 +619,31 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
                 new:
                   `공석${inspection.counts.vacant}/미등록${inspection.counts.unregistered}` +
                   `/연속근무${inspection.counts.consecutive}` +
-                  `/면허만료${inspection.counts.expiredLicense}/승인휴무${inspection.counts.approvedOff}`,
+                  `/면허만료${inspection.counts.expiredLicense}/승인휴무${inspection.counts.approvedOff}` +
+                  `/노선종류불일치${inspection.counts.serviceTypeMismatch}`,
               },
             }
           : {}),
       },
     });
 
-    // Notify all drivers
+    // 알림 대상 — 종류가 지정된 배차표는 그 종류 기사에게만 보낸다.
+    // (구분을 아직 안 넣은 기사(null)는 어느 표에 들어갈지 모르므로 함께 받는다)
     const drivers = await prisma.user.findMany({
-      where: { role: 'DRIVER', isActive: true, companyId: req.user!.companyId },
+      where: {
+        role: 'DRIVER', isActive: true, companyId: req.user!.companyId,
+        ...(existing.serviceType
+          ? { OR: [{ serviceType: existing.serviceType }, { serviceType: null }] }
+          : {}),
+      },
       select: { id: true },
     });
 
+    const typeLabel = existing.serviceType ? `${serviceTypeLabel(existing.serviceType)} ` : '';
     await sendBulkPushNotifications(
       drivers.map(d => d.id),
       '📅 배차표 발행',
-      `${year}년 ${month}월 배차표가 발행되었습니다. 확인해주세요!`,
+      `${year}년 ${month}월 ${typeLabel}배차표가 발행되었습니다. 확인해주세요!`,
       'SCHEDULE_PUBLISHED',
       { year, month }
     );
@@ -537,6 +653,7 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
       year,
       month,
       scheduleId: schedule.id,
+      serviceType: existing.serviceType,
     });
 
     return res.json({
@@ -544,7 +661,7 @@ export const publishSchedule = async (req: AuthRequest, res: Response) => {
       data: schedule,
       // 경고(짧은 휴식 등)는 발행을 막지 않지만 담당자에게 보여준다
       warnings: inspection.warnings,
-      message: `${year}년 ${month}월 배차표가 발행되었습니다.`,
+      message: `${year}년 ${month}월 ${typeLabel}배차표가 발행되었습니다.`,
     });
   } catch (error) {
     logger.error(error);
@@ -564,6 +681,7 @@ export const deleteSchedule = async (req: AuthRequest, res: Response) => {
       year,
       month,
       Number.isFinite(scheduleIdParam) && scheduleIdParam > 0 ? scheduleIdParam : undefined,
+      parseServiceType(req.query.serviceType),
     );
     const schedule = resolvedId
       ? await prisma.schedule.findFirst({ where: { id: resolvedId, companyId: req.user!.companyId } })
@@ -610,11 +728,13 @@ export const listMonthSchedules = async (req: AuthRequest, res: Response) => {
     const month = parseInt(req.params.month);
 
     const schedules = await prisma.schedule.findMany({
-      where: { companyId: req.user!.companyId, year, month },
+      // 간선/지선/광역 탭별 목록. ?serviceType 미지정 = '전체'(구분 없음) 버킷
+      where: { companyId: req.user!.companyId, year, month, serviceType: parseServiceType(req.query.serviceType) },
       select: {
         id: true,
         name: true,
         status: true,
+        serviceType: true,
         notes: true,
         createdAt: true,
         updatedAt: true,
@@ -633,6 +753,7 @@ export const listMonthSchedules = async (req: AuthRequest, res: Response) => {
         id: s.id,
         name: s.name,
         status: s.status,
+        serviceType: s.serviceType,
         notes: s.notes,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
@@ -714,7 +835,10 @@ export const duplicateSchedule = async (req: AuthRequest, res: Response) => {
     }
 
     const draftCount = await prisma.schedule.count({
-      where: { companyId: req.user!.companyId, year: src.year, month: src.month, status: 'DRAFT' },
+      where: {
+        companyId: req.user!.companyId, year: src.year, month: src.month,
+        serviceType: src.serviceType, status: 'DRAFT',
+      },
     });
     if (draftCount >= 5) {
       return res.status(400).json({
@@ -730,6 +854,8 @@ export const duplicateSchedule = async (req: AuthRequest, res: Response) => {
         src.month,
         `${src.name} (사본)`,
         tx,
+        undefined,
+        src.serviceType,
       );
       const created = await tx.schedule.create({
         data: {
@@ -737,6 +863,8 @@ export const duplicateSchedule = async (req: AuthRequest, res: Response) => {
           year: src.year,
           month: src.month,
           name,
+          // 사본은 원본과 같은 노선 종류 탭에 남는다
+          serviceType: src.serviceType,
           status: 'DRAFT',
           createdBy: req.user!.id,
           notes: src.notes,
@@ -793,17 +921,21 @@ export const exportScheduleExcel = async (req: AuthRequest, res: Response) => {
     const month = parseInt(req.params.month);
 
     const scheduleIdParam = parseInt(String(req.query.scheduleId ?? ''), 10);
+    const serviceType = parseServiceType(req.query.serviceType);
     const buffer = await generateScheduleExcel(
       req.user!.companyId,
       year,
       month,
       Number.isFinite(scheduleIdParam) && scheduleIdParam > 0 ? scheduleIdParam : undefined,
+      serviceType,
     );
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     const company = await prisma.company.findUnique({ where: { id: req.user!.companyId }, select: { code: true } });
     const companyCode = (company?.code || 'schedule').toLowerCase();
-    res.setHeader('Content-Disposition', `attachment; filename="${companyCode}_schedule_${year}_${month}.xlsx"`);
+    // 종류별로 파일명을 갈라 놓는다 — 셋이 같은 이름이면 받는 쪽에서 덮어쓴다
+    const typeSuffix = serviceType ? `_${serviceType.toLowerCase()}` : '';
+    res.setHeader('Content-Disposition', `attachment; filename="${companyCode}_schedule_${year}_${month}${typeSuffix}.xlsx"`);
 
     return res.send(buffer);
   } catch (error) {
@@ -841,35 +973,40 @@ export const bisExport = async (req: AuthRequest, res: Response) => {
     const year = parseInt(req.params.year);
     const month = parseInt(req.params.month);
 
-    // 발행본 우선 → 최근 초안 (멀티 초안 지원)
-    const resolvedId = await resolveMonthScheduleId(req.user!.companyId, year, month);
-    const schedule = resolvedId
-      ? await prisma.schedule.findFirst({
-          where: { id: resolvedId, companyId: req.user!.companyId },
-          include: {
-            slots: {
-              where: { isRestDay: false },
-              include: {
-                driver: { select: { id: true, employeeId: true, name: true, licenseNumber: true } },
-                route: { select: { routeNumber: true, name: true, startPoint: true, endPoint: true } },
-                bus: { select: { busNumber: true, plateNumber: true } },
-              },
-              orderBy: [{ date: 'asc' }, { route: { routeNumber: 'asc' } }],
-            },
-          },
-        })
-      : null;
-
-    if (!schedule) {
+    // 지자체 BIS 는 회사의 **전 노선**을 받아야 한다 — 간선·지선·광역을 따로
+    // 발행하더라도 여기서는 합쳐서 내보낸다. 한 종류만 보내면 지자체 쪽에는
+    // 나머지 노선이 아예 존재하지 않는 것으로 보이고, 대외 연동이라 틀린 걸
+    // 알아채기도 어렵다. (종류별 대표 = 발행본 우선 → 최근 초안)
+    const ids = await resolveMonthScheduleIdsAllTypes(req.user!.companyId, year, month);
+    if (ids.length === 0) {
       return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
     }
+    const parts = await prisma.schedule.findMany({
+      where: { id: { in: ids }, companyId: req.user!.companyId },
+      select: { serviceType: true, status: true },
+    });
+    // 종류마다 상태가 다르면 'PARTIAL' — 지자체가 "다 확정된 것"으로 오해하지 않게
+    const statuses = new Set(parts.map((p) => p.status));
+    const scheduleStatus = statuses.size === 1 ? [...statuses][0] : 'PARTIAL';
+    const slots = await prisma.scheduleSlot.findMany({
+      where: { scheduleId: { in: ids }, isRestDay: false },
+      include: {
+        driver: { select: { id: true, employeeId: true, name: true, licenseNumber: true } },
+        route: { select: { routeNumber: true, name: true, startPoint: true, endPoint: true } },
+        bus: { select: { busNumber: true, plateNumber: true } },
+      },
+      orderBy: [{ date: 'asc' }, { route: { routeNumber: 'asc' } }],
+    });
+    const schedule = { slots };
 
     // Format for BIS standard (customizable per municipal contract)
     const bisPayload = {
       company: (await prisma.company.findUnique({ where: { id: req.user!.companyId }, select: { name: true } }))?.name || 'Unknown',
       exportedAt: new Date().toISOString(),
       period: { year, month },
-      scheduleStatus: schedule.status,
+      scheduleStatus,
+      // 어떤 노선 종류가 포함됐는지 — 받는 쪽이 누락을 알아챌 수 있게 명시한다
+      serviceTypes: parts.map((p) => p.serviceType ?? 'ALL'),
       slotCount: schedule.slots.length,
       slots: schedule.slots.map(slot => ({
         date: slot.date,

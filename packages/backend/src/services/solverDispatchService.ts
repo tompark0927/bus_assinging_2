@@ -16,7 +16,7 @@
 
 import { prisma } from '../utils/prisma';
 import logger from '../utils/logger';
-import type { ScheduleStatus, SlotStatus, ShiftType } from '@prisma/client';
+import type { ScheduleStatus, SlotStatus, ShiftType, ServiceType } from '@prisma/client';
 
 import { solveMonthlyGrid } from '../agents/_solvers/monthly-grid-solver';
 import {
@@ -32,9 +32,10 @@ import {
   type SolverOutput,
   type WorkdayBandsPolicy,
 } from '../agents/_solvers/types';
-import { uniqueScheduleName } from './scheduleService';
+import { uniqueScheduleName, resolveMonthScheduleIdsAllTypes } from './scheduleService';
 import { buildOperatingPlan, persistRestingVehicles } from './operatingPlanService';
 import { fillVacancies } from './vacancyFillService';
+import { serviceTypeLabel, driverScopeFor, routeScopeFor } from '../utils/serviceType';
 
 // ─────────────────────────────────────────────
 // 순수 헬퍼 — 선호 노선 정렬
@@ -419,12 +420,20 @@ interface BuildInputArgs {
   newHireDriverIds?: Set<number>;
   /** 사고 등으로 특정 노선 배차를 금지할 기사 매핑 (driverId → 금지 routeId 목록) */
   blockedRouteIdsByDriver?: Map<number, number[]>;
+  /** 간선/지선/광역 — 지정하면 그 종류의 노선·차량·기사만 입력에 담는다 */
+  serviceType?: ServiceType | null;
 }
 
 export async function buildSolverInputFromDb(
   args: BuildInputArgs,
 ): Promise<SolverInput> {
   const { companyId, year, month, policy, busOperatingDates, newHireDriverIds, blockedRouteIdsByDriver } = args;
+  // 노선 종류로 좁히기 — 간선 기사는 간선표에만, 지선은 지선표에만 들어간다.
+  // 구분 미지정 기사는 어느 종류 표에도 넣지 않는다(세 표에 다 넣으면 같은 날
+  // 세 번 배차된다). 호출측 generateMonthlyScheduleV2 가 몇 명 빠졌는지 알린다.
+  const serviceType = args.serviceType ?? null;
+  const routeScope = routeScopeFor(serviceType);
+  const driverScope = driverScopeFor(serviceType);
   const monthStart = new Date(Date.UTC(year, month - 1, 1));
   const monthEnd = new Date(Date.UTC(year, month, 0));
 
@@ -437,10 +446,15 @@ export async function buildSolverInputFromDb(
   // ── 전월 슬롯 + 노선 피로도 (recentFatigueScore + carryOverPattern 계산용) ───
   // NOTE: isRestDay 필터 제거 — carryOverPattern 은 휴무일도 포함해야 스트릭을 올바르게 계산.
   //       피로도 계산은 비휴무 슬롯만 쓰므로 아래 그룹화 시 isRestDay 기준으로 분리.
+  // 전월 배차표는 종류별 대표 1개씩만 본다(발행본 우선 → 최근 초안).
+  // 전부 긁으면 한 기사가 초안·발행본에 중복 존재해 피로도가 부풀려지고,
+  // 그만큼 이번 달 배차에서 부당하게 뒤로 밀린다.
+  const prevScheduleIds = await resolveMonthScheduleIdsAllTypes(companyId, prevYear, prevMonth);
+
   const [prevSlots, dbRoutes] = await Promise.all([
     prisma.scheduleSlot.findMany({
       where: {
-        schedule: { companyId },
+        scheduleId: { in: prevScheduleIds },
         date: { gte: prevMonthStart, lte: prevMonthEnd },
       },
       select: {
@@ -452,7 +466,7 @@ export async function buildSolverInputFromDb(
       },
     }),
     prisma.route.findMany({
-      where: { companyId },
+      where: { companyId, ...routeScope },
       select: { id: true, fatigueScore: true },
     }),
   ]);
@@ -493,7 +507,7 @@ export async function buildSolverInputFromDb(
 
   // ── 운전자 (DRIVER 권한, 활성) ───
   const dbDrivers = await prisma.user.findMany({
-    where: { companyId, role: 'DRIVER', isActive: true },
+    where: { companyId, role: 'DRIVER', isActive: true, ...driverScope },
     select: {
       id: true,
       name: true,
@@ -521,7 +535,7 @@ export async function buildSolverInputFromDb(
 
   // ── 차량 ───
   const dbBuses = await prisma.bus.findMany({
-    where: { companyId, isActive: true },
+    where: { companyId, isActive: true, ...(serviceType ? { route: { serviceType } } : {}) },
     select: { id: true, busNumber: true, routeId: true },
   });
 
@@ -673,6 +687,8 @@ interface PersistArgs {
   name?: string;
   /** @deprecated 멀티 초안 도입으로 항상 새 초안을 생성한다 (무시됨) */
   overwriteDraft?: boolean;
+  /** 간선/지선/광역 — 이 초안이 속할 탭. null = 구분 없음(전체) */
+  serviceType?: ServiceType | null;
 }
 
 export async function persistSolverOutput(args: PersistArgs): Promise<{
@@ -680,13 +696,14 @@ export async function persistSolverOutput(args: PersistArgs): Promise<{
   slotsCreated: number;
 }> {
   const { companyId, year, month, adminId, policy, output } = args;
+  const serviceType = args.serviceType ?? null;
 
   // ── 트랜잭션: 새 초안 생성 → Slots bulk insert ───
   // 멀티 초안: 기존 초안·발행본은 건드리지 않고 항상 새 DRAFT 를 추가한다 (월당 최대 5개).
   return await prisma.$transaction(
     async (tx) => {
       const draftCount = await tx.schedule.count({
-        where: { companyId, year, month, status: 'DRAFT' },
+        where: { companyId, year, month, serviceType, status: 'DRAFT' },
       });
       if (draftCount >= 5) {
         throw new Error(
@@ -700,6 +717,8 @@ export async function persistSolverOutput(args: PersistArgs): Promise<{
         month,
         args.name?.trim() || `초안 ${draftCount + 1}`,
         tx,
+        undefined,
+        serviceType,
       );
       const schedule = await tx.schedule.create({
         data: {
@@ -707,6 +726,7 @@ export async function persistSolverOutput(args: PersistArgs): Promise<{
           year,
           month,
           name,
+          serviceType,
           status: 'DRAFT' as ScheduleStatus,
           createdBy: adminId,
           notes: `Solver: ${policy.preset ?? 'CUSTOM'} | fairness ${output.metrics.fairnessScore}/100 | sweet ${(output.metrics.withinTargetRate * 100).toFixed(0)}% | hard 위반 ${output.metrics.hardViolationCount}`,
@@ -778,6 +798,8 @@ export async function generateMonthlyScheduleV2(args: {
   newHireDriverIds?: number[];
   /** 노선별 사고(배차 금지) 기사 — 노선 id 기준 */
   blockedRoutes?: { routeId: number; driverIds: number[] }[];
+  /** 간선/지선/광역 — 종류별로 따로 짜고 따로 발행한다. null = 구분 없음(전체) */
+  serviceType?: ServiceType | null;
 }): Promise<GenerateScheduleV2Result> {
   const start = Date.now();
   const basePolicy = args.policyOverride ?? (await loadCompanyPolicy(args.companyId));
@@ -821,13 +843,23 @@ export async function generateMonthlyScheduleV2(args: {
     busOperatingDates: undefined,
     newHireDriverIds: args.newHireDriverIds ? new Set(args.newHireDriverIds) : undefined,
     blockedRouteIdsByDriver: blockedRouteIdsByDriver.size > 0 ? blockedRouteIdsByDriver : undefined,
+    serviceType: args.serviceType ?? null,
   });
 
+  const typeLabel = args.serviceType ? `${serviceTypeLabel(args.serviceType)} ` : '';
   if (input.drivers.length === 0) {
-    throw new Error('등록된 활성 기사가 없습니다. 기본정보 관리에서 기사를 먼저 등록해주세요.');
+    throw new Error(
+      args.serviceType
+        ? `${typeLabel}기사가 없습니다. 기초 데이터 > 기사에서 노선 종류를 지정해주세요.`
+        : '등록된 활성 기사가 없습니다. 기본정보 관리에서 기사를 먼저 등록해주세요.',
+    );
   }
   if (input.buses.length === 0) {
-    throw new Error('노선에 배정된 차량이 없습니다. 기본정보 관리에서 차량과 노선을 먼저 등록해주세요.');
+    throw new Error(
+      args.serviceType
+        ? `${typeLabel}노선에 배정된 차량이 없습니다. 기초 데이터 > 노선에서 종류를 지정해주세요.`
+        : '노선에 배정된 차량이 없습니다. 기본정보 관리에서 차량과 노선을 먼저 등록해주세요.',
+    );
   }
   if (!input.crews || input.crews.length === 0) {
     throw new Error('차량에 배정된 기사가 없습니다. 기사 등록 시 담당 차량(차번)을 입력해주세요.');
@@ -845,6 +877,7 @@ export async function generateMonthlyScheduleV2(args: {
     policy,
     output,
     name: args.name,
+    serviceType: args.serviceType ?? null,
   });
 
   // 감차 차량을 패턴으로 남긴다 — 화면·인쇄물·발행 검사가 "원래 안 나가는

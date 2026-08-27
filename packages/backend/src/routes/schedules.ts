@@ -12,6 +12,7 @@ import {
   getAIRecommendations,
   bisExport,
   getMyMonthlySummary,
+  getMergedMonthSchedule,
   listMonthSchedules,
   duplicateSchedule,
   renameSchedule,
@@ -31,6 +32,7 @@ import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
 import { computeManpowerPlan } from '../services/manpowerService';
+import { parseServiceType } from '../utils/serviceType';
 
 const router = Router();
 
@@ -90,6 +92,18 @@ router.get('/', getScheduleList);
  */
 router.get('/:year/:month', ...scheduleValidation.getSchedule, getSchedule);
 router.get('/:year/:month/summary', ...scheduleValidation.getSchedule, getMyMonthlySummary);
+
+/**
+ * @swagger
+ * /schedules/{year}/{month}/merged:
+ *   get:
+ *     summary: 월 배차표 통합 조회 (간선·지선·광역 합침)
+ *     description: >
+ *       대시보드·오늘 운행 현황용. 노선 종류별 대표 배차표(발행본 우선 → 최근 초안)를
+ *       골라 슬롯을 하나로 합쳐 돌려준다. ?publishedOnly=1 이면 발행본만.
+ *     tags: [Schedules]
+ */
+router.get('/:year/:month/merged', requireRole('DISPATCH'), ...scheduleValidation.getSchedule, getMergedMonthSchedule);
 // 멀티 초안: 해당 월의 모든 배차표(초안 프로필 + 발행본) 목록
 router.get('/:year/:month/drafts', requireRole('DISPATCH'), ...scheduleValidation.getSchedule, listMonthSchedules);
 // 멀티 초안: 배차표 복제 (새 초안 프로필로)
@@ -159,7 +173,7 @@ router.post(
       const { generateMonthlyScheduleV2 } = await import(
         '../services/solverDispatchService'
       );
-      const { year, month, name, workDays, restDays, newHireDriverIds, blockedRoutes } = req.body as {
+      const { year, month, name, workDays, restDays, newHireDriverIds, blockedRoutes, serviceType } = req.body as {
         year: number;
         month: number;
         /** 초안 프로필 이름 (선택) — 미지정 시 "초안 N" 자동 부여 */
@@ -169,6 +183,8 @@ router.post(
         restDays?: number;
         newHireDriverIds?: number[];
         blockedRoutes?: { routeId: number; driverIds: number[] }[];
+        /** 간선(TRUNK)/지선(BRANCH)/광역(WIDE_AREA) — 미지정 시 구분 없음(전체) */
+        serviceType?: string;
       };
       if (!year || !month || month < 1 || month > 12) {
         return res
@@ -193,6 +209,7 @@ router.post(
             : undefined,
         newHireDriverIds: Array.isArray(newHireDriverIds) ? newHireDriverIds : undefined,
         blockedRoutes: Array.isArray(blockedRoutes) ? blockedRoutes : undefined,
+        serviceType: parseServiceType(serviceType),
       });
       return res.status(201).json({
         scheduleId: result.scheduleId,
@@ -239,12 +256,13 @@ router.post(
  */
 router.post('/from-engine', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {
-    const { year, month, name, cells, confirmOverwrite, confirmMismatch } = req.body ?? {};
+    const { year, month, name, cells, confirmOverwrite, confirmMismatch, serviceType } = req.body ?? {};
     if (!Number.isInteger(year) || !Number.isInteger(month) || !cells || typeof cells !== 'object') {
       return res.status(400).json({ success: false, message: 'year, month, cells 가 필요합니다.' });
     }
     const result = await saveEngineDraft(req.user!.companyId, req.user!.id, {
       year, month, name, cells,
+      serviceType: parseServiceType(serviceType),
       confirmOverwrite: confirmOverwrite === true,
       confirmMismatch: confirmMismatch === true,
     });
@@ -295,7 +313,11 @@ router.get('/:year/:month/manpower', requireRole('DISPATCH'), async (req: AuthRe
     if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
       return res.status(400).json({ success: false, message: '연도·월이 올바르지 않습니다.' });
     }
-    const plan = await computeManpowerPlan(req.user!.companyId, year, month);
+    // 배차표 관리의 노선 종류 탭에서 부른다 — 그 종류의 인력만 계산해야
+    // 종류별 과부족이 상쇄되지 않는다
+    const plan = await computeManpowerPlan(
+      req.user!.companyId, year, month, parseServiceType(req.query.serviceType),
+    );
     return res.json({ success: true, data: plan });
   } catch (error) {
     logger.error(`[schedules/manpower] ${error}`);

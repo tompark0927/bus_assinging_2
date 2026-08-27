@@ -40,15 +40,30 @@ interface Slot {
   driver?: { id: number; name: string };
 }
 
-interface Schedule {
-  id: number;
-  year: number;
-  month: number;
-  status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
-  publishedAt?: string | null;
-  createdAt?: string;
+/**
+ * 월 배차표 통합본 — 간선·지선·광역을 가로질러 합친 것.
+ * 대시보드는 "회사 전체가 이번 달 준비됐나"를 보는 화면이라 종류를 나누지 않는다.
+ * status 'PARTIAL' = 종류마다 상태가 다름(예: 간선 발행 + 지선 초안).
+ */
+interface MergedSchedule {
+  schedules: {
+    id: number;
+    name: string;
+    serviceType: 'TRUNK' | 'BRANCH' | 'WIDE_AREA' | null;
+    status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+    createdAt?: string;
+    slotCount: number;
+  }[];
+  status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'PARTIAL' | null;
   slots?: Slot[];
 }
+
+const SERVICE_LABEL: Record<string, string> = {
+  TRUNK: '간선', BRANCH: '지선', WIDE_AREA: '광역', _ALL: '전체',
+};
+const STATUS_LABEL: Record<string, string> = {
+  PUBLISHED: '발행됨', DRAFT: '초안', ARCHIVED: '보관',
+};
 
 interface DayOffRequest {
   id: number;
@@ -109,15 +124,21 @@ export default function DashboardPage() {
 
   /* ── 데이터 조회 ────────────────────────────────── */
 
-  const { data: schedule, isLoading: schedLoading } = useQuery<Schedule | null>({
-    queryKey: ['schedule', year, month],
-    queryFn: () => schedulesApi.get(year, month).then((r) => r.data.data).catch(() => null),
+  // 간선·지선·광역을 합쳐서 본다. '전체' 버킷만 보면, 종류별로만 발행한 회사는
+  // 배차표를 다 만들어 놓고도 영영 "미생성"으로 표시된다 (그 반대가 더 위험하다:
+  // 옛 '전체' 배차표가 하나 남아 있으면 다음 달을 하나도 안 만들었는데 경고가 안 뜬다).
+  const { data: schedule, isLoading: schedLoading } = useQuery<MergedSchedule | null>({
+    queryKey: ['schedule', 'merged', year, month],
+    queryFn: () => schedulesApi.merged(year, month).then((r) => r.data.data).catch(() => null),
   });
 
-  const { data: nextSchedule } = useQuery<Schedule | null>({
-    queryKey: ['schedule', nextYear, nextMonth],
-    queryFn: () => schedulesApi.get(nextYear, nextMonth).then((r) => r.data.data).catch(() => null),
+  const { data: nextSchedule } = useQuery<MergedSchedule | null>({
+    queryKey: ['schedule', 'merged', nextYear, nextMonth],
+    queryFn: () => schedulesApi.merged(nextYear, nextMonth).then((r) => r.data.data).catch(() => null),
   });
+  // 종류를 하나라도 만들어 뒀으면 '준비됨'
+  const hasSchedule = (schedule?.schedules.length ?? 0) > 0;
+  const hasNextSchedule = (nextSchedule?.schedules.length ?? 0) > 0;
 
   const { data: pendingDayOffs = [] } = useQuery<DayOffRequest[]>({
     queryKey: ['dayoff', 'pending'],
@@ -216,7 +237,7 @@ export default function DashboardPage() {
   }, [approvedDayOffs]);
 
 // 다음 달 미생성 + 월말 D-7 이내 → 경고
-  const showNextMonthWarning = !nextSchedule && daysToMonthEnd <= 7 && daysToMonthEnd >= 0;
+  const showNextMonthWarning = !hasNextSchedule && daysToMonthEnd <= 7 && daysToMonthEnd >= 0;
 
   // 휴무 신청 SLA — 가장 오래된 PENDING이 며칠 됐는지
   const oldestPendingDays = useMemo(() => {
@@ -227,6 +248,10 @@ export default function DashboardPage() {
     return ages[0] ?? 0;
   }, [pendingDayOffs]);
 
+  // 대타 관리·휴무 요청 — 정식 오픈 전까지 대시보드에서도 숨긴다.
+  // (Layout.tsx 의 네비게이션 숨김과 한 세트. 되살릴 때 true 로 바꾸면 전부 돌아온다)
+  const showSubstituteAndDayOff = false;
+
   /* ── 렌더 ────────────────────────────────────── */
 
   return (
@@ -235,9 +260,9 @@ export default function DashboardPage() {
       <PageHeader icon={LayoutDashboard} title="대시보드" description={todayStr} />
 
       {/* 1. 즉시 처리 필요 — 빨간 영역 */}
-      {(todayOpenEmergencies.length > 0 || expiringDrivers.length > 0) && (
+      {((showSubstituteAndDayOff && todayOpenEmergencies.length > 0) || expiringDrivers.length > 0) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {todayOpenEmergencies.length > 0 && (
+          {showSubstituteAndDayOff && todayOpenEmergencies.length > 0 && (
             <UrgentCard
               icon={<AlertTriangle className="w-6 h-6" />}
               tone="red"
@@ -266,16 +291,16 @@ export default function DashboardPage() {
         title={`${year}년 ${month}월 배차표`}
         right={<ScheduleStatusBadge schedule={schedule} loading={schedLoading} />}
         to="/dashboard/schedule"
-        ctaLabel={schedule ? '배차표 열기' : '생성하기'}
+        ctaLabel={hasSchedule ? '배차표 열기' : '생성하기'}
       >
         {schedLoading ? (
           <Loading />
-        ) : !schedule ? (
+        ) : !hasSchedule ? (
           <div className="text-[15px] text-gray-500 dark:text-gray-400">
             아직 이번 달 배차표가 생성되지 않았습니다. 지금 만들어보세요.
           </div>
         ) : (
-          <ScheduleSummary schedule={schedule} totalDrivers={counts.drivers} />
+          <ScheduleSummary schedule={schedule!} totalDrivers={counts.drivers} />
         )}
       </SectionCard>
 
@@ -301,6 +326,7 @@ export default function DashboardPage() {
       )}
 
       {/* 4. 운영 큐 — 2-column */}
+      {showSubstituteAndDayOff && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <SectionCard
           icon={<CalendarOff className="w-5 h-5 text-gray-900 dark:text-white" />}
@@ -382,9 +408,10 @@ export default function DashboardPage() {
           )}
         </SectionCard>
       </div>
+      )}
 
       {/* 5. 다가오는 휴무 (1주일 내) */}
-      {upcomingDayOffs.length > 0 && (
+      {showSubstituteAndDayOff && upcomingDayOffs.length > 0 && (
         <SectionCard
           icon={<CalendarOff className="w-5 h-5 text-gray-900 dark:text-white" />}
           title="다가오는 휴무 (D-7)"
@@ -445,8 +472,12 @@ export default function DashboardPage() {
       {/* 7. 빠른 진입 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <QuickLink to="/dashboard/schedule" icon={<Calendar size={18} />} label="배차표 관리" />
-        <QuickLink to="/dashboard/emergency" icon={<AlertTriangle size={18} />} label="대타 관리" />
-        <QuickLink to="/dashboard/dayoff" icon={<CalendarOff size={18} />} label="휴무 요청" />
+        {showSubstituteAndDayOff && (
+          <>
+            <QuickLink to="/dashboard/emergency" icon={<AlertTriangle size={18} />} label="대타 관리" />
+            <QuickLink to="/dashboard/dayoff" icon={<CalendarOff size={18} />} label="휴무 요청" />
+          </>
+        )}
         <QuickLink to="/dashboard/today" icon={<Bus size={18} />} label="오늘 운행" />
       </div>
     </div>
@@ -486,23 +517,32 @@ function UrgentCard({ icon, tone, title, desc, to, ctaLabel }: {
   );
 }
 
-function ScheduleStatusBadge({ schedule, loading }: { schedule: Schedule | null | undefined; loading: boolean }) {
+function ScheduleStatusBadge({ schedule, loading }: { schedule: MergedSchedule | null | undefined; loading: boolean }) {
   if (loading) return null;
-  if (!schedule) return <Badge color="gray">미생성</Badge>;
+  if (!schedule || schedule.schedules.length === 0) return <Badge color="gray">미생성</Badge>;
   if (schedule.status === 'DRAFT') return <Badge color="amber">초안</Badge>;
   if (schedule.status === 'PUBLISHED') return <Badge color="green">발행됨</Badge>;
+  // 종류마다 상태가 다르다 — 간선은 발행됐는데 지선은 초안인 상태를 뭉뚱그려
+  // '발행됨'으로 보이면 담당자가 남은 하나를 놓친다.
+  if (schedule.status === 'PARTIAL') return <Badge color="amber">일부 발행</Badge>;
   return <Badge color="gray">{schedule.status}</Badge>;
 }
 
-function ScheduleSummary({ schedule, totalDrivers }: { schedule: Schedule; totalDrivers: number }) {
+function ScheduleSummary({ schedule, totalDrivers }: { schedule: MergedSchedule; totalDrivers: number }) {
   const slotCount = schedule.slots?.length ?? 0;
   const work = schedule.slots?.filter((s) => !s.isRestDay).length ?? 0;
   const dropped = schedule.slots?.filter((s) => s.status === 'DROPPED').length ?? 0;
   const filled = schedule.slots?.filter((s) => s.status === 'FILLED').length ?? 0;
-  const meta = schedule.publishedAt
-    ? `${new Date(schedule.publishedAt).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} 발행`
-    : schedule.createdAt
-    ? `${new Date(schedule.createdAt).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} 생성`
+  // 노선 종류를 나눠 쓰는 회사에는 종류별 상태를 그대로 보여준다 — 어느 쪽이
+  // 아직 초안인지가 이 화면에서 가장 알고 싶은 것이다.
+  const list = schedule.schedules;
+  const split = list.length > 1 || (list[0] && list[0].serviceType !== null);
+  const meta = split
+    ? list
+        .map((s) => `${SERVICE_LABEL[s.serviceType ?? '_ALL']} ${STATUS_LABEL[s.status] ?? s.status}`)
+        .join(' · ')
+    : list[0]?.createdAt
+    ? `${new Date(list[0].createdAt).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} 생성`
     : '';
 
   return (

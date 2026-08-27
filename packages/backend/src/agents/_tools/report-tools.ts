@@ -17,6 +17,7 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../utils/prisma';
 import { calculateFairness, type SlotForFairness } from './fairness';
+import { resolveMonthScheduleIdsAllTypes } from '../../services/scheduleService';
 import type { AgentTool, ToolContext } from '../_core/types';
 
 // ─────────────────────────────────────────────
@@ -163,18 +164,21 @@ const getYesterdayActivity: AgentTool<GetYesterdayActivityInput, unknown> = {
     });
 
     // 어제 수동 변경된 슬롯 (isManualOverride=true + updatedAt 어제)
+    // 발행본만 — 이 보고서는 "현장에서 무슨 일이 있었나"다. 확정 전 초안 수정은
+    // 현장 사건이 아니고, 같은 달 초안이 5개면 같은 작업이 5배로 집계된다.
+    // (종류별 발행본끼리는 서로 다른 슬롯이라 합산이 맞다)
     const manualOverrides = await prisma.scheduleSlot.count({
       where: {
-        schedule: { companyId: ctx.companyId },
+        schedule: { companyId: ctx.companyId, status: 'PUBLISHED' },
         isManualOverride: true,
         updatedAt: { gte: dayStart, lt: dayEnd },
       },
     });
 
-    // 어제 결근 (ABSENT) 발생
+    // 어제 결근 (ABSENT) 발생 — 발행본 기준
     const absent = await prisma.scheduleSlot.count({
       where: {
-        schedule: { companyId: ctx.companyId },
+        schedule: { companyId: ctx.companyId, status: 'PUBLISHED' },
         date: dayStart,
         status: 'ABSENT',
       },
@@ -258,20 +262,20 @@ const getTodayPriorities: AgentTool<GetTodayPrioritiesInput, unknown> = {
       },
     });
 
-    // 오늘 운행 예정 슬롯 수
+    // 오늘 운행 예정 슬롯 수 — 실제로 나가는 차는 발행본에만 있다
     const todaySlotsCount = await prisma.scheduleSlot.count({
       where: {
-        schedule: { companyId: ctx.companyId },
+        schedule: { companyId: ctx.companyId, status: 'PUBLISHED' },
         date,
         isRestDay: false,
         status: { in: ['SCHEDULED', 'FILLED'] },
       },
     });
 
-    // 오늘 DROPPED 잔존 (대타 미확보)
+    // 오늘 DROPPED 잔존 (대타 미확보) — 발행본 기준
     const droppedToday = await prisma.scheduleSlot.count({
       where: {
-        schedule: { companyId: ctx.companyId },
+        schedule: { companyId: ctx.companyId, status: 'PUBLISHED' },
         date,
         status: 'DROPPED',
       },
@@ -331,33 +335,25 @@ const getFairnessDrift: AgentTool<GetFairnessDriftInput, unknown> = {
       y: number,
       m: number
     ): Promise<{ exists: boolean; fairnessScore: number; outliers: number; stdev: number }> => {
-      // 멀티 초안: 발행본 우선, 없으면 가장 최근 초안 기준
-      const scheduleInclude = {
-        slots: {
-          select: {
-            driverId: true,
-            routeId: true,
-            shift: true,
-            isRestDay: true,
-            date: true,
-            status: true,
-          },
-        },
-      } as const;
-      const schedule =
-        (await prisma.schedule.findFirst({
-          where: { companyId: ctx.companyId, year: y, month: m, status: 'PUBLISHED' },
-          include: scheduleInclude,
-        })) ??
-        (await prisma.schedule.findFirst({
-          where: { companyId: ctx.companyId, year: y, month: m },
-          orderBy: { updatedAt: 'desc' },
-          include: scheduleInclude,
-        }));
-      if (!schedule || schedule.slots.length === 0) {
+      // 멀티 초안: 종류별로 발행본 우선, 없으면 가장 최근 초안 기준
+      // 간선·지선·광역이 따로 발행되므로 그 달 배차표는 최대 4개다. 하나만 집으면
+      // 나머지 종류 기사가 통째로 빠진 수치를 "회사 전체 공정성"으로 내놓게 되고,
+      // 달마다 다른 종류가 뽑히면(이번 달 간선 ↔ 지난달 지선) 아무 일 없어도
+      // 드리프트가 URGENT 로 튄다. 종류별 대표를 모아 합산한다.
+      const ids = await resolveMonthScheduleIdsAllTypes(ctx.companyId, y, m);
+      const slots = ids.length
+        ? await prisma.scheduleSlot.findMany({
+            where: { scheduleId: { in: ids } },
+            select: {
+              driverId: true, routeId: true, shift: true,
+              isRestDay: true, date: true, status: true,
+            },
+          })
+        : [];
+      if (slots.length === 0) {
         return { exists: false, fairnessScore: 0, outliers: 0, stdev: 0 };
       }
-      const slotsForCalc: SlotForFairness[] = schedule.slots.map((s) => ({
+      const slotsForCalc: SlotForFairness[] = slots.map((s) => ({
         driverId: s.driverId,
         routeId: s.routeId,
         shift: s.shift as 'MORNING' | 'AFTERNOON' | 'FULL_DAY',

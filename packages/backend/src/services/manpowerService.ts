@@ -1,4 +1,6 @@
 import { prisma } from '../utils/prisma';
+import { driverScopeFor } from '../utils/serviceType';
+import type { ServiceType } from '@prisma/client';
 import { buildOperatingPlan } from './operatingPlanService';
 import { loadCompanyPolicy } from './solverDispatchService';
 
@@ -89,12 +91,17 @@ export async function computeManpowerPlan(
   companyId: number,
   year: number,
   month: number,
+  /**
+   * 간선/지선/광역 — 지정하면 그 종류의 노선·기사만으로 계산한다.
+   * 안 나누면 "간선 10명 부족 + 지선 10명 남음"이 상쇄돼 '적정'으로 보인다.
+   */
+  serviceType: ServiceType | null = null,
 ): Promise<ManpowerPlan> {
   const [plan, policy, drivers] = await Promise.all([
-    buildOperatingPlan(companyId, year, month),
+    buildOperatingPlan(companyId, year, month, serviceType),
     loadCompanyPolicy(companyId),
     prisma.user.findMany({
-      where: { companyId, role: 'DRIVER', isActive: true },
+      where: { companyId, role: 'DRIVER', isActive: true, ...driverScopeFor(serviceType) },
       select: { driverType: true },
     }),
   ]);

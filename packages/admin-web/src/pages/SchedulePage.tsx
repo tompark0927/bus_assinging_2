@@ -30,7 +30,7 @@ import {
   Layers,
   Copy,
 } from 'lucide-react';
-import { schedulesApi, routesApi, busesApi, usersApi, dayOffApi, companyPolicyApi } from '../services/api';
+import { schedulesApi, routesApi, busesApi, usersApi, dayOffApi, companyPolicyApi, type ScheduleServiceType } from '../services/api';
 import { format, getDaysInMonth } from 'date-fns';
 import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
@@ -206,6 +206,20 @@ const CREW_KIND_LABEL: Record<string, string> = {
   TRIO: '3인 승무',
 };
 
+/**
+ * 노선 종류 탭 — 한 회사가 간선·지선·광역을 함께 운영하면 배차표도 따로 짜고
+ * 따로 발행한다. '' = 전체(구분 없음): 종류를 나누기 전에 만든 배차표가 여기 남고,
+ * 한 종류만 운행하는 회사는 이 탭만 쓰면 된다.
+ */
+const SERVICE_TABS: { value: ScheduleServiceType; label: string; hint: string }[] = [
+  { value: '', label: '전체', hint: '노선 종류를 나누지 않은 배차표' },
+  { value: 'TRUNK', label: '간선', hint: '간선 노선만 모아 따로 발행' },
+  { value: 'BRANCH', label: '지선', hint: '지선 노선만 모아 따로 발행' },
+  { value: 'WIDE_AREA', label: '광역', hint: '광역 노선만 모아 따로 발행' },
+];
+const SERVICE_TAB_LABEL = (v: ScheduleServiceType) =>
+  SERVICE_TABS.find((t) => t.value === v)?.label ?? '전체';
+
 export default function SchedulePage() {
   const queryClient = useQueryClient();
 
@@ -254,6 +268,8 @@ export default function SchedulePage() {
     setShowPolicyNudge(false);
     navigate('/dashboard/settings');
   }, [navigate]);
+  // 노선 종류 탭 (간선/지선/광역). '' = 전체(구분 없음)
+  const [serviceType, setServiceType] = useState<ScheduleServiceType>('');
   // 멀티 초안(프로필): 선택된 배차표 ID (null = 발행본 우선 → 최근 초안)
   const [selectedScheduleId, setSelectedScheduleId] = useState<number | null>(null);
   const [newDraftName, setNewDraftName] = useState('');
@@ -308,15 +324,16 @@ export default function SchedulePage() {
 
   // ─── 데이터 조회 ───
 
-  // 월 이동 시 프로필 선택 초기화
+  // 월 이동·노선 종류 전환 시 프로필 선택 초기화 — 다른 탭의 초안 id 를 들고 가면
+  // 그 배차표가 그대로 보여 탭이 안 바뀐 것처럼 보인다.
   useEffect(() => {
     setSelectedScheduleId(null);
-  }, [year, month]);
+  }, [year, month, serviceType]);
 
   // 이 달의 배차표 프로필 목록 (발행본 + 초안들)
   const { data: draftList = [] } = useQuery<DraftSummary[]>({
-    queryKey: ['schedule-drafts', year, month],
-    queryFn: () => schedulesApi.listDrafts(year, month).then((r) => r.data.data ?? []),
+    queryKey: ['schedule-drafts', year, month, serviceType],
+    queryFn: () => schedulesApi.listDrafts(year, month, serviceType).then((r) => r.data.data ?? []),
   });
 
   const {
@@ -325,8 +342,8 @@ export default function SchedulePage() {
     isError,
     error,
   } = useQuery<Schedule>({
-    queryKey: ['schedule', year, month, selectedScheduleId],
-    queryFn: () => schedulesApi.get(year, month, selectedScheduleId ?? undefined).then((r) => r.data.data),
+    queryKey: ['schedule', year, month, selectedScheduleId, serviceType],
+    queryFn: () => schedulesApi.get(year, month, selectedScheduleId ?? undefined, serviceType).then((r) => r.data.data),
     retry: 1,
   });
 
@@ -659,6 +676,7 @@ export default function SchedulePage() {
       }
       const saved = (await schedulesApi.saveFromEngine({
         year, month,
+        serviceType,
         name: newDraftName.trim() || undefined,
         cells: draft.cells,
         confirmOverwrite: opts?.confirmOverwrite,
@@ -667,6 +685,7 @@ export default function SchedulePage() {
         scheduleId: number; slotCount: number;
         unmatched: { vehicles: string[]; drivers: string[] };
         ambiguousNames: { name: string; candidates: { employeeId: string }[] }[];
+        serviceTypeMismatch: { name: string; driverServiceType: string }[];
       };
       return { draft, saved };
     },
@@ -690,6 +709,17 @@ export default function SchedulePage() {
         `${year}년 ${month}월 초안 생성 완료 — 배정 ${saved.slotCount}건${unmatchedNote}` +
         (draft.audit.ok ? ', 제약 위반 0건' : `, 위반 ${draft.audit.violations.length}건 확인 필요`)
       );
+      // 다른 노선 종류 기사 — 간선 배차표에 지선 기사를 넣지 않는다.
+      // 기초 데이터가 틀렸는지 파일이 틀렸는지는 담당자만 안다.
+      if (saved.serviceTypeMismatch?.length) {
+        const names = saved.serviceTypeMismatch.slice(0, 5).map((m) => m.name).join(', ');
+        toast(
+          `${SERVICE_TAB_LABEL(serviceType)} 배차표라 다른 종류 기사 ${saved.serviceTypeMismatch.length}명은 배정하지 않았습니다: ` +
+          `${names}${saved.serviceTypeMismatch.length > 5 ? ' 외' : ''} — ` +
+          '기초 데이터 > 기사의 노선 종류를 확인해주세요.',
+          { icon: '⚠️', duration: 10000 },
+        );
+      }
       // 동명이인 — 추측 배정하지 않고 보류했다. 담당자가 구분해줘야 채워진다.
       if (saved.ambiguousNames?.length) {
         const list = saved.ambiguousNames
@@ -751,7 +781,7 @@ export default function SchedulePage() {
 
   const publishMutation = useMutation({
     mutationFn: (opts?: { force?: boolean }) =>
-      schedulesApi.publish(year, month, schedule?.id, opts?.force),
+      schedulesApi.publish(year, month, schedule?.id, opts?.force, serviceType),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
@@ -797,7 +827,7 @@ export default function SchedulePage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => schedulesApi.delete(year, month, schedule?.id),
+    mutationFn: () => schedulesApi.delete(year, month, schedule?.id, serviceType),
     onSuccess: () => {
       // 삭제된 프로필의 생성 결과 저장본도 함께 정리
       if (schedule?.id) {
@@ -1134,14 +1164,14 @@ export default function SchedulePage() {
 
   const handleExport = useCallback(async () => {
     try {
-      const res = await schedulesApi.exportExcel(year, month, schedule?.id);
+      const res = await schedulesApi.exportExcel(year, month, schedule?.id, serviceType);
       const blob = new Blob([res.data], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `배차표_${year}년_${month}월.xlsx`;
+      a.download = `배차표_${year}년_${month}월${serviceType ? `_${SERVICE_TAB_LABEL(serviceType)}` : ''}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
       toast.success('엑셀 파일이 다운로드되었습니다.');
@@ -1414,9 +1444,27 @@ export default function SchedulePage() {
             </div>
           }
         >
+          {/* 노선 종류 탭 — 간선·지선·광역을 각각 따로 짜고 따로 발행한다 */}
+          <div className="mt-3 inline-flex rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 p-1" data-print-hide>
+            {SERVICE_TABS.map((t) => (
+              <button
+                key={t.value || 'ALL'}
+                onClick={() => setServiceType(t.value)}
+                title={t.hint}
+                className={`px-5 py-2 rounded-lg text-base font-semibold transition-colors ${
+                  serviceType === t.value
+                    ? 'bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 shadow-sm'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
           <div className="flex items-center gap-3 mt-2">
             <span className="text-lg text-gray-600 dark:text-gray-400">
-              {year}년 {month}월
+              {year}년 {month}월{serviceType && ` · ${SERVICE_TAB_LABEL(serviceType)}`}
             </span>
             {statusConfig && (
               <span
@@ -1703,7 +1751,7 @@ export default function SchedulePage() {
         <div className="card text-center py-24">
           <Calendar size={64} className="mx-auto text-gray-300 dark:text-gray-600 mb-5" />
           <h3 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 mb-3">
-            {year}년 {month}월 배차표가 없습니다
+            {year}년 {month}월 {serviceType && `${SERVICE_TAB_LABEL(serviceType)} `}배차표가 없습니다
           </h3>
           <p className="text-lg text-gray-400 dark:text-gray-500 mb-8">AI 자동 생성으로 최적의 배차표를 만들어 보세요.</p>
           <button
@@ -1740,7 +1788,7 @@ export default function SchedulePage() {
       )}
 
       {showManpower && (
-        <ManpowerModal year={year} month={month} onClose={() => setShowManpower(false)} />
+        <ManpowerModal year={year} month={month} serviceType={serviceType} onClose={() => setShowManpower(false)} />
       )}
 
       {/* ─── 벌크 변경 모달 ─── */}
@@ -1804,7 +1852,9 @@ export default function SchedulePage() {
       {/* 인쇄 전용 제목 — 화면에서는 숨김, 인쇄 시에만 표시 */}
       {schedule && (
         <div className="hidden print:block text-center mb-2">
-          <h2 className="text-xl font-bold text-black">{year}년 {month}월 배차표</h2>
+          <h2 className="text-xl font-bold text-black">
+            {year}년 {month}월 {serviceType && `${SERVICE_TAB_LABEL(serviceType)} `}배차표
+          </h2>
         </div>
       )}
       {/* ─── 뷰 전환 — 게시 양식은 순번 데이터가 있을 때만 노출 ─── */}
@@ -1917,7 +1967,7 @@ export default function SchedulePage() {
               const url = URL.createObjectURL(res.data as Blob);
               const a = document.createElement('a');
               a.href = url;
-              a.download = `일일배차표_${date}.xlsx`;
+              a.download = `일일배차표_${date}${serviceType ? `_${SERVICE_TAB_LABEL(serviceType)}` : ''}.xlsx`;
               a.click();
               URL.revokeObjectURL(url);
             } catch {
@@ -2015,7 +2065,7 @@ export default function SchedulePage() {
                   const url = URL.createObjectURL(res.data as Blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `일일배차표_${effectiveDailyDate}.xlsx`;
+                  a.download = `일일배차표_${effectiveDailyDate}${serviceType ? `_${SERVICE_TAB_LABEL(serviceType)}` : ''}.xlsx`;
                   a.click();
                   URL.revokeObjectURL(url);
                 } catch {
@@ -2718,7 +2768,7 @@ export default function SchedulePage() {
       {showGenerateModal && (
         <Modal
           onClose={() => setShowGenerateModal(false)}
-          title={`${year}년 ${month}월 배차표 생성`}
+          title={`${year}년 ${month}월 ${serviceType ? `${SERVICE_TAB_LABEL(serviceType)} ` : ''}배차표 생성`}
           maxWidth="max-w-xl"
           icon={<Sparkles size={24} className="text-blue-600" />}
         >

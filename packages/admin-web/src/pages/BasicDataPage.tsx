@@ -17,7 +17,7 @@ import {
   Upload,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { usersApi, busesApi, routesApi } from '../services/api';
+import { usersApi, busesApi, routesApi, safetyApi } from '../services/api';
 import PageHeader from '../components/PageHeader';
 import { basicDataHelp } from '../help/helpContent';
 import ExcelUploadModal from '../components/ExcelUploadModal';
@@ -28,12 +28,37 @@ import ExcelUploadModal from '../components/ExcelUploadModal';
 
 type Tab = 'drivers' | 'buses' | 'routes';
 
+/** 노선 종류 — 한 회사가 간선·지선·광역을 함께 운영하는 경우가 있다 */
+type ServiceType = 'TRUNK' | 'BRANCH' | 'WIDE_AREA';
+
+const SERVICE_TYPE_LABEL: Record<ServiceType, string> = {
+  TRUNK: '간선',
+  BRANCH: '지선',
+  WIDE_AREA: '광역',
+};
+const SERVICE_TYPE_COLOR: Record<ServiceType, 'blue' | 'green' | 'amber'> = {
+  TRUNK: 'blue',
+  BRANCH: 'green',
+  WIDE_AREA: 'amber',
+};
+const SERVICE_TYPE_OPTIONS: { value: '' | ServiceType; label: string }[] = [
+  { value: '', label: '미지정' },
+  { value: 'TRUNK', label: '간선' },
+  { value: 'BRANCH', label: '지선' },
+  { value: 'WIDE_AREA', label: '광역' },
+];
+
+/** 'YYYY-MM-DDT...' → 'YYYY-MM-DD' (date input / 표시용) */
+const toDateInput = (v?: string | null) => (v ? v.slice(0, 10) : '');
+
 interface Driver {
   id: number;
   name: string;
   phone: string | null;
   employeeId: string;
   driverType: 'MAIN' | 'SPARE' | null;
+  serviceType: ServiceType | null; // 간선/지선/광역
+  hireDate: string | null; // 입사일 (ISO)
   assignedBusNumber: string | null;
   isActive: boolean;
   vacationDays: number; // 보유 휴가 (연간)
@@ -52,12 +77,15 @@ interface Bus {
   isActive: boolean;
   groupType?: string | null; // 출발 그룹 라벨 (예: 가좌출발/동춘출발) — 배차표 블록 구분
   orderInGroup?: number | null; // 그룹 내 순번 — 배차표 행 정렬
+  // 배정 노선 — 간선/지선/광역 구분은 노선이 갖는다 (차량은 노선을 따라간다)
+  route?: { id: number; routeNumber: string; name: string; serviceType: ServiceType | null } | null;
 }
 
 interface Route {
   id: number;
   routeNumber: string;
   name: string;
+  serviceType: ServiceType | null; // 간선/지선/광역
   startPoint?: string | null;
   endPoint?: string | null;
   isActive: boolean;
@@ -125,6 +153,8 @@ function DriversTab() {
   const [q, setQ] = useState('');
   const [editing, setEditing] = useState<Driver | null>(null);
   const [creating, setCreating] = useState(false);
+  // 이름을 누르면 그 기사의 사고·민원 이력 (노무 관리에 쌓인 기록)
+  const [historyOf, setHistoryOf] = useState<Driver | null>(null);
 
   const { data: list = [], isLoading } = useQuery<Driver[]>({
     queryKey: ['users', 'DRIVER'],
@@ -182,7 +212,7 @@ function DriversTab() {
       ) : filtered.length === 0 ? (
         <Empty label="등록된 기사가 없습니다" />
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5">
+        <div className="overflow-x-auto rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5">
           <table className="w-full text-[15px]">
             <thead className="bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-300">
               <tr>
@@ -190,7 +220,9 @@ function DriversTab() {
                 <Th>사번</Th>
                 <Th>전화번호</Th>
                 <Th>구분</Th>
-                <Th>담당 버스</Th>
+                <Th>노선</Th>
+                <Th>버스</Th>
+                <Th>입사일</Th>
                 <Th>남은 휴가</Th>
                 <Th align="right">액션</Th>
               </tr>
@@ -198,7 +230,15 @@ function DriversTab() {
             <tbody className="divide-y divide-gray-100 dark:divide-white/10">
               {filtered.map((d) => (
                 <tr key={d.id} className="hover:bg-gray-50 dark:hover:bg-white/[0.02]">
-                  <Td className="font-medium text-gray-900 dark:text-gray-100">{d.name}</Td>
+                  <Td className="font-medium">
+                    <button
+                      onClick={() => setHistoryOf(d)}
+                      title={`${d.name} 기사의 사고·민원 이력 보기`}
+                      className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2"
+                    >
+                      {d.name}
+                    </button>
+                  </Td>
                   <Td className="font-mono text-gray-500">{d.employeeId}</Td>
                   <Td>{d.phone || '-'}</Td>
                   <Td>
@@ -206,7 +246,17 @@ function DriversTab() {
                       {d.driverType === 'MAIN' ? '메인' : d.driverType === 'SPARE' ? '스페어' : '-'}
                     </Badge>
                   </Td>
+                  <Td>
+                    {d.serviceType ? (
+                      <Badge color={SERVICE_TYPE_COLOR[d.serviceType]}>{SERVICE_TYPE_LABEL[d.serviceType]}</Badge>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
+                  </Td>
                   <Td>{d.assignedBusNumber || '-'}</Td>
+                  <Td className="font-mono text-gray-600 dark:text-gray-300">
+                    {d.hireDate ? toDateInput(d.hireDate) : <span className="font-sans text-gray-400">-</span>}
+                  </Td>
                   <Td>
                     <span
                       title={`보유 ${d.vacationDays}일 · 올해 사용 ${d.vacationUsed ?? 0}일`}
@@ -242,6 +292,10 @@ function DriversTab() {
           onSaved={() => { qc.invalidateQueries({ queryKey: ['users', 'DRIVER'] }); setEditing(null); setCreating(false); }}
         />
       )}
+
+      {historyOf && (
+        <DriverHistoryModal driver={historyOf} onClose={() => setHistoryOf(null)} />
+      )}
     </>
   );
 }
@@ -252,6 +306,8 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
   const [phone, setPhone] = useState(initial?.phone || '');
   const employeeId = initial?.employeeId || ''; // 표시용(수정 시 읽기 전용) — 생성 시 서버가 자동 발급(DRV###)
   const [driverType, setDriverType] = useState<'MAIN' | 'SPARE'>((initial?.driverType as 'MAIN' | 'SPARE') || 'MAIN');
+  const [serviceType, setServiceType] = useState<'' | ServiceType>(initial?.serviceType || '');
+  const [hireDate, setHireDate] = useState(toDateInput(initial?.hireDate));
   const [assignedBusNumber, setAssignedBusNumber] = useState(initial?.assignedBusNumber || '');
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
   const [fieldErrors, setFieldErrors] = useState<{ phone?: string }>({});
@@ -269,6 +325,9 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
         phone: phone.trim() || null,
         role: 'DRIVER',
         driverType,
+        // 빈 값은 '미지정'(null)
+        serviceType: serviceType || null,
+        hireDate: hireDate || null,
         assignedBusNumber: assignedBusNumber.trim() || null,
         isActive,
         vacationDays: Math.max(0, parseInt(vacationRemaining, 10) || 0) + vacationUsed,
@@ -317,6 +376,27 @@ function DriverFormModal({ initial, onClose, onSaved }: { initial: Driver | null
             <option value="MAIN">메인 (정·부 페어 소속)</option>
             <option value="SPARE">스페어 (예비)</option>
           </select>
+        </FormField>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="노선 종류" hint="간선 배차표에는 간선 기사만 들어갑니다. 미지정 기사는 종류별 배차표에서 제외됩니다.">
+          <select
+            className={inputCls}
+            value={serviceType}
+            onChange={(e) => setServiceType(e.target.value as '' | ServiceType)}
+          >
+            {SERVICE_TYPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </FormField>
+        <FormField label="입사일" hint="근속·신규 기사 판단 기준.">
+          <input
+            type="date"
+            className={inputCls}
+            value={hireDate}
+            onChange={(e) => setHireDate(e.target.value)}
+          />
         </FormField>
       </div>
       <FormField label="담당 버스 번호" hint="메인 기사만. 같은 버스에 정·부 2명을 같은 번호로 연결.">
@@ -392,7 +472,7 @@ function BusesTab() {
     <>
       <Toolbar searchValue={q} onSearch={setQ} searchPlaceholder="차번·차종 검색" onCreate={() => setCreating(true)} createLabel="버스 추가" count={filtered.length} />
       {isLoading ? <Loading /> : filtered.length === 0 ? <Empty label="등록된 버스가 없습니다" /> : (
-        <div className="overflow-hidden rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5">
+        <div className="overflow-x-auto rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5">
           <table className="w-full text-[15px]">
             <thead className="bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-300">
               <tr>
@@ -400,6 +480,8 @@ function BusesTab() {
                 <Th>번호판</Th>
                 <Th>차종</Th>
                 <Th>연식</Th>
+                <Th>노선</Th>
+                <Th>종류</Th>
                 <Th>출발 그룹</Th>
                 <Th>상태</Th>
                 <Th align="right">액션</Th>
@@ -412,6 +494,16 @@ function BusesTab() {
                   <Td className="font-mono text-gray-500">{b.plateNumber}</Td>
                   <Td>{b.model || '-'}</Td>
                   <Td>{b.year || '-'}</Td>
+                  <Td>{b.route ? `${b.route.routeNumber}번` : <span className="text-gray-400">-</span>}</Td>
+                  <Td>
+                    {b.route?.serviceType ? (
+                      <Badge color={SERVICE_TYPE_COLOR[b.route.serviceType]}>
+                        {SERVICE_TYPE_LABEL[b.route.serviceType]}
+                      </Badge>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
+                  </Td>
                   <Td>{b.groupType ? `${b.groupType}${b.orderInGroup ? ` · ${b.orderInGroup}번` : ''}` : '-'}</Td>
                   <Td><Badge color={b.isActive ? 'green' : 'gray'}>{b.isActive ? '운행' : '운휴'}</Badge></Td>
                   <Td align="right">
@@ -488,6 +580,11 @@ function BusFormModal({ initial, onClose, onSaved }: { initial: Bus | null; onCl
           <Input value={orderInGroup} onChange={setOrderInGroup} placeholder="1" />
         </FormField>
       </div>
+      <p className="text-[13px] text-gray-500 dark:text-gray-400 leading-relaxed">
+        간선·지선·광역 구분은 <b className="text-gray-700 dark:text-gray-200">노선</b>이 가집니다.
+        차량은 배정된 노선의 구분을 그대로 따라가므로, 바꾸려면 노선 탭에서 그 노선의 종류를 고쳐주세요.
+      </p>
+
       <label className="flex items-center gap-2 text-[15px] text-gray-700 dark:text-gray-300">
         <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
         운행 중
@@ -541,12 +638,13 @@ function RoutesTab() {
     <>
       <Toolbar searchValue={q} onSearch={setQ} searchPlaceholder="노선번호·이름 검색" onCreate={() => setCreating(true)} createLabel="노선 추가" count={filtered.length} />
       {isLoading ? <Loading /> : filtered.length === 0 ? <Empty label="등록된 노선이 없습니다" /> : (
-        <div className="overflow-hidden rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5">
+        <div className="overflow-x-auto rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5">
           <table className="w-full text-[15px]">
             <thead className="bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-300">
               <tr>
                 <Th>번호</Th>
                 <Th>이름</Th>
+                <Th>종류</Th>
                 <Th>기점</Th>
                 <Th>종점</Th>
                 <Th>운행 대수 (평일/토/휴일)</Th>
@@ -559,6 +657,13 @@ function RoutesTab() {
                 <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-white/[0.02]">
                   <Td className="font-mono font-medium">{r.routeNumber}번</Td>
                   <Td>{r.name}</Td>
+                  <Td>
+                    {r.serviceType ? (
+                      <Badge color={SERVICE_TYPE_COLOR[r.serviceType]}>{SERVICE_TYPE_LABEL[r.serviceType]}</Badge>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
+                  </Td>
                   <Td>{r.startPoint || '-'}</Td>
                   <Td>{r.endPoint || '-'}</Td>
                   <Td>
@@ -601,6 +706,7 @@ function RouteFormModal({ initial, onClose, onSaved }: { initial: Route | null; 
   const isEdit = !!initial;
   const [routeNumber, setRouteNumber] = useState(initial?.routeNumber || '');
   const [name, setName] = useState(initial?.name || '');
+  const [serviceType, setServiceType] = useState<'' | ServiceType>(initial?.serviceType || '');
   const [startPoint, setStartPoint] = useState(initial?.startPoint || '');
   const [endPoint, setEndPoint] = useState(initial?.endPoint || '');
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
@@ -614,6 +720,7 @@ function RouteFormModal({ initial, onClose, onSaved }: { initial: Route | null; 
       const payload: Record<string, unknown> = {
         routeNumber: routeNumber.trim(),
         name: name.trim(),
+        serviceType: serviceType || null,
         startPoint: startPoint.trim() || null,
         endPoint: endPoint.trim() || null,
         isActive,
@@ -633,6 +740,17 @@ function RouteFormModal({ initial, onClose, onSaved }: { initial: Route | null; 
         <FormField label="노선 번호" required><Input value={routeNumber} onChange={setRouteNumber} placeholder="16" /></FormField>
         <FormField label="이름" required><Input value={name} onChange={setName} placeholder="16번" /></FormField>
       </div>
+      <FormField label="노선 종류" hint="배차표 관리에서 간선·지선·광역을 따로 짜고 따로 발행합니다.">
+        <select
+          className={inputCls}
+          value={serviceType}
+          onChange={(e) => setServiceType(e.target.value as '' | ServiceType)}
+        >
+          {SERVICE_TYPE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      </FormField>
       <div className="grid grid-cols-2 gap-3">
         <FormField label="기점"><Input value={startPoint} onChange={setStartPoint} placeholder="가좌동" /></FormField>
         <FormField label="종점"><Input value={endPoint} onChange={setEndPoint} placeholder="동춘동" /></FormField>
@@ -659,6 +777,145 @@ function RouteFormModal({ initial, onClose, onSaved }: { initial: Route | null; 
 
       <ModalFooter onCancel={onClose} onSave={() => save.mutate()} saving={save.isPending} />
     </FormModal>
+  );
+}
+
+
+/* ────────────────────────────────────────────
+   기사 이력 모달 — 노무 관리에 쌓인 사고·지적사항
+   ──────────────────────────────────────────── */
+
+interface Incident {
+  id: number;
+  date: string;
+  type: string;
+  description: string;
+  notes: string | null;
+  penalty: number | null;
+  faultType: 'AT_FAULT' | 'VICTIM' | null;
+  caseNumber: string | null;
+  vehicleNumber: string | null;
+  location: string | null;
+  insuranceNote: string | null;
+  discipline: string | null;
+  compensation: number | null;
+}
+
+const FAULT_LABEL: Record<string, string> = { AT_FAULT: '가해', VICTIM: '피해' };
+
+/**
+ * 회사가 쓰던 '승무원 근태현황' 한 장을 화면으로 옮긴 것.
+ * 좌측이 사고, 우측이 지적사항이던 그 배치를 위아래 두 표로 편다.
+ */
+function DriverHistoryModal({ driver, onClose }: { driver: Driver; onClose: () => void }) {
+  const { data: rows = [], isLoading } = useQuery<Incident[]>({
+    queryKey: ['incidents', 'driver', driver.id],
+    queryFn: async () => {
+      const r = await safetyApi.getIncidents({ driverId: String(driver.id), limit: '300' });
+      return r.data.data as Incident[];
+    },
+  });
+
+  const accidents = rows.filter((r) => r.faultType !== null);
+  const notes = rows.filter((r) => r.faultType === null);
+  const ymd = (v: string) => v.slice(0, 10);
+  const won = (n: number | null) => (n == null ? '-' : `${n.toLocaleString('ko-KR')}원`);
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+      <div className="w-full max-w-5xl max-h-[88vh] overflow-y-auto rounded-2xl bg-white dark:bg-gray-800 shadow-2xl">
+        <div className="sticky top-0 flex items-center justify-between border-b border-gray-200 dark:border-white/10 bg-white dark:bg-gray-800 px-6 py-4">
+          <div>
+            <h3 className="text-[19px] font-bold text-gray-900 dark:text-white">
+              {driver.name} <span className="text-gray-400 font-normal text-[15px]">({driver.employeeId})</span>
+            </h3>
+            <p className="text-[13px] text-gray-500 dark:text-gray-400 mt-0.5">
+              {driver.hireDate ? `${toDateInput(driver.hireDate)} 입사 · ` : ''}사고 {accidents.length}건 · 지적사항 {notes.length}건
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10" aria-label="닫기">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {isLoading ? (
+            <div className="py-12 text-center text-gray-400"><Loader2 className="animate-spin inline" /></div>
+          ) : (
+            <>
+              <section>
+                <h4 className="text-[15px] font-semibold text-gray-800 dark:text-gray-200 mb-2">사고 이력</h4>
+                {accidents.length === 0 ? (
+                  <Empty label="사고 기록이 없습니다" />
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-white/10">
+                    <table className="w-full text-[14px]">
+                      <thead className="bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-300">
+                        <tr>
+                          <Th>사고일</Th><Th>구분</Th><Th>차량</Th><Th>장소</Th>
+                          <Th>내용</Th><Th>보험접수</Th><Th>징계</Th><Th align="right">보상금</Th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 dark:divide-white/10">
+                        {accidents.map((r) => (
+                          <tr key={r.id}>
+                            <Td className="font-mono">{ymd(r.date)}</Td>
+                            <Td>
+                              <Badge color={r.faultType === 'AT_FAULT' ? 'red' : 'blue'}>
+                                {FAULT_LABEL[r.faultType!]}
+                              </Badge>
+                            </Td>
+                            <Td className="font-mono">{r.vehicleNumber || '-'}</Td>
+                            <Td>{r.location || '-'}</Td>
+                            <Td className="max-w-[22rem] whitespace-normal break-words">{r.description || '-'}</Td>
+                            <Td>{r.insuranceNote || '-'}</Td>
+                            <Td>{r.discipline || '-'}</Td>
+                            <Td align="right">{won(r.compensation)}</Td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <h4 className="text-[15px] font-semibold text-gray-800 dark:text-gray-200 mb-2">지적사항·민원</h4>
+                {notes.length === 0 ? (
+                  <Empty label="지적사항이 없습니다" />
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-white/10">
+                    <table className="w-full text-[14px]">
+                      <thead className="bg-gray-50 dark:bg-white/5 text-gray-600 dark:text-gray-300">
+                        <tr>
+                          <Th>년월일</Th><Th>차량</Th><Th>지적사항</Th><Th align="right">과태료</Th><Th>비고</Th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 dark:divide-white/10">
+                        {notes.map((r) => (
+                          <tr key={r.id}>
+                            <Td className="font-mono">{ymd(r.date)}</Td>
+                            <Td className="font-mono">{r.vehicleNumber || '-'}</Td>
+                            <Td className="max-w-[26rem] whitespace-normal break-words">{r.description || '-'}</Td>
+                            <Td align="right">{won(r.penalty)}</Td>
+                            <Td>{r.notes || '-'}</Td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              <p className="text-[13px] text-gray-500 dark:text-gray-400">
+                이 기록은 <b className="text-gray-700 dark:text-gray-200">노무 관리</b> 화면에서 입력·수정합니다.
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -706,10 +963,10 @@ function Toolbar({ searchValue, onSearch, searchPlaceholder, onCreate, createLab
 }
 
 function Th({ children, align }: { children: React.ReactNode; align?: 'left' | 'right' }) {
-  return <th className={`px-4 py-3 text-${align || 'left'} text-[13px] font-semibold uppercase tracking-wide`}>{children}</th>;
+  return <th className={`px-3 py-3 text-${align || 'left'} text-[13px] font-semibold uppercase tracking-wide whitespace-nowrap`}>{children}</th>;
 }
 function Td({ children, className, align }: { children: React.ReactNode; className?: string; align?: 'left' | 'right' }) {
-  return <td className={`px-4 py-3 text-${align || 'left'} ${className || ''}`}>{children}</td>;
+  return <td className={`px-3 py-3 text-${align || 'left'} whitespace-nowrap ${className || ''}`}>{children}</td>;
 }
 
 function Badge({ color, children }: { color: 'green' | 'blue' | 'amber' | 'red' | 'gray'; children: React.ReactNode }) {
