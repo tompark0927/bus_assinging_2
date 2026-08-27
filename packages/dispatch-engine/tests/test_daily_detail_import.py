@@ -121,8 +121,12 @@ def test_한_칸도_못_읽으면_조용히_빈결과를_주지_않는다(tmp_pa
     assert "한 칸도 읽지 못했습니다" in r.json()["detail"]
 
 
-def test_순번이_없는_파일로_새로_짜기를_하면_무엇을_해야_하는지_알려준다(tmp_path):
-    """짐작으로 순번을 만들면 현장이 그 순번대로 차를 낸다 — 막고 안내한다."""
+def test_순번이_없는_파일이면_이어받는_척하지_않고_새로_시작한다(tmp_path):
+    """이어받을 순번이 없는데 전월 말일에서 이어받으면 그게 곧 틀린 순번이다.
+
+    막아버리면 담당자가 8월 배차를 아예 못 짠다(지난달 배차표가 Busync 안에
+    있는데도). 새로 시작하되, 이어지지 않는다는 사실을 경고로 분명히 남긴다.
+    """
     from fastapi.testclient import TestClient
     import service
 
@@ -144,7 +148,12 @@ def test_순번이_없는_파일로_새로_짜기를_하면_무엇을_해야_하
             files={"file": ("export.xlsx", f, "application/vnd.ms-excel")},
             data={"year": "2026", "month": "8"},
         )
-    assert r.status_code >= 400
-    detail = str(r.json().get("detail", ""))
-    assert "순번" in detail
-    assert "그대로 가져오기" in detail
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["cells"], "배차표가 생성되어야 한다"
+
+    # 순번이 이어지지 않는다는 사실을 반드시 알린다 — 조용히 새로 시작하면
+    # 담당자는 지난달과 이어진 줄 알고 그대로 게시한다
+    warns = " ".join(body.get("warnings") or [])
+    assert "순번 정보가 없어" in warns
+    assert "이어지지 않" in warns

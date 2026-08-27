@@ -111,18 +111,28 @@ def generate_month(
     display_of: dict[str, DisplayMode] = {}
     rotation_on = bool(policy.get("rotation_enabled"))
     reduction_on = bool(policy.get("weekend_reduction_enabled"))
+    # 순번을 이어받지 않고 새로 시작하는 그룹 (파일에 순번 열이 없는 경우)
+    fresh_start: set[str] = set()
     for g in prev_t.groups:
         rule = infer_rotation(prev_t, g)
         if rule is None and prev_t.slots_are_synthetic:
-            # 순번 열이 없는 양식(Busync 내보내기)이다. 여기서 설정값으로
-            # 적당히 회전시켜 넘어가면 **틀린 순번의 배차표**가 나오고, 현장은
-            # 그 순번대로 차를 낸다. 짐작으로 채우느니 무엇을 해야 하는지
-            # 알려주고 멈춘다 — '그대로 가져오기'는 이 파일로도 잘 된다.
-            raise ValueError(
-                "이 파일에는 순번(로테이션) 정보가 없어 새 배차표를 짤 수 없습니다. "
-                "Busync 에서 [Excel 내보내기]로 받은 파일에는 순번 열이 없습니다.\n"
-                "· 이 파일 내용을 그대로 쓰시려면 '이미 짠 표 그대로 가져오기'를 선택하세요.\n"
-                "· 엔진으로 새로 짜시려면 순번(순번·차번 열)이 있는 월간배차 원본 파일이 필요합니다."
+            # 순번 열이 없는 양식(Busync 내보내기)이다. 이어받을 순번이 애초에
+            # 존재하지 않으므로 전월 말일에서 '이어받는 척'하면 그게 곧 틀린
+            # 순번이 된다. 대신 이어받기를 끈 것과 똑같이 **차량 순서대로 새로
+            # 시작**하고, 이어지지 않는다는 사실을 경고로 분명히 남긴다.
+            # 회전 자체는 설정된 칸수를 쓴다.
+            n = g.size
+            step = int(policy.get("rotation_step") or 1)
+            rule = RotationRule(
+                group=g.name, size=n,
+                perm={s: ((s - 1 + step) % n) + 1 for s in range(1, n + 1)},
+                support=0.0,
+            )
+            fresh_start.add(g.name)
+            warnings.append(
+                f"{g.name}: 파일에 순번 정보가 없어 순번을 차량 순서대로 새로 "
+                f"시작합니다(회전 {step:+d}칸). 지난달 순번과는 이어지지 않으니 "
+                f"게시 전에 순번을 확인해 주세요."
             )
         if rule is None:
             raise ValueError(f"{g.name}: 로테이션 규칙 추론 실패 — 온보딩 위저드에서 확인 필요")
@@ -149,7 +159,10 @@ def generate_month(
             cfg.rest_counts = {}
         # 이어받기를 끈 경우엔 전월 상태를 조회하지 않는다 — 직전 월 자료가
         # 아예 없어도(첫 도입) 생성이 가능해야 하기 때문.
-        if not carry_over or not prev_is_immediate:
+        if g.name in fresh_start:
+            # 위에서 이미 사유를 경고로 남겼다 — 여기서 또 알리지 않는다
+            last_map = {v: i + 1 for i, v in enumerate(g.vehicles)}
+        elif not carry_over or not prev_is_immediate:
             last_map = {v: i + 1 for i, v in enumerate(g.vehicles)}
             warnings.append(
                 f"{g.name}: 순번을 차량 순서대로 새로 시작합니다 "
