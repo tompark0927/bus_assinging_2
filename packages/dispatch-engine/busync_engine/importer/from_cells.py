@@ -47,6 +47,8 @@ def roster_from_cells(
     entries: dict[tuple[dt.date, str], DayEntry] = {}
     group_vehicles: dict[str, list[str]] = {}
     has_real_slot = False
+    # 그날 안 나간 차량 — 순번을 주면 안 된다 (아래 설명 참조)
+    resting: set[tuple[dt.date, str]] = set()
 
     for date_str, by_vehicle in cells.items():
         try:
@@ -70,6 +72,8 @@ def roster_from_cells(
             e.am = CellState(driver=_driver(cell.get("am")), raw=str(cell.get("am") or ""))
             e.pm = CellState(driver=_driver(cell.get("pm")), raw=str(cell.get("pm") or ""))
             entries[(date, str(vehicle))] = e
+            if cell.get("operating") is False:
+                resting.add((date, str(vehicle)))
 
             gname = cell.get("group") or division or "전체"
             vs = group_vehicles.setdefault(str(gname), [])
@@ -89,12 +93,19 @@ def roster_from_cells(
             for n, vs in sorted(group_vehicles.items())
         ]
 
-    # 순번이 하나도 없으면 차량 순서대로 임시 부여 — 없으면 그룹 판정 자체가 안 된다
+    # 순번이 하나도 없으면 차량 순서대로 임시 부여 — 없으면 그룹 판정 자체가 안 된다.
+    #
+    # **감차된 칸에는 주지 않는다.** 엔진은 `slot_index is None` 을 곧 '그날 안
+    # 나간 차'로 읽는다(DayEntry.is_resting_vehicle). 감차 칸에까지 순번을 주면
+    # 전 차량이 매일 나가는 것으로 보여 감차 모델이 통째로 사라지고, 다음 달
+    # 슬롯이 20% 넘게 부풀어 인력이 모자란 것처럼 된다. 그러면 솔버가 밴드를
+    # 완화하면서 짝궁 상보(같은 날 휴무·A/P 스왑)까지 포기한다 — 실제로
+    # 2026-08 생성에서 슬롯 2160 → 2604 로 늘고 짝궁이 어긋났다.
     if not has_real_slot:
         for g in built:
             index_of = {v: i + 1 for i, v in enumerate(g.vehicles)}
             for (d, v), e in entries.items():
-                if v in index_of:
+                if v in index_of and (d, v) not in resting:
                     e.slot_index = index_of[v]
                     e.slot_label = str(index_of[v])
 

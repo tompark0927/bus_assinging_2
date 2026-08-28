@@ -539,12 +539,18 @@ async def generate_from_cells_endpoint(
         k: {dt.date.fromisoformat(x) for x in v}
         for k, v in (payload.get("leaves") or {}).items()
     }
+    # 요일별 운행 대수는 **추론하지 말고 등록값을 쓴다**. 회사가 기초 데이터
+    # (노선 > 평일/토/일·공휴일 대수)에 이미 정확히 적어 뒀는데, 지난달 실적에서
+    # 되짚으면 평일 상시 감차를 공휴일로 오해해 대수가 뭉개진다.
+    # {"16": {"weekday": 12, "sat": 11, "sunhol": 10, "fleet": 14}}
+    operating_counts = payload.get("operating_counts") or None
     try:
         result = generate_month(
             history, policy, year, month,
             leaves=leaves,
             home_vehicle_config=payload.get("home_config") or None,
             time_limit_s=float(payload.get("time_limit_s") or 180.0),
+            operating_counts=operating_counts,
         )
     except (ValueError, RuntimeError) as ex:
         raise HTTPException(422, str(ex))

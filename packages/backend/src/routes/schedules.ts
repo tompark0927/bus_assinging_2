@@ -33,7 +33,7 @@ import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
 import { computeManpowerPlan } from '../services/manpowerService';
 import { parseServiceType, serviceTypeLabel } from '../utils/serviceType';
-import { monthScheduleAsCells } from '../services/scheduleToCellsService';
+import { monthScheduleAsCells, routeOperatingCounts } from '../services/scheduleToCellsService';
 import { loadEnginePolicy } from '../services/enginePolicyStore';
 import { mergeEnginePolicy } from '../services/enginePolicyMapper';
 import { loadCompanyPolicy } from '../services/solverDispatchService';
@@ -298,10 +298,11 @@ router.post('/generate-from-previous', requireRole('DISPATCH'), async (req: Auth
       });
     }
 
-    const [enginePolicy, companyPolicy, leaves] = await Promise.all([
+    const [enginePolicy, companyPolicy, leaves, operatingCounts] = await Promise.all([
       loadEnginePolicy(companyId),
       loadCompanyPolicy(companyId),
       approvedLeavesByName(companyId, year, month),
+      routeOperatingCounts(companyId, serviceType),
     ]);
 
     const upstream = await fetch(`${engineUrl}/generate-from-cells`, {
@@ -312,6 +313,8 @@ router.post('/generate-from-previous', requireRole('DISPATCH'), async (req: Auth
         history: [{ year: prev.year, month: prev.month, cells: prev.cells, groups: prev.groups }],
         policy: mergeEnginePolicy(enginePolicy, companyPolicy),
         leaves,
+        // 요일별 운행 대수는 기초 데이터의 등록값이 진실이다 (지난달 실적 추론보다 정확)
+        operating_counts: operatingCounts,
       }),
     });
     const text = await upstream.text();

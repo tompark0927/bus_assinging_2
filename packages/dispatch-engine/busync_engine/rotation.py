@@ -79,16 +79,21 @@ def expand_pattern(
         cur = {v: rule.perm[s] for v, s in cur.items()}
         cls = calendar.day_class(d)
         resting: set[str] = set()
-        if cls != DayClass.WEEKDAY:
-            if reduction.mode == ReductionMode.FIXED_SLOTS:
-                slots = reduction.rest_slots.get(cls, frozenset())
-                resting = {v for v, s in cur.items() if s in slots}
-            else:
-                k = reduction.rest_counts.get(cls, 0)
-                order = reduction.pointer_order
-                if order and k:
-                    resting = {order[(ptr + j) % len(order)] for j in range(k)}
-                    ptr = (ptr + k) % len(order)
+        # 평일을 건너뛰지 않는다. 예전에는 `cls != WEEKDAY` 조건이 있어 "감차는
+        # 주말·공휴일에만" 이라고 전제했는데, 평일에도 상시 감차하는 회사가 있다
+        # (성민: 노선당 등록 14대, 평일 12·토 11·일공휴일 10). 그 회사는 평일
+        # 감차가 통째로 무시돼 다음 달이 '전 차량 매일 운행'으로 짜였다.
+        # WEEKDAY 키가 없으면 아래에서 자연히 감차 0 이므로, 주말만 감차하는
+        # 회사의 동작은 그대로다.
+        if reduction.mode == ReductionMode.FIXED_SLOTS:
+            slots = reduction.rest_slots.get(cls, frozenset())
+            resting = {v for v, s in cur.items() if s in slots}
+        else:
+            k = reduction.rest_counts.get(cls, 0)
+            order = reduction.pointer_order
+            if order and k:
+                resting = {order[(ptr + j) % len(order)] for j in range(k)}
+                ptr = (ptr + k) % len(order)
         running_sorted = sorted(
             (v for v in cur if v not in resting), key=lambda v: cur[v]
         )

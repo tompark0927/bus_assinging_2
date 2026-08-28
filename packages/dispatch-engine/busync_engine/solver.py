@@ -34,6 +34,7 @@ from .models import Shift
 @dataclass
 class SolverWeights:
     own_vehicle: int = 1000        # S1
+    pair_together: int = 4000      # S6: 짝궁은 같은 날 함께 근무/휴무 (실측 100%)
     swap_after_leave: int = 30     # S2: 휴무 복귀 후 시프트 유지 시 페널티
     keep_shift: int = 60           # S3: 연속 근무일 시프트 변경 시 페널티
     weekday_pref: int = 20         # S4
@@ -215,6 +216,52 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
                     m.AddImplication(shift_pm[(k, d1)], am2.Not())
 
     penalties: list[cp_model.LinearExpr] = list(unfilled_penalties)
+
+    # ── S6: 짝궁은 같은 날 함께 근무하거나 함께 쉰다 ──
+    # 성민 7월 실측: 정·부 14쌍 × 31일 = 434일 중 '한쪽만 근무'가 **0일**이다.
+    # 함께 일한 282일은 전부 본인 차량에 오전/오후로 나눠 탔고, 함께 쉰 152일
+    # 중 78일은 그 차가 나가야 해서 스페어 2명이 채웠다.
+    #
+    # 이 규칙이 없으면 솔버가 한쪽만 쉬게 만드는 해를 자유롭게 고른다. 실제로
+    # 8월 생성본의 짝궁 휴무 일치율이 33%까지 떨어졌다 — 담당자 눈에 가장 먼저
+    # 띄는 어긋남이다.
+    #
+    # 하드로 걸지 않는 이유: 승인 휴무·입퇴사·연속근무 한도와 겹치면 해가 아예
+    # 없어질 수 있다. 대신 가중치를 본인차량(1000)보다 높게 줘서, 어길 바에는
+    # 다른 걸 포기하도록 만든다.
+    for k in problem.drivers:
+        pk = problem.partner.get(k)
+        # (k, pk) 쌍을 한 번만 — 사전순으로 앞선 쪽에서만 건다
+        if not pk or pk >= k or pk not in set(problem.drivers):
+            continue
+        for d in dates:
+            if (k, d) not in works or (pk, d) not in works:
+                continue
+            # 승인 휴무·결원이 한쪽에만 걸린 날은 애초에 함께 설 수 없다 —
+            # 그런 날까지 하드로 묶으면 해가 아예 없어진다.
+            blocked = (
+                d in problem.leaves.get(k, ())
+                or d in problem.leaves.get(pk, ())
+                or not available(k, d)
+                or not available(pk, d)
+            )
+            if blocked:
+                continue
+            # 하드로 건다. 7월 실측이 434일 중 위반 0일이라 이게 현실이고,
+            # 쌍을 한 덩어리로 묶으면 탐색 공간도 크게 줄어 해를 빨리 찾는다.
+            # (소프트로 뒀더니 3개 노선에서 제한 시간 안에 62% 밖에 못 맞췄다)
+            m.Add(works[(k, d)] == works[(pk, d)])
+
+            # 함께 일하는 날에는 오전/오후를 나눠 맡아야 한다. 짝궁은 한 차의
+            # 정·부이므로 둘 다 오전(또는 둘 다 오후)이면 그 차의 반대 시프트가
+            # 비고 누군가 남의 차를 타고 있다는 뜻이다 (7월 실측 0건).
+            if (k, d) in shift_pm and (pk, d) in shift_pm:
+                # 함께 일하는 날이면 오전/오후를 나눠 맡는다 (같은 차의 정·부).
+                # 둘 다 오전이면 그 차의 오후가 비고 누군가 남의 차를 탄다.
+                m.Add(
+                    shift_pm[(k, d)] + shift_pm[(pk, d)] == 1
+                ).OnlyEnforceIf(works[(k, d)])
+
 
     # 월초 페이즈 앵커 (하드): 기사별 첫 근무일의 A/P 고정
     for k, (d, is_pm) in problem.first_shift_anchor.items():

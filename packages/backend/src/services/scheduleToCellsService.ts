@@ -151,3 +151,40 @@ export async function monthScheduleAsCells(
     filledCells,
   };
 }
+
+/**
+ * 노선별 요일 운행 대수 — 엔진에 그대로 넘긴다.
+ *
+ * 감차를 지난달 실적에서 되짚으면 평일 상시 감차를 공휴일로 오해해 대수가
+ * 뭉개진다(성민: 등록 14대, 평일 12·토 11·일공휴일 10). 회사가 기초 데이터에
+ * 직접 적어 둔 값이 언제나 더 정확하므로 그걸 쓴다.
+ *
+ * 키는 엔진의 그룹 이름과 맞춰야 한다 — cells 의 group 이 노선번호이므로
+ * 여기서도 노선번호를 키로 쓴다.
+ */
+export async function routeOperatingCounts(
+  companyId: number,
+  serviceType: ServiceType | null = null,
+): Promise<Record<string, { weekday?: number; sat?: number; sunhol?: number; fleet: number }>> {
+  const routes = await prisma.route.findMany({
+    where: { companyId, isActive: true, ...(serviceType ? { serviceType } : {}) },
+    select: {
+      routeNumber: true, weekdayBuses: true, saturdayBuses: true, holidayBuses: true,
+      _count: { select: { buses: true } },
+      buses: { where: { isActive: true }, select: { id: true } },
+    },
+  });
+  const out: Record<string, { weekday?: number; sat?: number; sunhol?: number; fleet: number }> = {};
+  for (const r of routes) {
+    // 하나도 설정 안 한 노선은 넘기지 않는다 — "전 차량 매일 운행"이 그 회사의
+    // 실제 운영일 수 있고, 반쪽짜리 값으로 덮어쓰면 오히려 틀어진다
+    if (r.weekdayBuses == null && r.saturdayBuses == null && r.holidayBuses == null) continue;
+    out[r.routeNumber] = {
+      ...(r.weekdayBuses != null ? { weekday: r.weekdayBuses } : {}),
+      ...(r.saturdayBuses != null ? { sat: r.saturdayBuses } : {}),
+      ...(r.holidayBuses != null ? { sunhol: r.holidayBuses } : {}),
+      fleet: r.buses.length,
+    };
+  }
+  return out;
+}

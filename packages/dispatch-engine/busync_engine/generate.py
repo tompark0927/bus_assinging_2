@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .audit import AuditReport, audit
-from .config import DayClass, ReductionCalendar
+from .config import DayClass, ReductionCalendar, ReductionMode
 from .fairness import FairnessReport, build_report
 from .importer.inference import (
     RotationRule,
@@ -64,6 +64,7 @@ def generate_month(
     weekday_off_pref: dict[str, dict[int, float]] | None = None,
     home_vehicle_config: Optional[dict[str, str]] = None,
     time_limit_s: float = 180.0,
+    operating_counts: Optional[dict[str, dict[str, int]]] = None,
 ) -> GenerationResult:
     """home_vehicle_config: 담당자가 확정한 이번 달 차량-고정기사 구성
     (기사 -> 차량). 없으면 전월 실적에서 추론한다."""
@@ -154,6 +155,32 @@ def generate_month(
                 )
         cfg, disp, _hols, ptr_end = infer_reduction_model(prev_t, g, rule)
         cfg.pointer_start = ptr_end
+        # 등록된 요일별 운행 대수가 있으면 추론값을 덮어쓴다. 회사가 직접 적은
+        # 값이 지난달 실적을 되짚은 것보다 정확하다 — 되짚기는 평일 상시 감차를
+        # 공휴일로 오해해 대수를 뭉갠다(성민: 평일 12/토 11/휴일 10, 등록 14).
+        oc = (operating_counts or {}).get(g.name)
+        if oc:
+            fleet = int(oc.get("fleet") or g.size)
+            rest_counts: dict[DayClass, int] = {}
+            for key, cls in (("weekday", DayClass.WEEKDAY), ("sat", DayClass.SAT), ("sunhol", DayClass.SUNHOL)):
+                run = oc.get(key)
+                if run is None:
+                    continue
+                rest_counts[cls] = max(0, fleet - int(run))
+            if rest_counts:
+                cfg.mode = ReductionMode.VEHICLE_POINTER
+                cfg.rest_counts = rest_counts
+                cfg.rest_slots = {}
+                if not cfg.pointer_order:
+                    cfg.pointer_order = list(g.vehicles)
+                warnings.append(
+                    f"{g.name}: 등록된 운행 대수를 적용했습니다 "
+                    + " · ".join(
+                        f"{ko}{oc[k]}대"
+                        for k, ko in (("weekday", "평일 "), ("sat", "토 "), ("sunhol", "일·공휴일 "))
+                        if oc.get(k) is not None
+                    )
+                )
         if not reduction_on:
             cfg.rest_slots = {}
             cfg.rest_counts = {}
