@@ -229,11 +229,16 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
     # 하드로 걸지 않는 이유: 승인 휴무·입퇴사·연속근무 한도와 겹치면 해가 아예
     # 없어질 수 있다. 대신 가중치를 본인차량(1000)보다 높게 줘서, 어길 바에는
     # 다른 걸 포기하도록 만든다.
+    # 'S6 하드 제약이 실제로 걸린' 짝 — 아래 S2 가 이걸 보고 동시휴로 판단한다
+    pair_locked: set[str] = set()
+    driver_set = set(problem.drivers)
     for k in problem.drivers:
         pk = problem.partner.get(k)
         # (k, pk) 쌍을 한 번만 — 사전순으로 앞선 쪽에서만 건다
-        if not pk or pk >= k or pk not in set(problem.drivers):
+        if not pk or pk >= k or pk not in driver_set:
             continue
+        pair_locked.add(k)
+        pair_locked.add(pk)
         for d in dates:
             if (k, d) not in works or (pk, d) not in works:
                 continue
@@ -387,13 +392,33 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
                     p1, p2 = shift_pm[(k, d1)], shift_pm[(k, d2)]
                     m.Add(p1 == p2).OnlyEnforceIf(same)
                     m.Add(p1 != p2).OnlyEnforceIf(same.Not())
-                    # joint 판정: 갭 중 짝의 승인 휴무일이 하루라도 있으면 동시휴
+                    # joint 판정 = 이 휴무를 짝과 **함께** 쉬었는가.
+                    #
+                    # 예전에는 짝의 **승인 휴무(연차)** 만 봤다. 그런데 정·부가
+                    # 로테이션으로 함께 쉬는 회사에서는 갭이 연차가 아니라서
+                    # '단독휴'로 잘못 읽히고, 그러면 규칙이 뒤집혀 **시프트 유지**를
+                    # 선호하게 된다 — 한 사람이 한 달 내내 오후만 타는 그 현상이다.
+                    #
+                    # 짝이 있으면 위 S6 하드 제약이 '같은 날 함께 쉰다'를 보장하므로
+                    # 갭에는 짝도 반드시 쉰다. 곧 언제나 동시휴다.
                     gap_days = [dates[i + g] for g in range(1, gap)]
                     joint = (
                         problem.pair_swap_rule == "always_swap"
                         or pk is None
+                        or pk in pair_locked          # 짝과 함께 쉬는 것이 보장된 경우
                         or any(gd in partner_leaves for gd in gap_days)
                     )
+                    # 짝이 있는 메인은 휴무 뒤 스왑이 실측 100%(7월 207회 중 207회)다.
+                    # 하드로 걸면 어긋남이 없어지고 탐색 공간도 줄어 더 빨리 푼다.
+                    # 다만 갭에 승인 휴무가 걸린 날은 사정이 다르므로 소프트로 남긴다.
+                    if (
+                        pk is not None
+                        and pk in pair_locked
+                        and not any(gd in problem.leaves.get(k, ()) for gd in gap_days)
+                        and not any(gd in partner_leaves for gd in gap_days)
+                    ):
+                        m.Add(p1 + p2 == 1).OnlyEnforceIf(cond)
+                        continue
                     flag = m.NewBoolVar(f"sw_{k}_{d1}_{gap}")
                     if joint:
                         # 복귀했는데 유지하면 페널티 (스왑 선호)

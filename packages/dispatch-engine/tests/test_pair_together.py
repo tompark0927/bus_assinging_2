@@ -71,3 +71,32 @@ def test_짝궁_가중치는_본인차량보다_크다():
     """어길 바에는 다른 걸 포기하도록 — 우선순위가 뒤집히면 33% 로 돌아간다."""
     w = SolverWeights()
     assert w.pair_together > w.own_vehicle
+
+
+def test_휴무_뒤에는_짝궁과_오전오후를_맞바꾼다():
+    """성민 7월 실측: 휴무 블록을 사이에 둔 시프트 전환 207회 중 207회 스왑(100%).
+
+    예전에는 joint 판정이 짝의 **승인 휴무(연차)** 만 봐서, 로테이션으로 함께
+    쉬는 경우를 '단독휴'로 잘못 읽고 오히려 시프트 **유지**를 선호했다.
+    그 결과 한 사람이 한 달 내내 오후만 타는 배차표가 나왔다.
+    """
+    p = _problem(days=14, extra_spares=6)
+    asg = solve(p, SolverWeights(), time_limit_s=30)
+
+    work = {}
+    for (d, v, s), k in asg.cells.items():
+        work.setdefault(k, {})[d] = s
+
+    changed = kept = 0
+    for k in ("A1", "A2", "B1", "B2"):
+        days = sorted(work.get(k, {}))
+        for i in range(len(days) - 1):
+            d1, d2 = days[i], days[i + 1]
+            if (d2 - d1).days <= 1:
+                continue  # 연속 근무는 유지가 정상(S3)
+            if work[k][d1] != work[k][d2]:
+                changed += 1
+            else:
+                kept += 1
+    assert changed + kept > 0, "휴무 뒤 복귀가 한 번은 있어야 검증이 성립한다"
+    assert kept == 0, f"휴무 뒤 시프트를 그대로 둔 경우가 {kept}건 (모두 스왑이어야 함)"

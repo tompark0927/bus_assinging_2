@@ -3020,8 +3020,8 @@ export default function SchedulePage() {
                   {engineMode === 'import'
                     ? '엑셀을 읽어 배차표로 저장하고 있습니다…'
                     : engineMode === 'previous'
-                    ? '지난달 배차표를 이어받아 계산하고 있습니다… (최대 3분)'
-                    : 'AI가 최적 배차를 계산하고 있습니다... (최대 3분)'}
+                    ? '지난달 배차표를 이어받아 계산하고 있습니다… (1~2분)'
+                    : 'AI가 최적 배차를 계산하고 있습니다... (1~2분)'}
                 </>
               ) : engineMode === 'import' ? (
                 <>

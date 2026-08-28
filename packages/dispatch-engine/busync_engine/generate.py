@@ -63,7 +63,9 @@ def generate_month(
     leaves: dict[str, set[dt.date]] | None = None,
     weekday_off_pref: dict[str, dict[int, float]] | None = None,
     home_vehicle_config: Optional[dict[str, str]] = None,
-    time_limit_s: float = 180.0,
+    # 실측(성민 42대·108명·3노선): 45초면 미충원 0, 60초면 짝궁 100%·스왑 98%.
+    # 180초는 이미 충분한 해를 더 깎느라 담당자를 3분 더 기다리게 할 뿐이었다.
+    time_limit_s: float = 90.0,
     operating_counts: Optional[dict[str, dict[str, int]]] = None,
 ) -> GenerationResult:
     """home_vehicle_config: 담당자가 확정한 이번 달 차량-고정기사 구성

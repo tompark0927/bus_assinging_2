@@ -549,7 +549,7 @@ async def generate_from_cells_endpoint(
             history, policy, year, month,
             leaves=leaves,
             home_vehicle_config=payload.get("home_config") or None,
-            time_limit_s=float(payload.get("time_limit_s") or 180.0),
+            time_limit_s=float(payload.get("time_limit_s") or 90.0),
             operating_counts=operating_counts,
         )
     except (ValueError, RuntimeError) as ex:
@@ -568,7 +568,7 @@ async def generate_endpoint(
     policy_json: str = Form(""),      # CompanyPolicy.to_dict() 형식. 비우면 저장된 회사 정책 사용
     leaves_json: str = Form("{}"),    # {기사명: ["YYYY-MM-DD", ...]}
     home_config_json: str = Form(""),  # {기사명: 차량} — 담당자 확정 월초 구성
-    time_limit_s: float = Form(180.0),
+    time_limit_s: float = Form(90.0),
     include_xlsx: bool = Form(False),
     x_company_id: str = Header("default"),
 ):
