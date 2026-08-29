@@ -40,6 +40,8 @@ class SolverWeights:
     weekday_pref: int = 20         # S4
     vehicle_affinity: int = 8      # S5: 숙련도 — 과거 탑승 빈도 기반
     group_affinity: int = 15       # 소속 그룹 밖 투입 페널티 (하드 금지 — 실측 교차 88건/월)
+    solo_rest: int = 300           # S7: 하루만 쉬고 나오는 톱니 (실측 30%)
+    solo_work: int = 500           # S7: 하루만 나오고 다시 쉬는 톱니 (실측 9%)
     spare_balance: int = 5         # S5: 예비 투입 횟수 분산
     fairness_lambda: int = 3       # λ: 공정성 분산항 (담당자 슬라이더 노출용)
 
@@ -53,6 +55,8 @@ class AssignmentProblem:
     # 결행 등으로 한쪽 시프트만 비는 케이스를 표현하기 위해 시프트 단위로 관리.
     operating: set[tuple[dt.date, str, str]]
     drivers: list[str]
+    # S8: 계단식으로 미리 깔아둔 '쉬어야 할 날' (generate._staircase_rest)
+    preferred_rest: dict[str, set[dt.date]] = field(default_factory=dict)
     # H4: 기사별 휴무(OFF 고정)일
     leaves: dict[str, set[dt.date]] = field(default_factory=dict)
     # 백테스트 모드: 기사별 근무일을 실측으로 고정 (None이면 자유 — 생성 모드)
@@ -193,7 +197,16 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
         for k in problem.drivers:
             kvars = [works[(k, d)] for d in dates if (k, d) in works]
             if kvars:
-                m.Add(sum(kvars) >= min(lo, len(kvars)))
+                # 계단식 계획(S8)이 있으면 근무일수 하한은 걸지 않는다.
+                # 계획이 이미 '이 사람은 이 날들에 쉰다'를 정해 놨고, 하루에
+                # 일할 수 있는 사람 수는 슬롯 수보다 딱 2명 많을 뿐이라
+                # (2144 vs 2142) 근무일수는 계획이 사실상 확정한다.
+                # 하한을 같이 걸면 '이 날 쉰다'와 '이만큼은 일해야 한다'가
+                # 그룹 단위로 부딪혀 모델이 통째로 INFEASIBLE 이 된다 —
+                # 기사는 같은 그룹 차량만 몰 수 있어서, 그룹 슬롯이 다 차면
+                # 남는 사람은 일하고 싶어도 앉을 자리가 없기 때문이다.
+                if not problem.preferred_rest.get(k):
+                    m.Add(sum(kvars) >= min(lo, len(kvars)))
                 m.Add(sum(kvars) <= hi)
 
     # H3: 연속 근무 ≤ max_consecutive
@@ -205,6 +218,55 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
             if len(span) == win:
                 m.Add(sum(span) <= problem.max_consecutive)
 
+    penalties: list[cp_model.LinearExpr] = list(unfilled_penalties)
+
+    # ── S7: 근무·휴무를 덩어리로 (톱니 방지) ──
+    # 성민 7월 실측(107명): 근무블록은 4일 57%·3일 17%, 휴무블록은 2일 51%.
+    #
+    # 근무일수 밴드(H5)와 연속근무 한도(H3)만으로는 이 모양이 나오지 않는다.
+    # 총 근무일수만 맞으면 되니 솔버는 하루 일하고 하루 쉬는 톱니도 똑같이
+    # 정답으로 친다. 실제로 8월 생성본은 휴무블록 1일이 66%까지 치솟았다.
+    #
+    # 큰 틀은 아래 S8(계단식 계획)이 하드로 잡는다. S7 이 맡는 건 그 계획에
+    # 없는 사람과, 계획상 근무일이지만 그날 앉을 자리가 없어 쉬게 되는
+    # 여유 인원의 하루다 — 그 하루를 이미 있는 휴무 블록 옆에 붙여 준다.
+    # 하드로 못 거는 이유: 연차가 하루만 껴 있거나 월 경계에 걸리면 1일
+    # 블록이 불가피하다 — 실측에도 30%/9% 존재한다.
+    for k in problem.drivers:
+        for i in range(1, len(dates) - 1):
+            dp, dc, dn = dates[i - 1], dates[i], dates[i + 1]
+            if (k, dp) not in works or (k, dc) not in works or (k, dn) not in works:
+                continue
+            wp, wc, wn = works[(k, dp)], works[(k, dc)], works[(k, dn)]
+            # 일·쉼·일 → 하루짜리 휴무
+            sr = m.NewBoolVar(f"solo_rest_{k}_{dc}")
+            m.AddBoolAnd([wp, wc.Not(), wn]).OnlyEnforceIf(sr)
+            m.AddBoolOr([wp.Not(), wc, wn.Not()]).OnlyEnforceIf(sr.Not())
+            penalties.append(sr * w.solo_rest)
+            # 쉼·일·쉼 → 하루짜리 근무
+            sw = m.NewBoolVar(f"solo_work_{k}_{dc}")
+            m.AddBoolAnd([wp.Not(), wc, wn.Not()]).OnlyEnforceIf(sw)
+            m.AddBoolOr([wp, wc.Not(), wn]).OnlyEnforceIf(sw.Not())
+            penalties.append(sw * w.solo_work)
+
+    # ── S8: 계단식으로 깔아둔 휴무일을 지킨다 (하드) ──
+    # generate._staircase_rest 가 사람마다 '이 날 쉰다'를 미리 정해 두었다.
+    # 담당자가 실제로 하는 순서 그대로다 — 메인을 4일근무+2일휴무로 차량마다
+    # 하루씩 밀어 쫙 깔고, 연차를 빼고, 남는 자리를 스페어가 메운다.
+    #
+    # 소프트로는 안 된다. 가중치를 900에서 5000까지 올려도 90초 안에 준수율이
+    # 67~70%에서 멈췄다 — 가중치 문제가 아니라 탐색 크기 문제다. 그리고 실무
+    # 순서도 원래 '깔아놓고 시작'이다. 그래서 하드로 박고, 솔버는 그 위에서
+    # '누가 어느 차 오전/오후를 타는지'만 정하게 한다 (문제가 작아져 더 빠르다).
+    for k, want_rest in problem.preferred_rest.items():
+        for d in want_rest:
+            if (k, d) in works:
+                m.Add(works[(k, d)] == 0)
+        # 힌트로도 준다 — 이 모양 근처에서 탐색을 시작하게 한다
+        for d in dates:
+            if (k, d) in works:
+                m.AddHint(works[(k, d)], 0 if d in want_rest else 1)
+
     # H6: 오후 → 익일 오전 금지 (옵션)
     if problem.forbid_pm_to_am:
         for k in problem.drivers:
@@ -214,8 +276,6 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
                     am2 = m.NewBoolVar(f"am_{k}_{d2}")
                     m.Add(am2 == 1).OnlyEnforceIf([works[(k, d2)], shift_pm[(k, d2)].Not()])
                     m.AddImplication(shift_pm[(k, d1)], am2.Not())
-
-    penalties: list[cp_model.LinearExpr] = list(unfilled_penalties)
 
     # ── S6: 짝궁은 같은 날 함께 근무하거나 함께 쉰다 ──
     # 성민 7월 실측: 정·부 14쌍 × 31일 = 434일 중 '한쪽만 근무'가 **0일**이다.
