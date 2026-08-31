@@ -1,11 +1,15 @@
 import { useMemo, useState } from 'react';
-import { CalendarRange, Printer } from 'lucide-react';
+import { Bus, CalendarRange, Printer } from 'lucide-react';
 
 /**
  * 게시 양식 배차표 그리드 — 현장에서 수년간 봐온 그 표.
  *
  *   행 = 차량, 열 = 날짜, 각 날짜는 (순번 | 오전 | 오후) 3칸
- *   출발지그룹별로 행 블록을 나누고, 주 단위(일~토)로 패널을 끊는다.
+ *   주 단위(일~토)로 끊고, **노선 하나씩** 보여준다.
+ *
+ * 노선을 안 나누면 42대가 한 표에 통째로 쌓여 스크롤이 끝없이 내려간다.
+ * 노선당 14대면 한 화면에 들어온다. 인쇄는 지금까지처럼 전 노선이 다 나간다 —
+ * 차고지에 붙일 때는 노선별로 따로 뽑는 게 아니라 한 번에 뽑기 때문이다.
  *
  * 기존 "기사별 조/석" 뷰와 달리 **순번**이 있다 — 그날의 출발시각을 정하고
  * 매일 로테이션으로 돌면서 이른/늦은 근무를 공평하게 나누는 핵심 장치.
@@ -28,8 +32,16 @@ export interface PostingCell {
   pm: PostingDriver | null;
 }
 
+export interface PostingGroup {
+  name: string;
+  vehicles: string[];
+  /** 이 출발지그룹이 속한 노선 (Bus→Route 에서 옴). 미지정이면 null */
+  route?: string | null;
+  routeLabel?: string | null;
+}
+
 export interface PostingView {
-  groups: { name: string; vehicles: string[] }[];
+  groups: PostingGroup[];
   cells: Record<string, Record<string, PostingCell>>;
 }
 
@@ -68,6 +80,29 @@ export default function PostingScheduleGrid({
   }) => void;
 }) {
   const [weekIdx, setWeekIdx] = useState(0);
+  const [routeKey, setRouteKey] = useState<string | null>(null);
+
+  // 노선 목록 — 출발지그룹이 들고 온 노선을 등장 순서대로 모은다.
+  // 노선이 하나뿐이거나 미지정이면 탭을 아예 안 그린다 (탭 하나는 잡음이다).
+  const routes = useMemo(() => {
+    const out: { key: string; label: string }[] = [];
+    for (const g of view.groups) {
+      if (!g.route) continue;
+      if (out.some((r) => r.key === g.route)) continue;
+      out.push({ key: g.route, label: g.routeLabel || g.route });
+    }
+    return out;
+  }, [view.groups]);
+
+  const activeRoute = routeKey && routes.some((r) => r.key === routeKey)
+    ? routeKey
+    : routes[0]?.key ?? null;
+
+  // 화면에 그릴 그룹 — 고른 노선 것만. 노선 정보가 없는 옛 배차표는 전부 보여준다.
+  const shownGroups = useMemo(
+    () => (activeRoute ? view.groups.filter((g) => g.route === activeRoute) : view.groups),
+    [view.groups, activeRoute],
+  );
 
   // 일요일 시작 주간으로 분할 (실물 게시표와 동일)
   const weeks = useMemo(() => {
@@ -117,15 +152,36 @@ export default function PostingScheduleGrid({
           onClick={() => window.print()}
           className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
         >
-          <Printer size={14} /> 전체 인쇄 ({weeks.length}장)
+          <Printer size={14} /> 전체 인쇄 ({weeks.length}장 × 노선 {Math.max(routes.length, 1)})
         </button>
       </div>
+
+      {/* 노선 선택 — 한 번에 한 노선만 본다 */}
+      {routes.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 print:hidden">
+          <Bus size={16} className="text-gray-400" />
+          {routes.map((r) => (
+            <button
+              key={r.key}
+              onClick={() => setRouteKey(r.key)}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                r.key === activeRoute
+                  ? 'bg-gray-800 text-white dark:bg-gray-200 dark:text-gray-900'
+                  : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* 화면: 고른 주 하나 */}
       <div className="print:hidden">
         <WeekTable
           week={week}
           view={view}
+          groups={shownGroups}
           onCellClick={onCellClick}
           onDownloadDay={onDownloadDay}
         />
@@ -135,14 +191,20 @@ export default function PostingScheduleGrid({
           화면에서 고른 주만 나가면 담당자는 같은 조작을 5번 반복해야 한다.
           게시물은 어차피 월 단위로 한 번에 뽑는 물건이다. */}
       <div className="hidden print:block">
-        {weeks.map((w, i) => (
-          <div key={i} className={i < weeks.length - 1 ? 'break-after-page' : ''}>
-            <p className="mb-1 text-sm font-bold text-black">
-              {i + 1}주차 · {fmtDay(w[0])} ~ {fmtDay(w[w.length - 1])}
-            </p>
-            <WeekTable week={w} view={view} />
-          </div>
-        ))}
+        {(routes.length ? routes : [{ key: '', label: '' }]).map((r, ri) =>
+          weeks.map((w, i) => {
+            const last = ri === Math.max(routes.length, 1) - 1 && i === weeks.length - 1;
+            const gs = r.key ? view.groups.filter((g) => g.route === r.key) : view.groups;
+            return (
+              <div key={`${r.key}-${i}`} className={last ? '' : 'break-after-page'}>
+                <p className="mb-1 text-sm font-bold text-black">
+                  {r.label ? `${r.label} · ` : ''}{i + 1}주차 · {fmtDay(w[0])} ~ {fmtDay(w[w.length - 1])}
+                </p>
+                <WeekTable week={w} view={view} groups={gs} />
+              </div>
+            );
+          }),
+        )}
       </div>
 
       <p className="text-xs text-gray-400 print:hidden dark:text-gray-500">
@@ -157,10 +219,12 @@ export default function PostingScheduleGrid({
 
 /** 한 주치 표 — 화면(선택한 주)과 인쇄(전 주)가 같은 렌더러를 쓴다 */
 function WeekTable({
-  week, view, onCellClick, onDownloadDay,
+  week, view, groups, onCellClick, onDownloadDay,
 }: {
   week: string[];
   view: PostingView;
+  /** 이번에 그릴 출발지그룹 (노선으로 걸러진 것) */
+  groups: PostingGroup[];
   onCellClick?: (p: {
     date: string; vehicle: string; shift: 'MORNING' | 'AFTERNOON';
     driver: PostingDriver | null;
@@ -225,7 +289,7 @@ function WeekTable({
             {/* 출발지그룹마다 <tbody> 를 따로 둔다 — 인쇄에서 그룹이 페이지
                 중간에 잘리지 않게 하려면 끊기 단위가 있어야 한다.
                 (42대 기준 한 주가 A4 한 장을 넘어간다) */}
-            {view.groups.map((group) => (
+            {groups.map((group) => (
               <tbody key={`g-${group.name}`} className="posting-group">
                 <tr>
                   <td
