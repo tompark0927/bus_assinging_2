@@ -551,6 +551,9 @@ async def generate_from_cells_endpoint(
             home_vehicle_config=payload.get("home_config") or None,
             time_limit_s=float(payload.get("time_limit_s") or 90.0),
             operating_counts=operating_counts,
+            # mains_only: 기본 틀만 깔고 스페어 자리는 비워 둔다.
+            # 담당자가 직접 채울지 엔진에 맡길지 고르게 하기 위함이다.
+            mains_only=bool(payload.get("mains_only")),
         )
     except (ValueError, RuntimeError) as ex:
         raise HTTPException(422, str(ex))

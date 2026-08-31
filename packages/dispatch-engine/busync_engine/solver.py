@@ -55,7 +55,13 @@ class AssignmentProblem:
     # 결행 등으로 한쪽 시프트만 비는 케이스를 표현하기 위해 시프트 단위로 관리.
     operating: set[tuple[dt.date, str, str]]
     drivers: list[str]
-    # S8: 계단식으로 미리 깔아둔 '쉬어야 할 날' (generate._staircase_rest)
+    # 기본 틀에서 확정된 메인 배정 — (날짜, 차량, 시프트) -> 기사.
+    # 솔버는 이 칸을 풀지 않는다. 붙박이로 박고 **스페어 자리만** 푼다.
+    fixed_cells: dict[tuple[dt.date, str, str], str] = field(default_factory=dict)
+    # 기본 틀에서 확정된 메인의 휴무일. 이 날은 다른 차에도 못 앉는다 —
+    # 안 막으면 솔버가 쉬는 사람을 남는 자리에 끌어다 써서 계단이 무너진다.
+    fixed_off: dict[str, set[dt.date]] = field(default_factory=dict)
+    # S8: 스페어가 톱니로 쉬지 않게 미리 깔아둔 '쉬어야 할 날' (선택)
     preferred_rest: dict[str, set[dt.date]] = field(default_factory=dict)
     # H4: 기사별 휴무(OFF 고정)일
     leaves: dict[str, set[dt.date]] = field(default_factory=dict)
@@ -124,6 +130,8 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
     def available(k: str, d: dt.date) -> bool:
         if d in problem.leaves.get(k, ()):  # H4
             return False
+        if d in problem.fixed_off.get(k, ()):  # H0: 기본 틀 휴무일
+            return False
         if problem.forced_work_days is not None:
             return d in problem.forced_work_days.get(k, ())
         return True
@@ -143,6 +151,20 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
         for k in problem.drivers:
             if available(k, d) and candidate(k, v):
                 x[(k, d, v, s)] = m.NewBoolVar(f"x_{k}_{d}_{v}_{s}")
+
+    # H0: 기본 틀 붙박이. 메인(정·부)의 근무일·시프트·차량은 이미 확정이라
+    # 탐색 대상이 아니다. 여기서 1로 박으면 H1(칸당 1명)이 나머지 후보를,
+    # H2(1인 1일 1시프트)가 그 사람의 다른 칸을 자동으로 0으로 만든다.
+    slot_set = set(slots)
+    pinned_drivers: set[str] = set()
+    for (d, v, s), k in problem.fixed_cells.items():
+        if (d, v, s) not in slot_set:
+            continue  # 그날 감차된 차 — 틀에는 근무지만 나갈 차가 없다
+        key = (k, d, v, s)
+        if key not in x:
+            continue  # 승인 휴무·후보 제한과 겹침 — 스페어가 메운다
+        m.Add(x[key] == 1)
+        pinned_drivers.add(k)
 
     # H1: 운행 슬롯마다 정확히 1명 (allow_unfilled면 미충원 슬랙 + 큰 페널티)
     unfilled_penalties = []
@@ -195,6 +217,11 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
         # 가용일 기준으로 자동 일할 (스펙 2.8)
         lo, hi = problem.work_days_band
         for k in problem.drivers:
+            if k in pinned_drivers:
+                # 기본 틀이 이 사람의 근무일을 이미 확정했다. 밴드를 겹쳐 걸면
+                # 13일 주기가 만드는 23~24일과 밴드(20~23)가 부딪혀 모델이
+                # 통째로 INFEASIBLE 이 된다.
+                continue
             kvars = [works[(k, d)] for d in dates if (k, d) in works]
             if kvars:
                 # 계단식 계획(S8)이 있으면 근무일수 하한은 걸지 않는다.
@@ -249,15 +276,13 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
             m.AddBoolOr([wp, wc.Not(), wn]).OnlyEnforceIf(sw.Not())
             penalties.append(sw * w.solo_work)
 
-    # ── S8: 계단식으로 깔아둔 휴무일을 지킨다 (하드) ──
-    # generate._staircase_rest 가 사람마다 '이 날 쉰다'를 미리 정해 두었다.
-    # 담당자가 실제로 하는 순서 그대로다 — 메인을 4일근무+2일휴무로 차량마다
-    # 하루씩 밀어 쫙 깔고, 연차를 빼고, 남는 자리를 스페어가 메운다.
+    # ── S8: 미리 깔아둔 휴무일을 지킨다 (하드) ──
+    # 메인(정·부)은 이제 H0(fixed_cells/fixed_off)가 통째로 확정하므로 여기
+    # 오지 않는다. 남은 쓰임은 **스페어**다 — 스페어에게도 쉬는 날을 미리
+    # 깔아 주면 하루 일하고 하루 쉬는 톱니가 안 생긴다.
     #
     # 소프트로는 안 된다. 가중치를 900에서 5000까지 올려도 90초 안에 준수율이
-    # 67~70%에서 멈췄다 — 가중치 문제가 아니라 탐색 크기 문제다. 그리고 실무
-    # 순서도 원래 '깔아놓고 시작'이다. 그래서 하드로 박고, 솔버는 그 위에서
-    # '누가 어느 차 오전/오후를 타는지'만 정하게 한다 (문제가 작아져 더 빠르다).
+    # 67~70%에서 멈췄다 — 가중치 문제가 아니라 탐색 크기 문제다.
     for k, want_rest in problem.preferred_rest.items():
         for d in want_rest:
             if (k, d) in works:
@@ -412,6 +437,14 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
     else:
         # 생성 모드: 근무일이 결정변수 — 조건부(reified) 페널티
         for k in problem.drivers:
+            if k in pinned_drivers:
+                # 기본 틀이 이 사람의 시프트를 이미 정했다. S2(휴무 복귀 시 스왑)를
+                # 겹쳐 걸면 안 된다 — 틀에서는 근무가 끊기는 이유가 휴무만이
+                # 아니라 **감차**이기도 한데, 감차로 하루 빠진 뒤에는 시프트를
+                # 그대로 이어 간다. S2 는 2~5일 간격을 전부 '휴무 복귀'로 보고
+                # 스왑을 하드로 요구해서, 블록 한가운데가 감차로 끊긴 날마다
+                # 모델이 INFEASIBLE 이 됐다.
+                continue
             for i in range(len(dates) - 1):
                 d1, d2 = dates[i], dates[i + 1]
                 if (k, d1) not in works or (k, d2) not in works:
