@@ -418,7 +418,7 @@ def generate_month(
         )
     warnings.extend(anchor_warnings)
     warnings.append(
-        "메인은 기본 틀(근무 5일→휴무 1일→근무 5일→휴무 2일, 차량마다 하루씩 "
+        "메인은 기본 틀(근무 4일→휴무 2일→근무 4일→휴무 2일, 차량마다 하루씩 "
         "계단)로 확정했습니다. 남은 자리만 스페어로 채웁니다."
     )
 

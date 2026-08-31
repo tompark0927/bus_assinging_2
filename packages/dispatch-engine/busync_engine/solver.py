@@ -219,7 +219,7 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
         for k in problem.drivers:
             if k in pinned_drivers:
                 # 기본 틀이 이 사람의 근무일을 이미 확정했다. 밴드를 겹쳐 걸면
-                # 13일 주기가 만드는 23~24일과 밴드(20~23)가 부딪혀 모델이
+                # 12일 주기가 만드는 근무일수와 밴드(20~23)가 부딪혀 모델이
                 # 통째로 INFEASIBLE 이 된다.
                 continue
             kvars = [works[(k, d)] for d in dates if (k, d) in works]

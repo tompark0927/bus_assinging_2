@@ -1,7 +1,12 @@
-"""기본 틀 — 13일 계단 사이클.
+"""기본 틀 — 12일 계단 사이클 (4근2휴 × 오후/오전 두 블록).
 
-여기 적힌 숫자는 사장님이 직접 지시한 규칙이다(2026-08-31).
+여기 적힌 숫자는 회사가 확정한 규칙이다(2026-08-31).
 바꾸려면 회사에 먼저 물어야 한다.
+
+주기 길이는 취향이 아니라 인원 산술이 정한다. 성민 총 슬롯 2,142칸 ÷ 107명
+= 전원 평균 20.0일이 고정값이고, 주기는 그 20일을 메인과 스페어가 어떻게
+나눠 갖는지만 정한다. 13일(5근1휴+5근2휴)로 짰더니 메인이 23.9일을 가져가
+스페어가 7~9일밖에 못 나갔다.
 """
 from __future__ import annotations
 
@@ -43,30 +48,33 @@ def _frame_one_vehicle(phase: int = 0) -> BaseFrame:
 # ── 사이클 그 자체 ──────────────────────────────────────────────────
 
 
-def test_사이클은_13일이다():
-    assert CYCLE_LEN == 13
+def test_사이클은_12일이다():
+    assert CYCLE_LEN == 12
 
 
-def test_한_사이클에서_쉬는_날은_사흘이고_1일_2일로_끊긴다():
-    # 근무 5(0~4) · 휴무 1(5) · 근무 5(6~10) · 휴무 2(11~12)
-    assert rest_days_of_cycle() == [5, 11, 12]
+def test_이틀씩_두_번_쉰다():
+    # 근무 4(0~3) · 휴무 2(4~5) · 근무 4(6~9) · 휴무 2(10~11)
+    assert rest_days_of_cycle() == [4, 5, 10, 11]
 
 
 def test_근무_블록은_오후_오전_순으로_번갈아_간다():
-    first = [phase_state(p)[1] for p in range(0, 5)]
-    second = [phase_state(p)[1] for p in range(6, 11)]
-    assert first == [Shift.PM] * 5
-    assert second == [Shift.AM] * 5
+    first = [phase_state(p)[1] for p in range(0, 4)]
+    second = [phase_state(p)[1] for p in range(6, 10)]
+    assert first == [Shift.PM] * 4
+    assert second == [Shift.AM] * 4
 
 
 # ── 사장님이 직접 말한 날짜 ─────────────────────────────────────────
 
 
-def test_1일부터_일한_짝꿍은_6일_12일_13일에_쉰다():
+def test_1일부터_일한_짝꿍은_6일_12일에_쉰다():
+    """사장님이 직접 말한 날짜 — "1일부터 일했으면 6일에 쉬고 12일에 쉬고"."""
     frame = _frame_one_vehicle(phase=0)  # 9/1 이 사이클 첫날
     days = frame_days(frame, "1001", month_dates(2026, 9))
     rest = [d.date.day for d in days if not d.working]
-    assert rest[:6] == [6, 12, 13, 19, 25, 26]
+    assert rest[:6] == [5, 6, 11, 12, 17, 18]
+    # 휴무 블록의 끝날이 6일·12일이다
+    assert 6 in rest and 12 in rest
 
 
 def test_바로_밑_차량은_하루_뒤에_쉰다():
@@ -128,11 +136,12 @@ def test_월이_바뀌어도_사이클이_끊기지_않는다():
         assert day.working is working
 
 
-def test_한_달_근무일수는_23_24일이다():
+def test_한_달_근무일수는_20일_안팎이다():
+    """전원 평균 20.0일(2,142칸 ÷ 107명)과 맞아야 스페어가 놀지 않는다."""
     mf = build_month_frame(_frame_one_vehicle(), ["1001"], 2026, 9)  # 30일
     worked = len(mf.work["김정기"])
     assert worked == 30 - len(mf.rest["김정기"])
-    assert 22 <= worked <= 24
+    assert 19 <= worked <= 21
 
 
 # ── 감차 1순위 ──────────────────────────────────────────────────────
@@ -144,8 +153,11 @@ def test_14대_계단이면_하루에_쉬는_차가_고르게_퍼진다():
     mf = build_month_frame(frame, vehicles, 2026, 9)
 
     counts = [len(mf.resting_vehicles(d)) for d in mf.dates]
-    # 14 × 3/13 = 3.23 → 하루 3~4대. 평일 12대 운행(2대 감차)과 맞물린다
-    assert set(counts) <= {3, 4}
+    # 14 × 4/12 = 4.67 → 하루 4~6대. 등록 대수(14)가 주기(12)의 배수가 아니라
+    # 두 위상에 차가 두 대씩 겹치고, 그만큼 날마다 ±1 이 흔들린다.
+    # 평일 12대를 채우려면 2~3대는 스페어 몫이다.
+    assert set(counts) <= {4, 5, 6}
+    assert 4.3 <= sum(counts) / len(counts) <= 5.0
 
 
 # ── 위상 추정 ───────────────────────────────────────────────────────
