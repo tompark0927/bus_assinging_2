@@ -20,6 +20,7 @@ import {
 } from './services/dailyReportRunner';
 import { initSocket } from './services/socketService';
 import { runAuditLogRetentionSafe, isAuditLogRetentionDisabled } from './services/auditLogRetention';
+import { tickBaseFrames, FRAME_WINDOW_MONTHS } from './services/baseFrameService';
 
 // 외부 의존성(Redis 등)의 일시적 실패로 프로세스가 죽지 않도록 안전망.
 // 예: REDIS_URL 이 도달 불가할 때 ioredis 가 던지는 MaxRetriesPerRequestError →
@@ -111,6 +112,14 @@ server.listen(PORT, () => {
     setTimeout(runAuditLogRetentionSafe, 5 * 60 * 1000); // 시작 5분 후 첫 실행
     setInterval(runAuditLogRetentionSafe, 24 * 60 * 60 * 1000); // 매일
     logger.info('🗑️  AuditLogRetention 활성 (24시간 주기, 보존 90일)');
+  }
+
+  // 기본 틀 — 앞으로 12개월치를 미리 깔아 둔다. 담당자는 스페어만 채우면 된다.
+  // 결정론이라 몇 번을 돌려도 같은 결과이고, 손댄 달은 건너뛴다.
+  if (process.env.ENGINE_URL) {
+    setTimeout(tickBaseFrames, 3 * 60 * 1000); // 시작 3분 후 (엔진 기동 여유)
+    setInterval(tickBaseFrames, 24 * 60 * 60 * 1000); // 매일
+    logger.info(`🗓️  기본 틀 자동 생성 활성 (24시간 주기, 앞으로 ${FRAME_WINDOW_MONTHS}개월)`);
   }
 
   logger.info('Socket.IO 실시간 통신 활성화');

@@ -353,6 +353,19 @@ export const schedulesApi = {
    */
   generateFromPrevious: (data: { year: number; month: number; serviceType?: ScheduleServiceType }) =>
     api.post('/schedules/generate-from-previous', data, { timeout: 300000 }),
+  /**
+   * 기본 틀을 지금 깔아 달라. year/month 를 주면 그 달만, 없으면 앞으로 12개월.
+   * 평소에는 서버가 하루 1회 알아서 유지한다.
+   */
+  buildBaseFrame: (data?: {
+    year?: number; month?: number; months?: number; serviceType?: ScheduleServiceType;
+  }) => api.post('/schedules/base-frame', data ?? {}, { timeout: 600000 }),
+  /** 기본 틀의 빈 스페어 자리를 엔진에 맡긴다 */
+  fillSpares: (year: number, month: number, serviceType?: ScheduleServiceType) =>
+    api.post(`/schedules/${year}/${month}/fill-spares`, null, {
+      params: serviceType !== undefined ? { serviceType } : undefined,
+      timeout: 300000,
+    }),
   // AI 배차 엔진(Python) 생성 결과를 배차표 초안으로 저장
   saveFromEngine: (data: {
     year: number; month: number; name?: string;

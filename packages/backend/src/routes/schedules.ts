@@ -38,6 +38,7 @@ import { loadEnginePolicy } from '../services/enginePolicyStore';
 import { mergeEnginePolicy } from '../services/enginePolicyMapper';
 import { loadCompanyPolicy } from '../services/solverDispatchService';
 import { approvedLeavesByName } from './engine';
+import { ensureBaseFrameSchedule, fillBaseFrameWindow } from '../services/baseFrameService';
 
 const router = Router();
 
@@ -351,6 +352,85 @@ router.post('/generate-from-previous', requireRole('DISPATCH'), async (req: Auth
     });
   }
 });
+
+/**
+ * 기본 틀을 지금 깔아 달라 — 담당자가 기다리지 않고 바로 받는 경로.
+ *
+ * 평소에는 하루 1회 틱(`tickBaseFrames`)이 앞으로 12개월치를 유지한다.
+ * 이 엔드포인트는 방금 기초 데이터를 고쳤거나 첫 도입일 때 쓴다.
+ *
+ * body: { year?, month?, months?, serviceType? }
+ *   year/month 를 주면 그 달 하나만, 안 주면 이번 달부터 months 개월치.
+ */
+router.post('/base-frame', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  const companyId = req.user!.companyId;
+  const createdBy = req.user!.id;
+  const { year, month, months } = (req.body ?? {}) as {
+    year?: number; month?: number; months?: number;
+  };
+  const serviceType = parseServiceType((req.body as { serviceType?: string })?.serviceType);
+
+  try {
+    if (Number.isInteger(year) && Number.isInteger(month)) {
+      const r = await ensureBaseFrameSchedule(
+        companyId, createdBy, year as number, month as number, serviceType,
+      );
+      return res.json({ success: true, data: { results: [r] } });
+    }
+    const now = new Date();
+    const results = await fillBaseFrameWindow(
+      companyId, createdBy,
+      { year: now.getFullYear(), month: now.getMonth() + 1 },
+      Number.isInteger(months) ? (months as number) : undefined,
+    );
+    return res.json({ success: true, data: { results } });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`[schedules/base-frame] ${msg}`);
+    return res.status(502).json({ success: false, message: `기본 틀 생성에 실패했습니다: ${msg}` });
+  }
+});
+
+/**
+ * 스페어 자리를 엔진에 맡긴다.
+ *
+ * 기본 틀은 메인만 깔려 있고 스페어 칸은 비어 있다. 담당자가 직접 채우는 게
+ * 기본이지만, "AI 가 짜면 어떻게 나오나" 를 보고 싶을 때 이걸 누른다.
+ * 같은 달 기본 틀을 스페어까지 채워 다시 만든다.
+ */
+router.post(
+  '/:year/:month/fill-spares',
+  requireRole('DISPATCH'),
+  ...scheduleValidation.getSchedule,
+  async (req: AuthRequest, res) => {
+    const companyId = req.user!.companyId;
+    const createdBy = req.user!.id;
+    const year = Number(req.params.year);
+    const month = Number(req.params.month);
+    const serviceType = parseServiceType(
+      (req.query as { serviceType?: string })?.serviceType,
+    );
+    try {
+      const r = await ensureBaseFrameSchedule(
+        companyId, createdBy, year, month, serviceType, /* mainsOnly */ false,
+      );
+      if (r.status !== 'created') {
+        return res.status(422).json({
+          success: false,
+          message:
+            r.status === 'skipped'
+              ? `이 달은 건드리지 않았습니다 — ${r.reason}. 직접 만든 초안이나 발행본은 덮어쓰지 않습니다.`
+              : `스페어를 채우지 못했습니다: ${r.reason}`,
+        });
+      }
+      return res.json({ success: true, data: r });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`[schedules/fill-spares] ${msg}`);
+      return res.status(502).json({ success: false, message: `스페어 배치에 실패했습니다: ${msg}` });
+    }
+  },
+);
 
 router.post('/from-engine', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {

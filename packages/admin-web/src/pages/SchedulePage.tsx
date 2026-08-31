@@ -854,6 +854,29 @@ export default function SchedulePage() {
     },
   });
 
+  // 기본 틀의 빈 스페어 자리를 엔진에 맡긴다.
+  // 기본 틀은 메인만 깔려 있고 스페어 칸은 비어 있는 게 정상이다 —
+  // 담당자가 직접 채우는 게 기본이고, 이 버튼은 "AI 가 짜면 어떻게 나오나"를
+  // 보고 싶을 때 쓴다.
+  /** 서버가 미리 깔아 둔 기본 틀인가 — 빈 칸의 의미가 달라진다 */
+  const isBaseFrame = schedule?.name === '기본 틀';
+
+  const fillSparesMutation = useMutation({
+    mutationFn: () => schedulesApi.fillSpares(year, month, serviceType),
+    onSuccess: (res) => {
+      const d = (res.data as { data?: { slotCount?: number } }).data;
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
+      toast.success(`스페어까지 배치했습니다 (${d?.slotCount ?? 0}칸).`);
+    },
+    onError: (e: unknown) => {
+      const msg =
+        (e as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        '스페어 배치 중 오류가 발생했습니다.';
+      toast.error(msg);
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => schedulesApi.delete(year, month, schedule?.id, serviceType),
     onSuccess: () => {
@@ -1972,8 +1995,28 @@ export default function SchedulePage() {
         </div>
       )}
 
+      {/* ─── 기본 틀 — 빈 칸은 사고가 아니라 스페어 자리다 ─── */}
+      {vacancy.vacant > 0 && isBaseFrame && (
+        <div className="rounded-lg border border-blue-300 bg-blue-50 p-3 print:hidden dark:border-blue-700 dark:bg-blue-900/20">
+          <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+            기본 틀입니다 — 메인(정·부)은 다 깔려 있고, 스페어 자리 {vacancy.vacant}칸이 비어 있습니다
+          </p>
+          <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
+            빈 칸을 눌러 직접 채우시거나, 아래 버튼으로 엔진에 맡겨 보고 마음에 안 들면 고치시면 됩니다.
+          </p>
+          <button
+            onClick={() => fillSparesMutation.mutate()}
+            disabled={fillSparesMutation.isPending}
+            className="mt-2.5 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+          >
+            <Sparkles size={15} />
+            {fillSparesMutation.isPending ? '배치하는 중…' : '스페어 자동 배치'}
+          </button>
+        </div>
+      )}
+
       {/* ─── 공석 경고 — 운행 차량인데 아무도 없는 칸. 버스가 못 나간다 ─── */}
-      {vacancy.vacant > 0 && (
+      {vacancy.vacant > 0 && !isBaseFrame && (
         <div className="rounded-lg border border-red-300 bg-red-50 p-3 print:hidden dark:border-red-800 dark:bg-red-900/20">
           <p className="text-sm font-semibold text-red-800 dark:text-red-300">
             ⚠ 공석 {vacancy.vacant}칸 — 배정된 기사가 없어 그 버스는 운행할 수 없습니다
