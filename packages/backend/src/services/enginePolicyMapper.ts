@@ -28,6 +28,8 @@ export const ENGINE_KEYS_OWNED_BY_DISPATCH_SETTINGS = [
   'monthly_band_enabled',
   'monthly_work_days',
   'forbid_pm_to_am',
+  'cycle_work_days',
+  'cycle_rest_days',
 ] as const;
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
@@ -63,6 +65,21 @@ export function mapCompanyPolicyToEngineValues(policy: CompanyPolicy): Record<st
   // 제44조의6). 엔진에는 시각 개념이 없어 PM→AM 조합 금지로만 표현된다.
   const minRest = policy.constitutional?.minRestBetweenShifts;
   if (minRest) out.forbid_pm_to_am = !!minRest.enabled;
+
+  // 근무 주기 — 기본 틀(frame.py)이 이 값으로 계단을 깐다.
+  //
+  // 회사마다 다르다. 시내 2교대는 보통 5근2휴, 마을버스는 6근1휴, 성민은
+  // 4근2휴다. 엔진에 박아 넣으면 다음 회사에서 그대로 틀린다.
+  //
+  // 주기는 취향이 아니라 인력 산술이다 — 한 달 총 슬롯과 인원은 주기와
+  // 무관한 고정값이라, 주기는 그 일을 메인과 스페어가 어떻게 나눠 갖는지만
+  // 정한다. 메인 쪽으로 몰면 스페어가 논다(성민 실제 사고: 스페어 월 9일).
+  // 엔진이 생성할 때마다 이 배분을 계산해 경고로 알려준다.
+  const rc = policy.restCycle;
+  if (rc && Number.isFinite(rc.workDays) && Number.isFinite(rc.restDays)) {
+    out.cycle_work_days = clamp(Math.round(rc.workDays), 1, 10);
+    out.cycle_rest_days = clamp(Math.round(rc.restDays), 1, 5);
+  }
 
   // 1인 승무·1교대 회사는 '짝궁 오전/오후 교대' 자체가 성립하지 않는다.
   // (2교대 짝궁 회사는 엔진 설정의 교대 규칙을 그대로 둔다)

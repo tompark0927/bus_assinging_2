@@ -15,15 +15,14 @@ import datetime as dt
 import pytest
 
 from busync_engine.frame import (
-    CYCLE_LEN,
+    DEFAULT_CYCLE,
     BaseFrame,
+    Cycle,
     build_month_frame,
     estimate_anchor,
     frame_days,
     month_dates,
     new_anchor,
-    phase_state,
-    rest_days_of_cycle,
     staircase_phases,
 )
 from busync_engine.models import (  # noqa: E402
@@ -36,32 +35,58 @@ from busync_engine.models import (  # noqa: E402
 
 EPOCH = dt.date(2026, 9, 1)
 
+#: 성민이 [배차 설정 → 운영 정책]에 넣은 값. 회사마다 다르다.
+SUNGMIN = Cycle(work_days=4, rest_days=2)
 
-def _frame_one_vehicle(phase: int = 0) -> BaseFrame:
+
+def _frame_one_vehicle(phase: int = 0, cycle: Cycle = SUNGMIN) -> BaseFrame:
     return BaseFrame(
         epoch=EPOCH,
         phases={"1001": phase},
         roles={"1001": ("김정기", "박부기")},
+        cycle=cycle,
     )
 
 
 # ── 사이클 그 자체 ──────────────────────────────────────────────────
 
 
-def test_사이클은_12일이다():
-    assert CYCLE_LEN == 12
+def test_주기는_회사가_정한다():
+    """주기를 코드에 박으면 다음 회사에서 그대로 틀린다.
+
+    시내는 보통 5근2휴, 마을은 6근1휴, 성민은 4근2휴다.
+    """
+    assert DEFAULT_CYCLE.work_days == 5 and DEFAULT_CYCLE.rest_days == 2
+    assert SUNGMIN.length == 12
+    assert Cycle(5, 2).length == 14
+    assert Cycle(6, 1).length == 14
+    assert Cycle(5, 1).length == 12
 
 
-def test_이틀씩_두_번_쉰다():
+def test_근무_블록_뒤마다_이틀씩_쉰다():
     # 근무 4(0~3) · 휴무 2(4~5) · 근무 4(6~9) · 휴무 2(10~11)
-    assert rest_days_of_cycle() == [4, 5, 10, 11]
+    assert SUNGMIN.rest_phases() == [4, 5, 10, 11]
+    assert Cycle(5, 1).rest_phases() == [5, 11]
 
 
 def test_근무_블록은_오후_오전_순으로_번갈아_간다():
-    first = [phase_state(p)[1] for p in range(0, 4)]
-    second = [phase_state(p)[1] for p in range(6, 10)]
+    """블록을 하나만 두면 매 블록이 오후로 고정된다 (2020 실측 교대율 97%)."""
+    first = [SUNGMIN.state(p)[1] for p in range(0, 4)]
+    second = [SUNGMIN.state(p)[1] for p in range(6, 10)]
     assert first == [Shift.PM] * 4
     assert second == [Shift.AM] * 4
+
+
+def test_주기가_바뀌면_쉬는_날도_바뀐다():
+    """위상 숫자는 주기에 종속이다 — 프레임이 주기를 함께 들고 다녀야 한다."""
+    def rest(cycle):
+        f = _frame_one_vehicle(cycle=cycle)
+        return [d.date.day for d in frame_days(f, "1001", month_dates(2026, 9))][:0] or [
+            d.date.day for d in frame_days(f, "1001", month_dates(2026, 9)) if not d.working
+        ]
+    assert rest(Cycle(4, 2))[:4] == [5, 6, 11, 12]
+    assert rest(Cycle(5, 1))[:4] == [6, 12, 18, 24]
+    assert rest(Cycle(5, 2))[:4] == [6, 7, 13, 14]
 
 
 # ── 사장님이 직접 말한 날짜 ─────────────────────────────────────────
@@ -78,8 +103,8 @@ def test_1일부터_일한_짝꿍은_6일_12일에_쉰다():
 
 
 def test_바로_밑_차량은_하루_뒤에_쉰다():
-    phases = staircase_phases(["1001", "1002", "1003"], base_phase=0)
-    frame = BaseFrame(epoch=EPOCH, phases=phases)
+    phases = staircase_phases(["1001", "1002", "1003"], base_phase=0, cycle=SUNGMIN)
+    frame = BaseFrame(epoch=EPOCH, phases=phases, cycle=SUNGMIN)
     # 계단을 넉넉히 보려면 한 달로는 짧다 — 두 달을 이어 본다
     dates = month_dates(2026, 9) + month_dates(2026, 10)
 
@@ -130,9 +155,9 @@ def test_월이_바뀌어도_사이클이_끊기지_않는다():
     oct_ = frame_days(frame, "1001", month_dates(2026, 10))
     joined = sep + oct_
 
-    # 9/30 → 10/1 이 이어지는지: 근무·휴무 순열이 13일 주기를 유지한다
+    # 9/30 → 10/1 이 이어지는지: 근무·휴무 순열이 주기를 그대로 유지한다
     for i, day in enumerate(joined):
-        working, _ = phase_state(i)
+        working, _ = SUNGMIN.state(i)
         assert day.working is working
 
 
@@ -149,7 +174,7 @@ def test_한_달_근무일수는_20일_안팎이다():
 
 def test_14대_계단이면_하루에_쉬는_차가_고르게_퍼진다():
     vehicles = [f"10{i:02d}" for i in range(14)]
-    frame = BaseFrame(epoch=EPOCH, phases=staircase_phases(vehicles))
+    frame = BaseFrame(epoch=EPOCH, phases=staircase_phases(vehicles, cycle=SUNGMIN), cycle=SUNGMIN)
     mf = build_month_frame(frame, vehicles, 2026, 9)
 
     counts = [len(mf.resting_vehicles(d)) for d in mf.dates]
@@ -189,13 +214,14 @@ def test_실적에서_위상과_정부_역할을_되찾는다():
     vehicles = ["1001", "1002", "1003"]
     truth = BaseFrame(
         epoch=dt.date(2026, 7, 1),
-        phases=staircase_phases(vehicles, base_phase=4),
+        phases=staircase_phases(vehicles, base_phase=4, cycle=SUNGMIN),
         roles={v: (f"정{v}", f"부{v}") for v in vehicles},
+        cycle=SUNGMIN,
     )
     roster = _roster_from_frame(truth, vehicles, 2026, 7)
     home = {f"정{v}": v for v in vehicles} | {f"부{v}": v for v in vehicles}
 
-    est = estimate_anchor(roster, home, epoch=dt.date(2026, 7, 1))
+    est = estimate_anchor(roster, home, epoch=dt.date(2026, 7, 1), cycle=SUNGMIN)
 
     assert est.frame.phases == truth.phases
     assert est.frame.roles == truth.roles
@@ -204,9 +230,10 @@ def test_실적에서_위상과_정부_역할을_되찾는다():
 
 def test_실적이_없으면_차량_순서대로_계단을_새로_시작한다():
     g = DepotGroup(name="가좌", vehicles=["1001", "1002"])
-    frame = new_anchor([g], epoch=EPOCH)
+    frame = new_anchor([g], epoch=EPOCH, cycle=SUNGMIN)
     # 2번 차는 하루 늦게 쉬므로 위상은 하루 뒤처진다
-    assert frame.phases == {"1001": 0, "1002": CYCLE_LEN - 1}
+    assert frame.phases == {"1001": 0, "1002": SUNGMIN.length - 1}
+    assert frame.cycle == SUNGMIN
 
 
 def test_실적이_비면_추정은_거부한다():

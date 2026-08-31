@@ -47,58 +47,72 @@ from .models import DepotGroup, MonthlyRoster, Shift
 # 사이클 정의
 # ────────────────────────────────────────────────────────────────────
 
-#: (근무여부, 블록 길이) — 정기사 기준. 부기사는 시프트만 반대다.
-#: 첫 근무 블록이 오후인 것은 사장님 확인 사항이다("오후 쭉 일하고").
-#:
-#: 근무 블록이 **두 개**인 이유: 시프트가 블록마다 오후↔오전으로 뒤집히므로
-#: (2020년 실측 전이 A→P 253 / P→A 251, 유지는 30건뿐) 한 바퀴를 다 돌려면
-#: 근무 블록 두 개가 필요하다. 4근2휴만 적으면 매 블록이 오후로 고정된다.
-CYCLE: tuple[tuple[bool, int], ...] = (
-    (True, 4),    # 근무 — 정기사 오후 / 부기사 오전
-    (False, 2),   # 휴무 2일
-    (True, 4),    # 근무 — 정기사 오전 / 부기사 오후
-    (False, 2),   # 휴무 2일
-)
+@dataclass(frozen=True)
+class Cycle:
+    """근무 주기 — 회사가 [배차 설정 → 운영 정책]에서 정한다.
 
-CYCLE_LEN = sum(n for _w, n in CYCLE)  # 12
+    근무 w일 → 휴무 r일 → 근무 w일 → 휴무 r일 = 2×(w+r)일.
+
+    **근무 블록이 두 개인 이유**: 시프트가 블록마다 오후↔오전으로 뒤집힌다
+    (성민 2020 실측 전이 A→P 253 / P→A 251, 유지는 30건뿐). 블록을 하나만
+    두면 매 블록이 오후로 고정된다.
+
+    **주기는 취향이 아니라 인력 산술이다.** 한 달 총 운행 슬롯과 인원은
+    주기와 무관한 고정값이라, 주기가 정하는 것은 그 일을 메인과 스페어가
+    어떻게 나눠 갖느냐뿐이다. 메인 쪽으로 너무 몰면 스페어가 논다 —
+    성민에서 5근1휴+5근2휴(13일)로 짰다가 스페어가 월 7일까지 떨어졌다.
+    generate.py 가 생성할 때마다 이 배분을 계산해 경고로 알려준다.
+    """
+
+    work_days: int = 5
+    rest_days: int = 2
+
+    def __post_init__(self) -> None:
+        if self.work_days < 1 or self.rest_days < 1:
+            raise ValueError("근무일·휴무일은 1일 이상이어야 합니다")
+
+    @property
+    def length(self) -> int:
+        return 2 * (self.work_days + self.rest_days)
+
+    @property
+    def table(self) -> tuple[tuple[bool, Optional["Shift"]], ...]:
+        rows: list[tuple[bool, Optional[Shift]]] = []
+        shift = Shift.PM
+        for _ in range(2):
+            rows += [(True, shift)] * self.work_days
+            rows += [(False, None)] * self.rest_days
+            shift = other(shift)
+        return tuple(rows)
+
+    def state(self, phase: int) -> tuple[bool, Optional["Shift"]]:
+        """위상 → (근무여부, 정기사 시프트). phase 0 이 첫 근무 블록 첫날."""
+        return self.table[phase % self.length]
+
+    def rest_phases(self) -> list[int]:
+        """한 주기에서 쉬는 위상들 — 테스트·화면 설명용."""
+        return [p for p, (w, _s) in enumerate(self.table) if not w]
+
+    def staircase_phase(self, base_phase: int, index: int) -> int:
+        """계단에서 index 번째 차량의 위상.
+
+        "1번 차가 6일에 쉬면 바로 밑 2번 차는 7일에 쉰다" — 쉬는 날이 하루씩
+        **뒤로** 밀리므로 위상은 반대로 하루씩 **뒤처진다**(빼기). 부호를
+        뒤집으면 계단이 위로 올라가 같은 날 쉬는 차가 몰린다.
+        """
+        return (base_phase - index) % self.length
+
+    def staircase(self, vehicles: Iterable[str], base_phase: int = 0) -> dict[str, int]:
+        return {v: self.staircase_phase(base_phase, i) for i, v in enumerate(vehicles)}
+
+
+#: 주기를 안 넘겼을 때의 기본값 — 시내 2교대 프리셋(CITY_2SHIFT)과 같다.
+DEFAULT_CYCLE = Cycle(work_days=5, rest_days=2)
+
 
 def other(shift: Shift) -> Shift:
     """오전 ↔ 오후."""
     return Shift.AM if shift is Shift.PM else Shift.PM
-
-
-def _build_phase_table() -> tuple[tuple[bool, Optional[Shift]], ...]:
-    """위상 → (근무여부, 정기사 시프트). 휴무면 시프트는 None.
-
-    근무 블록은 나올 때마다 오후 → 오전 → 오후 … 로 번갈아 간다
-    ("이걸 번갈아가면서 오후 오전을 타고").
-    """
-    rows: list[tuple[bool, Optional[Shift]]] = []
-    shift = Shift.PM
-    for working, length in CYCLE:
-        for _ in range(length):
-            rows.append((working, shift if working else None))
-        if working:
-            shift = other(shift)
-    return tuple(rows)
-
-
-_PHASE_TABLE: tuple[tuple[bool, Optional[Shift]], ...] = _build_phase_table()
-
-assert len(_PHASE_TABLE) == CYCLE_LEN
-
-
-def phase_state(phase: int) -> tuple[bool, Optional[Shift]]:
-    """사이클 위상 → (근무여부, 정기사 시프트).
-
-    phase 0 이 첫 근무 블록의 첫날이다.
-    """
-    return _PHASE_TABLE[phase % CYCLE_LEN]
-
-
-def rest_days_of_cycle() -> list[int]:
-    """한 사이클에서 쉬는 위상들 — 테스트·화면 설명용."""
-    return [p for p in range(CYCLE_LEN) if not _PHASE_TABLE[p][0]]
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -117,19 +131,24 @@ class BaseFrame:
     phases: dict[str, int] = field(default_factory=dict)
     #: 차량 -> (정기사, 부기사). 정기사가 첫 근무 블록에 오후를 탄다.
     roles: dict[str, tuple[str, str]] = field(default_factory=dict)
+    #: 회사가 정한 근무 주기. 위상은 이 주기 기준이라 함께 저장해야 한다 —
+    #: 주기가 바뀌면 같은 위상 숫자가 전혀 다른 날을 가리킨다.
+    cycle: Cycle = DEFAULT_CYCLE
 
     def phase_on(self, vehicle: str, day: dt.date) -> Optional[int]:
         base = self.phases.get(vehicle)
         if base is None:
             return None
-        return (base + (day - self.epoch).days) % CYCLE_LEN
+        return (base + (day - self.epoch).days) % self.cycle.length
 
     def to_dict(self) -> dict:
         return {
             "epoch": self.epoch.isoformat(),
             "phases": dict(self.phases),
             "roles": {v: list(pair) for v, pair in self.roles.items()},
-            "cycle_len": CYCLE_LEN,
+            "work_days": self.cycle.work_days,
+            "rest_days": self.cycle.rest_days,
+            "cycle_len": self.cycle.length,
         }
 
     @classmethod
@@ -142,22 +161,18 @@ class BaseFrame:
                 for k, v in (data.get("roles") or {}).items()
                 if v and len(v) >= 2
             },
+            cycle=Cycle(
+                work_days=int(data.get("work_days", DEFAULT_CYCLE.work_days)),
+                rest_days=int(data.get("rest_days", DEFAULT_CYCLE.rest_days)),
+            ),
         )
 
 
-def staircase_phase(base_phase: int, index: int) -> int:
-    """계단에서 index 번째 차량의 위상.
-
-    "1번 차가 6일에 쉬면 바로 밑 2번 차는 7일에 쉰다" — 쉬는 날이 **하루씩
-    뒤로** 밀리므로 위상은 반대로 하루씩 **뒤처진다**(빼기). 부호를 뒤집으면
-    계단이 위로 올라가 같은 날 쉬는 차가 몰린다.
-    """
-    return (base_phase - index) % CYCLE_LEN
-
-
-def staircase_phases(vehicles: Iterable[str], base_phase: int = 0) -> dict[str, int]:
+def staircase_phases(
+    vehicles: Iterable[str], base_phase: int = 0, cycle: Cycle = DEFAULT_CYCLE
+) -> dict[str, int]:
     """차량 순서대로 하루씩 밀린 계단 위상."""
-    return {v: staircase_phase(base_phase, i) for i, v in enumerate(vehicles)}
+    return cycle.staircase(vehicles, base_phase)
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -195,7 +210,7 @@ def frame_days(
         ph = frame.phase_on(vehicle, d)
         if ph is None:
             continue
-        working, lead = phase_state(ph)
+        working, lead = frame.cycle.state(ph)
         out.append(FrameDay(date=d, vehicle=vehicle, working=working, lead_shift=lead))
     return out
 
@@ -279,11 +294,12 @@ def _score_phase(
     dates: list[dt.date],
     lead_work: dict[dt.date, Shift],
     second_work: dict[dt.date, Shift],
+    cycle: Cycle,
 ) -> int:
     """이 위상이 두 사람의 실적과 몇 칸이나 맞는가 (근무여부 + 시프트)."""
     score = 0
     for d in dates:
-        working, lead_shift = phase_state(phase + (d - epoch).days)
+        working, lead_shift = cycle.state(phase + (d - epoch).days)
         for w, role_shift in (
             (lead_work, lead_shift),
             (second_work, other(lead_shift) if lead_shift else None),
@@ -320,6 +336,7 @@ def estimate_anchor(
     home_vehicle: dict[str, str],
     epoch: Optional[dt.date] = None,
     staircase: bool = True,
+    cycle: Cycle = DEFAULT_CYCLE,
 ) -> AnchorEstimate:
     """쓰고 있는 배차표에서 차량별 위상과 정·부 역할을 뽑는다.
 
@@ -355,11 +372,11 @@ def estimate_anchor(
                 continue
             a, b = pair[0], pair[1]
             best: tuple[int, int, tuple[str, str]] = (-1, 0, (a, b))
-            for ph in range(CYCLE_LEN):
+            for ph in range(cycle.length):
                 # 누가 정(첫 블록 오후)인지도 함께 고른다
                 for lead, second in ((a, b), (b, a)):
                     s = _score_phase(
-                        ph, epoch, dates, work.get(lead, {}), work.get(second, {})
+                        ph, epoch, dates, work.get(lead, {}), work.get(second, {}), cycle
                     )
                     if s > best[0]:
                         best = (s, ph, (lead, second))
@@ -375,18 +392,18 @@ def estimate_anchor(
                 continue
             # 차량 i 의 위상을 staircase_phase(base, i) 로 놓았을 때 가장 잘 맞는 base
             best_b, best_hit = 0, -1
-            for b in range(CYCLE_LEN):
+            for b in range(cycle.length):
                 hit = sum(
                     1
                     for i, v in enumerate(g.vehicles)
-                    if v in phases and phases[v] == staircase_phase(b, i)
+                    if v in phases and phases[v] == cycle.staircase_phase(b, i)
                 )
                 if hit > best_hit:
                     best_b, best_hit = b, hit
             group_base[g.name] = best_b
             moved = 0
             for i, v in enumerate(g.vehicles):
-                want = staircase_phase(best_b, i)
+                want = cycle.staircase_phase(best_b, i)
                 if v in phases and phases[v] != want:
                     moved += 1
                 phases[v] = want
@@ -397,7 +414,7 @@ def estimate_anchor(
                 )
 
     return AnchorEstimate(
-        frame=BaseFrame(epoch=epoch, phases=phases, roles=roles),
+        frame=BaseFrame(epoch=epoch, phases=phases, roles=roles, cycle=cycle),
         fit=fit,
         group_base=group_base,
         warnings=warnings,
@@ -405,10 +422,11 @@ def estimate_anchor(
 
 
 def new_anchor(
-    groups: Iterable[DepotGroup], epoch: dt.date, base_phase: int = 0
+    groups: Iterable[DepotGroup], epoch: dt.date, base_phase: int = 0,
+    cycle: Cycle = DEFAULT_CYCLE,
 ) -> BaseFrame:
     """실적이 없을 때 — 차량 순서대로 계단을 새로 시작한다."""
     phases: dict[str, int] = {}
     for g in groups:
-        phases.update(staircase_phases(g.vehicles, base_phase))
-    return BaseFrame(epoch=epoch, phases=phases)
+        phases.update(cycle.staircase(g.vehicles, base_phase))
+    return BaseFrame(epoch=epoch, phases=phases, cycle=cycle)

@@ -29,7 +29,7 @@ from .importer.inference import (
 )
 from .models import CellState, DayEntry, DepotGroup, MonthlyRoster
 from .policy import CompanyPolicy
-from .frame import BaseFrame, build_month_frame, estimate_anchor
+from .frame import BaseFrame, Cycle, build_month_frame, estimate_anchor
 from .rotation import DisplayMode, PatternMatrix, expand_pattern
 from .solver import AssignmentProblem, Assignment, SolverWeights, solve
 
@@ -214,8 +214,14 @@ def generate_month(
     # 어느 차가 쉬는지를 알고 들어가야 한다.
     all_vehicles = [v for g in prev_t.groups for v in g.vehicles]
     anchor_warnings: list[str] = []
+    # 근무 주기는 회사가 [배차 설정 → 운영 정책]에서 정한다. 여기에 박아 넣으면
+    # 다른 회사에서 그대로 틀린다 — 시내는 보통 5근2휴, 마을은 6근1휴다.
+    cycle = Cycle(
+        work_days=int(policy.get("cycle_work_days")),
+        rest_days=int(policy.get("cycle_rest_days")),
+    )
     if base_frame is None:
-        est = estimate_anchor(prev_t, home_vehicle, epoch=min(prev_t.dates(), default=first))
+        est = estimate_anchor(prev_t, home_vehicle, epoch=min(prev_t.dates(), default=first), cycle=cycle)
         base_frame = est.frame
         anchor_warnings = list(est.warnings)
         anchor_warnings.append(
@@ -408,6 +414,31 @@ def generate_month(
             )
             lo = cap
 
+    # ── 주기가 인력과 맞는지 검산 ──
+    # 한 달 총 슬롯과 인원은 주기와 무관한 고정값이라, 주기가 정하는 것은 그
+    # 일을 메인과 스페어가 어떻게 나눠 갖느냐뿐이다. 메인 쪽으로 너무 몰면
+    # 스페어가 논다 — 성민에서 5근1휴+5근2휴(13일)로 짰다가 스페어가 월 7일
+    # 까지 떨어졌고, 담당자가 배차표를 보고서야 알았다. 생성할 때 알려준다.
+    n_days = len(dates)
+    if free_drivers and n_days:
+        spare_days = free_slots / len(free_drivers)
+        main_days = (
+            sum(len(v) for v in mframe.work.values()) / max(len(mframe.work), 1)
+        )
+        if spare_days < main_days * 0.6:
+            warnings.append(
+                f"근무 주기({cycle.work_days}근 {cycle.rest_days}휴)가 메인 쪽으로 치우쳐 "
+                f"있습니다 — 메인 월 {main_days:.0f}일 / 스페어 월 {spare_days:.0f}일. "
+                f"스페어를 더 쓰시려면 [배차 설정 → 운영 정책]에서 연속 근무일을 "
+                f"줄이세요(근무일을 1일 줄이면 스페어 몫이 크게 늘어납니다)."
+            )
+        elif spare_days > main_days * 1.4:
+            warnings.append(
+                f"근무 주기({cycle.work_days}근 {cycle.rest_days}휴)가 스페어 쪽으로 치우쳐 "
+                f"있습니다 — 메인 월 {main_days:.0f}일 / 스페어 월 {spare_days:.0f}일. "
+                f"메인이 놀고 있다면 [배차 설정 → 운영 정책]에서 연속 근무일을 늘리세요."
+            )
+
     stranded = sum(
         1 for (d, v, s) in fixed_cells if (d, v, s) not in operating
     )
@@ -418,8 +449,9 @@ def generate_month(
         )
     warnings.extend(anchor_warnings)
     warnings.append(
-        "메인은 기본 틀(근무 4일→휴무 2일→근무 4일→휴무 2일, 차량마다 하루씩 "
-        "계단)로 확정했습니다. 남은 자리만 스페어로 채웁니다."
+        f"메인은 기본 틀(근무 {cycle.work_days}일→휴무 {cycle.rest_days}일, "
+        f"오후/오전 번갈아 {cycle.length}일 주기, 차량마다 하루씩 계단)로 "
+        f"확정했습니다. 남은 자리만 스페어로 채웁니다."
     )
 
     problem = AssignmentProblem(
