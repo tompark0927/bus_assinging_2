@@ -262,6 +262,14 @@ export const getCompanyPolicy = async (req: AuthRequest, res: Response) => {
       const { [ENGINE_TUNING_KEY]: _engineTuning, ...rest } = company.policy as Record<string, unknown>;
       policy = rest;
     }
+    // 엔진 튜닝만 저장돼 있고 운영 정책은 한 번도 저장하지 않은 회사가 있다.
+    // 그때 `rest` 는 빈 객체 `{}` 가 되는데, 이걸 그대로 내려보내면 설정 화면이
+    // `policy.shiftSystem.kind` 를 읽다가 통째로 흰 화면이 된다("Cannot read
+    // properties of undefined"). 알맹이가 없으면 저장된 적 없는 것과 같으므로
+    // 기본 프리셋으로 내려준다.
+    if (policy && Object.keys(policy as Record<string, unknown>).length === 0) {
+      policy = null;
+    }
     let isDefault = false;
     if (!policy) {
       isDefault = true;
