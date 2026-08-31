@@ -76,6 +76,17 @@ async function skipReason(
   });
   if (touched > 0) return `담당자가 ${touched}칸을 직접 고쳐 둠`;
 
+  // 스페어가 채워져 있으면 손대지 않는다.
+  //
+  // 기본 틀은 메인만 깔린 상태다. 스페어 배정이 하나라도 있으면 담당자가
+  // [스페어 자동 배치]를 눌렀거나 직접 채운 것이다 — 그걸 매일 도는 틱이
+  // 메인만 있는 틀로 되돌리면 하루 만에 작업이 사라진다.
+  // (isManualOverride 로는 안 잡힌다. 자동 배치는 그 플래그를 안 세운다.)
+  const spareFilled = await prisma.scheduleSlot.count({
+    where: { scheduleId: draft.id, driver: { driverType: 'SPARE' } },
+  });
+  if (spareFilled > 0) return `스페어 ${spareFilled}칸이 이미 채워져 있음`;
+
   return null;
 }
 
