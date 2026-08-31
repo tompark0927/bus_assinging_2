@@ -34,6 +34,23 @@ export const errorHandler = (
     return res.status(err.statusCode).json({ success: false, message: err.message });
   }
 
+  // 본문이 JSON 으로 안 읽히는 건 **클라이언트 잘못**이다. 500 "서버 내부 오류"로
+  // 답하면 담당자도 개발자도 서버를 뒤지게 된다 — 실제로 프런트가 axios 에
+  // `null` 본문을 실어 보낸 걸 찾느라 프로덕션 로그까지 갔다.
+  // body-parser 는 SyntaxError 에 status/body 를 붙여 던진다.
+  const bodyErr = err as Error & { status?: number; type?: string };
+  if (err instanceof SyntaxError && bodyErr.status === 400 && bodyErr.type === 'entity.parse.failed') {
+    logger.warn('잘못된 요청 본문', {
+      message: err.message,
+      path: req.path,
+      method: req.method,
+    });
+    return res.status(400).json({
+      success: false,
+      message: '요청 본문이 올바른 JSON 이 아닙니다.',
+    });
+  }
+
   logger.error('서버 내부 오류', {
     message: err.message,
     stack: err.stack,
