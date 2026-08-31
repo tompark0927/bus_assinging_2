@@ -341,7 +341,12 @@ export default function DispatchSettingsPage() {
               </select>
             </Field>
 
-            <Field label="연속 근무일" hint="휴무 사이의 근무일 수">
+            {/* 근무 주기 — 기본 틀(엔진 frame.py)이 이 값으로 계단을 깐다.
+                시내 2교대는 보통 5근2휴, 마을버스는 6근1휴다. */}
+            <Field
+              label="연속 근무일"
+              hint="휴무 사이의 근무일 수. 배차표의 기본 틀이 이 값으로 짜입니다 (시내 보통 5일, 마을 6일)"
+            >
               <NumberInput
                 value={policy.restCycle.workDays}
                 min={1}
@@ -350,7 +355,10 @@ export default function DispatchSettingsPage() {
               />
             </Field>
 
-            <Field label="연속 휴무일" hint="근무 사이의 휴무일 수">
+            <Field
+              label="연속 휴무일"
+              hint="근무 뒤에 쉬는 일수. 근무일을 늘리면 메인이 더 일하고 스페어가 덜 나갑니다 — 생성할 때 배분을 알려드립니다"
+            >
               <NumberInput
                 value={policy.restCycle.restDays}
                 min={1}

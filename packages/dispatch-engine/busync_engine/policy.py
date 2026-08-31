@@ -70,6 +70,17 @@ SETTINGS_CATALOG: list[SettingSpec] = [
         SettingType.RANGE, (20, 23), "근무 규칙", min_value=15, max_value=27,
     ),
 
+    SettingSpec(
+        "cycle_work_days", "근무 주기 — 연속 근무일",
+        "기본 틀에서 며칠 일하고 쉬는지입니다. [운영 정책] 탭이 주인입니다.",
+        SettingType.NUMBER, 5, "근무 규칙", min_value=1, max_value=10,
+    ),
+    SettingSpec(
+        "cycle_rest_days", "근무 주기 — 휴무일",
+        "근무 블록 뒤에 며칠 쉬는지입니다. [운영 정책] 탭이 주인입니다.",
+        SettingType.NUMBER, 2, "근무 규칙", min_value=1, max_value=5,
+    ),
+
     # ── 차량·짝궁 ──
     SettingSpec(
         "fixed_driver_own_vehicle", "고정기사 본인차량 원칙",
