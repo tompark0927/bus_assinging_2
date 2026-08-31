@@ -451,7 +451,14 @@ export async function getPostingView(scheduleId: number) {
       where: { scheduleId },
       select: {
         date: true, displaySlot: true, operating: true, depotGroup: true,
-        bus: { select: { id: true, busNumber: true } },
+        // 노선은 그룹 이름을 문자열로 파싱하지 않고 Bus→Route 관계에서 읽는다.
+        // 그룹 이름은 회사 엑셀마다 제각각("16번 가좌출발"/"가좌")이라 못 믿는다.
+        bus: {
+          select: {
+            id: true, busNumber: true,
+            route: { select: { id: true, routeNumber: true, name: true } },
+          },
+        },
       },
       orderBy: [{ date: 'asc' }],
     }),
@@ -475,13 +482,22 @@ export async function getPostingView(scheduleId: number) {
     });
   }
 
-  const groups = new Map<string, string[]>();
+  // 출발지그룹 → 차량. 그룹마다 어느 노선인지도 함께 들고 간다 (화면 노선 탭).
+  const groups = new Map<string, { vehicles: string[]; route: string | null; routeLabel: string | null }>();
   const cells: Record<string, Record<string, unknown>> = {};
   for (const p of patterns) {
     const d = p.date.toISOString().slice(0, 10);
     const g = p.depotGroup ?? '전체';
-    if (!groups.has(g)) groups.set(g, []);
-    const list = groups.get(g)!;
+    const route = p.bus.route;
+    if (!groups.has(g)) {
+      groups.set(g, {
+        vehicles: [],
+        route: route ? String(route.id) : null,
+        routeLabel: route ? (route.routeNumber || route.name) : null,
+      });
+    }
+    const entry = groups.get(g)!;
+    const list = entry.vehicles;
     if (!list.includes(p.bus.busNumber)) list.push(p.bus.busNumber);
 
     // 저장된 배정이 없으면, 기초 데이터에 없어 탈락한 이름이라도 돌려준다
@@ -499,7 +515,12 @@ export async function getPostingView(scheduleId: number) {
   }
 
   return {
-    groups: [...groups.entries()].map(([name, vehicles]) => ({ name, vehicles })),
+    groups: [...groups.entries()].map(([name, g]) => ({
+      name,
+      vehicles: g.vehicles,
+      route: g.route,
+      routeLabel: g.routeLabel,
+    })),
     cells,
   };
 }
