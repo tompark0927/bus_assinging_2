@@ -85,8 +85,17 @@ export interface EnginePolicyDoc {
 }
 
 /**
- * 엔진에 저장된 정책 위에 배차 설정 값을 덮어쓴 최종 정책.
- * 공휴일·특별감차는 엔진 튜닝 탭이 주인이므로 그대로 보존한다.
+ * 엔진에 보낼 최종 정책.
+ *
+ * **저장된 엔진 튜닝 값(`saved.values`)은 더 이상 읽지 않는다** (2026-08-31).
+ * 손잡이가 22개나 되니 회사마다 다른 값이 쌓였고, 그 값들이 솔버 가중치와
+ * 서로 싸워 달마다 배차표 모양이 달라졌다 — 8월 배차표가 무너진 원인이다.
+ * 이제 배차 규칙은 **기본 틀**(엔진 `frame.py`, 13일 계단 사이클)이 정하고,
+ * 회사가 고르는 것은 **공휴일**뿐이다.
+ *
+ * 넘어가는 값은 두 가지뿐:
+ *   · 운영 정책이 주인인 법규 항목 (연속근무·월 근무일수·최소 휴식)
+ *   · 공휴일·특별감차 (회사가 해마다 확인해 확정한 것)
  */
 export function mergeEnginePolicy(
   savedEnginePolicy: EnginePolicyDoc | null | undefined,
@@ -94,7 +103,7 @@ export function mergeEnginePolicy(
 ): EnginePolicyDoc {
   const saved = savedEnginePolicy ?? {};
   return {
-    values: { ...(saved.values ?? {}), ...mapCompanyPolicyToEngineValues(companyPolicy) },
+    values: mapCompanyPolicyToEngineValues(companyPolicy),
     holidays: saved.holidays ?? [],
     special_reductions: saved.special_reductions ?? [],
   };
