@@ -61,6 +61,13 @@ class AssignmentProblem:
     # 기본 틀에서 확정된 메인의 휴무일. 이 날은 다른 차에도 못 앉는다 —
     # 안 막으면 솔버가 쉬는 사람을 남는 자리에 끌어다 써서 계단이 무너진다.
     fixed_off: dict[str, set[dt.date]] = field(default_factory=dict)
+    # 기본 틀을 **하드**로 박는가.
+    #   True  — 메인은 틀 그대로 확정되고 솔버는 스페어 자리만 푼다.
+    #           "틀을 만들었으면 스페어를 채울 때 그 틀은 고정되어야 한다.
+    #            자동 채우기가 메인 배차를 건드리면 안 된다"(사장님 2026-09-01).
+    #   False — "일한다면 자기 차·자기 시프트" 조건부. 메인도 근무일을
+    #           스페어에게 양보할 수 있어 근무일수는 고르지만 틀이 흔들린다.
+    frame_hard: bool = False
     # S8: 스페어가 톱니로 쉬지 않게 미리 깔아둔 '쉬어야 할 날' (선택)
     preferred_rest: dict[str, set[dt.date]] = field(default_factory=dict)
     # H4: 기사별 휴무(OFF 고정)일
@@ -218,13 +225,16 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
                 m.Add(pv == 0)
             shift_pm[(k, d)] = pv
 
-    # H0 적용: 틀에 자리가 있는 날 그 사람이 일한다면 반드시 그 자리다.
-    # 일하지 않는 것(= 스페어가 대신 맡는 것)은 허용한다.
+    # H0 적용.
+    #   frame_hard — 틀에 자리가 있으면 **그날 그 사람은 반드시 그 자리에 앉는다**.
+    #     메인 배차가 스페어를 채우는 과정에서 바뀌지 않는다.
+    #   그 외 — "일한다면 자기 자리"라는 조건부. 일하지 않는 것(= 스페어가 대신
+    #     맡는 것)을 허용해 근무일수를 고르게 만들지만, 틀이 흔들린다.
     for (k, d), var in frame_cell.items():
-        if (k, d) in works:
-            m.Add(var == 1).OnlyEnforceIf(works[(k, d)])
-        else:
+        if problem.frame_hard or (k, d) not in works:
             m.Add(var == 1)
+        else:
+            m.Add(var == 1).OnlyEnforceIf(works[(k, d)])
 
     # 백테스트 모드: 근무일 강제
     if problem.forced_work_days is not None:
@@ -259,6 +269,11 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
     # H3: 연속 근무 ≤ max_consecutive
     win = problem.max_consecutive + 1
     for k in problem.drivers:
+        if problem.frame_hard and k in pinned_drivers:
+            # 틀이 이 사람의 근무일을 이미 확정했다. 겹쳐 걸면 틀이 한도를
+            # 넘는 순간 모델이 통째로 INFEASIBLE 이 된다 — 틀 자체가 한도를
+            # 넘는지는 generate 단계에서 경고로 알린다.
+            continue
         for i in range(len(dates) - win + 1):
             span = [works[(k, dates[i + j])] for j in range(win)
                     if (k, dates[i + j]) in works]
@@ -315,6 +330,8 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
     # H6: 오후 → 익일 오전 금지 (옵션)
     if problem.forbid_pm_to_am:
         for k in problem.drivers:
+            if problem.frame_hard and k in pinned_drivers:
+                continue  # 틀이 시프트를 확정 — H3 과 같은 이유로 겹쳐 걸지 않는다
             for i in range(len(dates) - 1):
                 d1, d2 = dates[i], dates[i + 1]
                 if (k, d1) in shift_pm and (k, d2) in shift_pm and (k, d2) in works:

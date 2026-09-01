@@ -416,32 +416,44 @@ def generate_month(
         }
         fixed_off[k] = off | set(leaves.get(k, ()))
 
-    # 스페어 근무일수 하한은 **남은 슬롯**으로 다시 잰다. 메인이 틀대로 자리를
-    # 차지하고 나면 스페어가 앉을 칸은 얼마 안 남는데, 원래 밴드(20~23일)를
-    # 그대로 걸면 "이만큼은 일해야 한다"와 "앉을 자리가 없다"가 부딪혀 모델이
-    # 통째로 INFEASIBLE 이 된다.
-    # 근무일수 밴드 = **공평한 몫**. 총 슬롯을 전원으로 나눈 값 언저리로 묶는다.
-    # 이게 메인과 스페어의 근무일수를 붙여 놓는 유일한 장치다 — 밴드가 없으면
-    # 솔버는 메인을 틀대로 꽉 채우고 스페어를 놀린다(둘 다 제약 위반이 아니다).
-    fair = len(operating) / max(len(drivers), 1)
-    lo, hi = max(0, int(fair) - 1), int(fair) + 2
+    # 스페어 근무일수 밴드는 **남은 슬롯**으로 잰다.
+    #
+    # 기본 틀은 하드다 — 메인이 틀대로 자리를 차지하고 나면 스페어가 앉을 칸은
+    # 그만큼만 남는다. 전체 슬롯을 전원으로 나눈 '공평한 몫'을 그대로 걸면
+    # "이만큼은 일해야 한다"와 "앉을 자리가 없다"가 부딪혀 모델이 통째로
+    # INFEASIBLE 이 된다.
+    #
+    # 예전에는 이 밴드를 전원(메인+스페어)에게 걸어 근무일수를 붙여 놨는데,
+    # 그러려면 메인이 틀의 근무일을 스페어에게 내줘야 한다 — 실제로 메인
+    # 근무일수가 20일에서 14일까지 흔들렸다. 틀 고정이 우선이다.
+    pinned_slots = sum(1 for c in fixed_cells if c in operating)
+    free_slots = len(operating) - pinned_slots
+    fair = free_slots / max(len(spares), 1)
+    # 하한(“이만큼은 일해야 한다”)은 **걸지 않는다**. 스페어에게도 계단대로
+    # 쉬는 날이 깔려 있어 한 달에 나올 수 있는 날이 정해져 있는데, 남은 칸을
+    # 인원으로 나눈 값이 그보다 크면 하한과 부딪혀 모델이 통째로 INFEASIBLE 이
+    # 된다(실제로 지선 8월 생성이 그렇게 죽었다: 남은 378칸 / 스페어 13명 =
+    # 29일인데 나올 수 있는 날은 23일).
+    # 대신 빈 칸에는 칸당 10000 페널티가 붙어 있어 솔버는 채울 수 있는 만큼
+    # 채우고, 스페어끼리의 근무일수 편차는 S5(max-min)가 좁힌다.
+    lo, hi = 0, len(dates)
     warnings.append(
-        f"운행 {len(operating)}칸을 기사 {len(drivers)}명이 나눠 "
-        f"1인당 {fair:.1f}일이 공평한 몫입니다 — 근무일수를 {lo}~{hi}일로 맞춥니다."
+        f"기본 틀이 메인 {pinned_slots}칸을 확정했습니다 — 남은 {free_slots}칸을 "
+        f"스페어 {len(spares)}명이 나눠 1인당 {fair:.1f}일꼴입니다."
     )
 
-    # 주기가 일감을 감당하는가. 4근2휴면 한 사람이 한 달에 나올 수 있는 날이
-    # 정해진다(30일 중 20일). 공평한 몫이 그보다 크면 아무리 잘 짜도 칸이 빈다 —
-    # 인력이 모자란 게 아니라 **주기가 헐거운** 것이다. 담당자가 배차표의 빈 칸을
-    # 보고 "사람이 없다"고 오해하지 않도록 먼저 알려준다.
+    # 스페어가 남은 칸을 감당하는가. 4근2휴면 한 사람이 한 달에 나올 수 있는
+    # 날이 정해진다(30일 중 20일). 남은 칸을 스페어로 나눈 값이 그보다 크면
+    # 아무리 잘 짜도 칸이 빈다 — 배차를 잘못 짠 게 아니라 **스페어가 모자란**
+    # 것이다. 담당자가 빈 칸을 보고 원인을 오해하지 않도록 먼저 알려준다.
     can_work = len(dates) * (2 * cycle.work_days) / cycle.length
     if fair > can_work + 0.5:
-        short = int((fair - can_work) * len(drivers))
+        short = int((fair - can_work) * len(spares))
         warnings.append(
-            f"근무 주기({cycle.work_days}근 {cycle.rest_days}휴)로는 한 사람이 한 달에 "
-            f"최대 {can_work:.0f}일까지만 나올 수 있는데, 공평한 몫은 {fair:.1f}일입니다 — "
-            f"약 {short}칸이 빌 수밖에 없습니다. [배차 설정 → 운영 정책]에서 연속 "
-            f"근무일을 늘리거나 기사를 더 등록해 주세요."
+            f"근무 주기({cycle.work_days}근 {cycle.rest_days}휴)로는 스페어 한 명이 한 달에 "
+            f"최대 {can_work:.0f}일까지만 나올 수 있는데, 남은 칸은 1인당 {fair:.1f}일입니다 — "
+            f"약 {short}칸이 빌 수밖에 없습니다. 스페어를 더 등록하시거나, "
+            f"[배차 설정 → 운영 정책]에서 운행 대수를 확인해 주세요."
         )
 
     stranded = sum(
@@ -452,6 +464,28 @@ def generate_month(
             f"기본 틀상 근무일이지만 그날 차가 안 나가는 칸이 {stranded}개입니다 — "
             f"그 기사들은 쉬는 것으로 처리됩니다(감차 대수가 틀보다 큰 날)."
         )
+    # 연속근무 상한(H3)은 틀이 확정한 메인에게는 걸지 않는다 — 겹쳐 걸면 틀이
+    # 한도를 넘는 순간 모델이 통째로 INFEASIBLE 이 된다. 대신 틀 자체가 한도를
+    # 넘는지 여기서 재서 알려준다(그냥 넘어가면 규정 위반이 조용히 지나간다).
+    if policy.get("max_consecutive_enabled"):
+        over: list[str] = []
+        for driver, days in mframe.work.items():
+            prev: dt.date | None = None
+            run = best = 0
+            for d in sorted(days):
+                run = run + 1 if prev is not None and (d - prev).days == 1 else 1
+                best = max(best, run)
+                prev = d
+            if best > max_consec:
+                over.append(f"{driver}({best}일)")
+        if over:
+            warnings.append(
+                f"기본 틀의 연속근무가 상한({max_consec}일)을 넘는 기사가 "
+                f"{len(over)}명 있습니다: " + ", ".join(sorted(over)[:5])
+                + (" 외" if len(over) > 5 else "")
+                + " — 틀을 고정하기로 했으므로 그대로 두었습니다. "
+                "[배차 설정 → 운영 정책]의 연속 근무일을 확인해 주세요."
+            )
     warnings.extend(anchor_warnings)
     warnings.append(
         f"메인은 기본 틀(근무 {cycle.work_days}일→휴무 {cycle.rest_days}일, "
@@ -486,6 +520,8 @@ def generate_month(
         fairness_lambda=int(policy.get("fairness_lambda")),
         fixed_cells=fixed_cells,
         fixed_off=fixed_off,
+        # 틀 고정 — 스페어를 채우는 동안 메인 배차는 한 칸도 바뀌지 않는다.
+        frame_hard=True,
         allow_unfilled=True,   # 수급 부족은 '결행 후보'로 리포트 (현실 대응)
     )
     if mains_only:
