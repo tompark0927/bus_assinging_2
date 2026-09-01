@@ -39,6 +39,7 @@ import { mergeEnginePolicy } from '../services/enginePolicyMapper';
 import { loadCompanyPolicy } from '../services/solverDispatchService';
 import { approvedLeavesByName } from './engine';
 import { ensureBaseFrameSchedule, fillBaseFrameWindow } from '../services/baseFrameService';
+import { fillVacancies } from '../services/vacancyFillService';
 
 const router = Router();
 
@@ -277,8 +278,13 @@ router.post('/generate-from-previous', requireRole('DISPATCH'), async (req: Auth
     return res.status(503).json({ success: false, message: '배차 엔진이 설정되지 않았습니다 (ENGINE_URL 미설정).' });
   }
   try {
-    const { year, month } = req.body ?? {};
-    const serviceType = parseServiceType((req.body as { serviceType?: string })?.serviceType);
+    const body = (req.body ?? {}) as {
+      year?: number; month?: number; withSpares?: boolean; serviceType?: string;
+    };
+    const year = Number(body.year);
+    const month = Number(body.month);
+    const withSpares = !!body.withSpares;
+    const serviceType = parseServiceType(body.serviceType);
     if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
       return res.status(400).json({ success: false, message: 'year/month 가 필요합니다.' });
     }
@@ -316,6 +322,11 @@ router.post('/generate-from-previous', requireRole('DISPATCH'), async (req: Auth
         leaves,
         // 요일별 운행 대수는 기초 데이터의 등록값이 진실이다 (지난달 실적 추론보다 정확)
         operating_counts: operatingCounts,
+        // 기본 틀만 만든다 — 메인(정·부)만 깔고 **스페어 칸은 비운다**.
+        // 담당자가 직접 채우거나 [스페어 자동 채우기]로 맡기거나 고르게 하는 게
+        // 이 제품의 흐름이다. 엔진이 처음부터 다 채워 버리면 고를 여지가 없다.
+        // withSpares=true 를 명시하면 예전처럼 한 번에 다 채운다.
+        mains_only: !withSpares,
       }),
     });
     const text = await upstream.text();
@@ -392,45 +403,47 @@ router.post('/base-frame', requireRole('DISPATCH'), async (req: AuthRequest, res
 });
 
 /**
- * 스페어 자리를 엔진에 맡긴다.
+ * 스페어 자리를 자동으로 채운다 — 담당자가 직접 채우는 대신 맡기는 버튼.
  *
- * 기본 틀은 메인만 깔려 있고 스페어 칸은 비어 있다. 담당자가 직접 채우는 게
- * 기본이지만, "AI 가 짜면 어떻게 나오나" 를 보고 싶을 때 이걸 누른다.
- * 같은 달 기본 틀을 스페어까지 채워 다시 만든다.
+ * 배차표 생성은 **메인만 깔린 기본 틀**을 만든다(스페어 칸은 비어 있다).
+ * 담당자는 그 위에서 직접 채우거나, 이 버튼으로 맡기거나 고를 수 있다.
+ *
+ * 지금 보고 있는 초안에 그대로 적용한다 — 이름이 무엇이든 상관없다.
+ * (예전에는 '기본 틀' 이라는 이름의 초안만 대상이라, 담당자가 만든 초안에서
+ *  버튼을 눌러도 엉뚱한 초안이 바뀌었다)
+ *
+ * 채울 때 안전 규칙은 그대로 지킨다 — 이중 배정·연속근무 상한·오후 다음날
+ * 오전 금지. 규칙을 어겨야만 채울 수 있는 칸은 비워둔 채 보고한다.
  */
-router.post(
-  '/:year/:month/fill-spares',
-  requireRole('DISPATCH'),
-  ...scheduleValidation.getSchedule,
-  async (req: AuthRequest, res) => {
-    const companyId = req.user!.companyId;
-    const createdBy = req.user!.id;
-    const year = Number(req.params.year);
-    const month = Number(req.params.month);
-    const serviceType = parseServiceType(
-      (req.query as { serviceType?: string })?.serviceType,
-    );
-    try {
-      const r = await ensureBaseFrameSchedule(
-        companyId, createdBy, year, month, serviceType, /* mainsOnly */ false,
-      );
-      if (r.status !== 'created') {
-        return res.status(422).json({
-          success: false,
-          message:
-            r.status === 'skipped'
-              ? `이 달은 건드리지 않았습니다 — ${r.reason}. 직접 만든 초안이나 발행본은 덮어쓰지 않습니다.`
-              : `스페어를 채우지 못했습니다: ${r.reason}`,
-        });
-      }
-      return res.json({ success: true, data: r });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      logger.error(`[schedules/fill-spares] ${msg}`);
-      return res.status(502).json({ success: false, message: `스페어 배치에 실패했습니다: ${msg}` });
-    }
-  },
-);
+router.post('/by-id/:id/fill-spares', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  const companyId = req.user!.companyId;
+  const scheduleId = Number(req.params.id);
+  if (!Number.isInteger(scheduleId)) {
+    return res.status(400).json({ success: false, message: '배차표 id 가 올바르지 않습니다.' });
+  }
+  try {
+    const r = await fillVacancies(companyId, scheduleId);
+    return res.json({
+      success: true,
+      data: {
+        filled: r.filled,
+        stillVacant: r.stillVacant.length,
+        usedDrivers: r.usedDrivers.length,
+      },
+      message:
+        r.filled === 0 && r.stillVacant.length === 0
+          ? '채울 빈 자리가 없습니다.'
+          : `${r.filled}칸을 채웠습니다.` +
+            (r.stillVacant.length
+              ? ` ${r.stillVacant.length}칸은 안전 규칙(이중 배정·연속근무·휴식)을 어겨야만 채울 수 있어 비워 뒀습니다.`
+              : ''),
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`[schedules/fill-spares] ${msg}`);
+    return res.status(422).json({ success: false, message: msg });
+  }
+});
 
 router.post('/from-engine', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {
