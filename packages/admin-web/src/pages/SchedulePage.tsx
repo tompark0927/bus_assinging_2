@@ -129,6 +129,9 @@ interface Driver {
   employeeId: string;
   /** 기초 데이터의 담당 차량 — 같은 차번을 가진 두 메인 기사가 '짝꿍' */
   assignedBusNumber?: string | null;
+  /** 노선 종류 — 간선/지선/광역. 미지정 기사는 어느 배차표에나 설 수 있다 */
+  serviceType?: string | null;
+  isActive?: boolean;
   licenseExpiresAt?: string | null;
   qualificationExpiresAt?: string | null;
 }
@@ -1018,6 +1021,28 @@ export default function SchedulePage() {
         seen.set(slot.driver.id, slot.driver);
       }
     }
+
+    // ── 배차가 한 칸도 없는 기사도 '빈 행'으로 세운다 (초안 한정) ──
+    // 기본 틀은 메인(정·부)만 깔고 스페어 자리는 비워 둔다. 그런데 이 표의
+    // 행은 슬롯에서 뽑기 때문에 슬롯이 0개인 스페어는 화면에서 통째로
+    // 사라졌다 — "스페어는 직접 채우세요"라고 해 놓고 누를 칸이 없었다.
+    // 기초 데이터에 등록된 기사는 빈 행으로라도 세워 두고, 그 행의 날짜 칸을
+    // 눌러(+) 바로 채우게 한다.
+    // 발행본은 그 달의 기록이므로 건드리지 않는다 — 초안에서만.
+    if (schedule.status === 'DRAFT') {
+      for (const u of allUsersList) {
+        if (seen.has(u.id) || u.isActive === false) continue;
+        // 노선 종류 게이트 — 간선 배차표에 지선 기사를 세우지 않는다.
+        // 구분 미지정 기사는 통과(engineScheduleService 의 배정 규칙과 같다).
+        if (serviceType && u.serviceType && u.serviceType !== serviceType) continue;
+        seen.set(u.id, {
+          id: u.id,
+          name: u.name,
+          driverType: u.driverType,
+          employeeId: u.employeeId,
+        });
+      }
+    }
     // ── 배차표 행 순서 ──
     // 실물 배차표의 규칙 두 가지를 그대로 따른다.
     //   1) 스페어(예비)는 **무조건 맨 아래**
@@ -1096,7 +1121,7 @@ export default function SchedulePage() {
       }
       return a.name.localeCompare(b.name, 'ko');
     });
-  }, [schedule?.slots, allUsersList]);
+  }, [schedule?.slots, schedule?.status, allUsersList, serviceType]);
 
   // 근무일수 중앙값 — 엑셀 배차총괄의 "목표(22일) 대비 차이" 열에 대응.
   // 회사마다 목표가 달라 고정값 대신 중앙값을 기준으로 편차를 보여준다.
@@ -1113,6 +1138,13 @@ export default function SchedulePage() {
     const mid = Math.floor(counts.length / 2);
     return counts.length % 2 ? counts[mid] : Math.round((counts[mid - 1] + counts[mid]) / 2);
   }, [allDrivers, driverSlotMap]);
+
+  // 한 칸도 배정되지 않은 기사 — 기본 틀만 깔린 초안의 스페어가 여기 해당한다.
+  // 위 배너에서 "몇 명이 아직 비어 있는지"를 알려주고 기사별 보기로 보내는 근거.
+  const unassignedDrivers = useMemo(
+    () => allDrivers.filter((d) => !driverSlotMap.get(d.id)?.size),
+    [allDrivers, driverSlotMap],
+  );
 
   // 일일배차: 그날 배정 없는 스페어 기사 — 엑셀 sp칸(대기 명단)
   const spareStandby = useMemo(() => {
@@ -2014,14 +2046,37 @@ export default function SchedulePage() {
           <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
             빈 칸을 눌러 직접 채우시거나, 아래 버튼으로 맡기시면 됩니다. 맡겨도 이중 배정·연속근무·휴식 규칙은 지킵니다.
           </p>
-          <button
-            onClick={() => fillSparesMutation.mutate()}
-            disabled={fillSparesMutation.isPending}
-            className="mt-2.5 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
-          >
-            <Sparkles size={15} />
-            {fillSparesMutation.isPending ? '채우는 중…' : '스페어 자동 채우기'}
-          </button>
+          {/* 기본 틀만 깔린 달에는 스페어가 한 칸도 안 잡혀 있다. 기본 화면인 게시
+              양식은 행이 **차량**이라 배정 없는 사람은 아예 안 나온다 — 그래서
+              "메인밖에 없다"로 보인다. 행이 **기사**인 기사별 보기로 보내 준다. */}
+          {unassignedDrivers.length > 0 && (
+            <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
+              아직 한 칸도 배정되지 않은 기사 {unassignedDrivers.length}명(
+              {unassignedDrivers.slice(0, 3).map((d) => d.name).join(', ')}
+              {unassignedDrivers.length > 3 ? ' 외' : ''})은{' '}
+              <strong>기사별 보기</strong>에 빈 행으로 서 있습니다 — 그 행의 날짜 칸(+)을
+              눌러 직접 채우시면 됩니다.
+            </p>
+          )}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => fillSparesMutation.mutate()}
+              disabled={fillSparesMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+            >
+              <Sparkles size={15} />
+              {fillSparesMutation.isPending ? '채우는 중…' : '스페어 자동 채우기'}
+            </button>
+            {unassignedDrivers.length > 0 && effectiveViewMode !== 'driver' && (
+              <button
+                onClick={() => setViewMode('driver')}
+                className="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-3.5 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50 dark:border-blue-700 dark:bg-transparent dark:text-blue-300 dark:hover:bg-blue-900/30"
+              >
+                <Users size={15} />
+                기사별 보기에서 직접 채우기
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -2380,6 +2435,16 @@ export default function SchedulePage() {
                       >
                         <div className="text-base font-bold text-blue-700 dark:text-blue-400">{driverWorkCount}일</div>
                         <div className="text-sm text-gray-400 dark:text-gray-500">{driverRestCount}휴</div>
+                        {/* 한 칸도 안 잡힌 기사 — 기본 틀의 스페어가 여기 해당한다.
+                            0일/0휴만 보이면 고장으로 오해하므로 이유를 적어 둔다. */}
+                        {driverWorkCount === 0 && driverRestCount === 0 && (
+                          <div
+                            title="이 배차표에 배정이 하나도 없습니다 — 날짜 칸을 눌러 채워 주세요"
+                            className="text-xs font-semibold text-gray-400 dark:text-gray-500"
+                          >
+                            미배정
+                          </div>
+                        )}
                         {/* 중앙값 대비 편차 — 엑셀 배차총괄의 목표 대비 차이 열 */}
                         {workDayMedian > 0 && driverWorkCount > 0 && (
                           <div
