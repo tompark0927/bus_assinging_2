@@ -361,17 +361,14 @@ export const schedulesApi = {
     year?: number; month?: number; months?: number; serviceType?: ScheduleServiceType;
   }) => api.post('/schedules/base-frame', data ?? {}, { timeout: 600000 }),
   /**
-   * 기본 틀의 빈 스페어 자리를 엔진에 맡긴다.
+   * 지금 보고 있는 초안의 빈 스페어 자리를 자동으로 채운다.
    *
    * 본문은 `{}` 여야 한다. `null` 을 넘기면 axios 가 문자열 "null" 을
    * application/json 으로 실어 보내고, 서버의 body-parser 가 그걸 거부해
    * 라우트에 닿기도 전에 "서버 내부 오류"가 된다 (실제로 냈다).
    */
-  fillSpares: (year: number, month: number, serviceType?: ScheduleServiceType) =>
-    api.post(`/schedules/${year}/${month}/fill-spares`, {}, {
-      params: serviceType !== undefined ? { serviceType } : undefined,
-      timeout: 300000,
-    }),
+  fillSpares: (scheduleId: number) =>
+    api.post(`/schedules/by-id/${scheduleId}/fill-spares`, {}, { timeout: 300000 }),
   // AI 배차 엔진(Python) 생성 결과를 배차표 초안으로 저장
   saveFromEngine: (data: {
     year: number; month: number; name?: string;
