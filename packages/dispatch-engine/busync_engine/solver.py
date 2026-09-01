@@ -152,18 +152,30 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
             if available(k, d) and candidate(k, v):
                 x[(k, d, v, s)] = m.NewBoolVar(f"x_{k}_{d}_{v}_{s}")
 
-    # H0: 기본 틀 붙박이. 메인(정·부)의 근무일·시프트·차량은 이미 확정이라
-    # 탐색 대상이 아니다. 여기서 1로 박으면 H1(칸당 1명)이 나머지 후보를,
-    # H2(1인 1일 1시프트)가 그 사람의 다른 칸을 자동으로 0으로 만든다.
+    # H0: 기본 틀. 메인이 그날 **일한다면** 자기 차의 틀 시프트여야 한다.
+    #
+    # 예전에는 여기서 x == 1 로 못박았다. 그러면 메인은 틀의 근무일을 하루도
+    # 빠짐없이 다 채우게 되고, 남는 자리만 스페어가 받는다. 성민에서 메인
+    # 21~24일 / 스페어 4~11일로 갈렸다 — 스페어 인건비의 절반이 노는 셈이다.
+    #
+    # 실제 배차는 그렇지 않다. 정·부가 함께 쉬는 날 그 차가 나가야 하면
+    # **스페어 두 명이 그 차를 맡는다**(성민 7월 실측 152일 중 78일). 즉 메인도
+    # 틀의 근무일에 쉴 수 있고, 그 자리를 스페어가 받는다. 그래야 108명이
+    # 고르게 일한다.
+    #
+    # 그래서 조건부로 건다 — "일한다면 자기 차·자기 시프트". 짝꿍·오전/오후
+    # 교대·순번 구조는 그대로 지켜지고, 근무일수만 아래 H5 가 고르게 만든다.
     slot_set = set(slots)
     pinned_drivers: set[str] = set()
+    #: (기사, 날짜) -> 그 사람이 그날 앉아야 할 틀 자리. works 가 만들어진 뒤 건다.
+    frame_cell: dict[tuple[str, dt.date], cp_model.IntVar] = {}
     for (d, v, s), k in problem.fixed_cells.items():
         if (d, v, s) not in slot_set:
             continue  # 그날 감차된 차 — 틀에는 근무지만 나갈 차가 없다
         key = (k, d, v, s)
         if key not in x:
             continue  # 승인 휴무·후보 제한과 겹침 — 스페어가 메운다
-        m.Add(x[key] == 1)
+        frame_cell[(k, d)] = x[key]
         pinned_drivers.add(k)
 
     # H1: 운행 슬롯마다 정확히 1명 (allow_unfilled면 미충원 슬랙 + 큰 페널티)
@@ -205,6 +217,14 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
             else:
                 m.Add(pv == 0)
             shift_pm[(k, d)] = pv
+
+    # H0 적용: 틀에 자리가 있는 날 그 사람이 일한다면 반드시 그 자리다.
+    # 일하지 않는 것(= 스페어가 대신 맡는 것)은 허용한다.
+    for (k, d), var in frame_cell.items():
+        if (k, d) in works:
+            m.Add(var == 1).OnlyEnforceIf(works[(k, d)])
+        else:
+            m.Add(var == 1)
 
     # 백테스트 모드: 근무일 강제
     if problem.forced_work_days is not None:
