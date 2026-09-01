@@ -136,7 +136,7 @@ function totalKnownNames(
   return n;
 }
 
-function isDriverName(v: string | null | undefined): v is string {
+export function isDriverName(v: string | null | undefined): v is string {
   if (!v) return false;
   const s = v.trim();
   return s.length > 0 && !NON_DRIVER_TOKENS.has(s);

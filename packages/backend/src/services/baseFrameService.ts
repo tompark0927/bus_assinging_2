@@ -51,6 +51,63 @@ function prevMonth(year: number, month: number): [number, number] {
 }
 
 /**
+ * 엔진에 그 달을 만들어 달라고 요청해 **셀만** 받아 온다 — 저장은 하지 않는다.
+ *
+ * 기본 틀 생성(`ensureBaseFrameSchedule`)과 스페어 채우기(`fillSpareSlots`)가
+ * 똑같은 입력(전월 이력·정책·승인 휴무·운행 대수)을 써야 해서 한 곳에 모았다.
+ * 둘이 어긋나면 "틀을 깔 때와 스페어를 채울 때 규칙이 다른" 사고가 난다.
+ */
+export async function requestEngineCells(
+  companyId: number,
+  year: number,
+  month: number,
+  serviceType: ServiceType | null,
+  mainsOnly: boolean,
+): Promise<{ cells: unknown } | { error: string }> {
+  const engineUrl = process.env.ENGINE_URL;
+  if (!engineUrl) return { error: 'ENGINE_URL 미설정' };
+
+  const [py, pm] = prevMonth(year, month);
+  const prev = await monthScheduleAsCells(companyId, py, pm, serviceType);
+  if (!prev || prev.dateCount === 0) {
+    return { error: `${py}년 ${pm}월 배차표가 없어 순번을 이어받을 수 없음` };
+  }
+
+  const [enginePolicy, companyPolicy, leaves, operatingCounts] = await Promise.all([
+    loadEnginePolicy(companyId),
+    loadCompanyPolicy(companyId),
+    approvedLeavesByName(companyId, year, month),
+    routeOperatingCounts(companyId, serviceType),
+  ]);
+
+  const upstream = await fetch(`${engineUrl}/generate-from-cells`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-company-id': String(companyId) },
+    body: JSON.stringify({
+      year,
+      month,
+      history: [{ year: prev.year, month: prev.month, cells: prev.cells, groups: prev.groups }],
+      policy: mergeEnginePolicy(enginePolicy, companyPolicy),
+      leaves,
+      operating_counts: operatingCounts,
+      mains_only: mainsOnly,
+    }),
+  });
+  if (!upstream.ok) {
+    const text = await upstream.text();
+    let detail = text;
+    try {
+      detail = JSON.parse(text).detail ?? text;
+    } catch {
+      /* 원문 사용 */
+    }
+    return { error: String(detail).slice(0, 300) };
+  }
+  const data = (await upstream.json()) as { cells?: unknown };
+  return { cells: data.cells };
+}
+
+/**
  * 이 달을 건너뛰어야 하는가 — 건너뛸 이유가 있으면 그 이유를 돌려준다.
  */
 async function skipReason(
@@ -110,57 +167,15 @@ export async function ensureBaseFrameSchedule(
   force = false,
 ): Promise<EnsureResult> {
   const base: Pick<EnsureResult, 'year' | 'month' | 'serviceType'> = { year, month, serviceType };
-  const engineUrl = process.env.ENGINE_URL;
-  if (!engineUrl) {
-    return { ...base, status: 'failed', reason: 'ENGINE_URL 미설정' };
-  }
 
   if (!force) {
     const skip = await skipReason(companyId, year, month, serviceType);
     if (skip) return { ...base, status: 'skipped', reason: skip };
   }
 
-  const [py, pm] = prevMonth(year, month);
-  const prev = await monthScheduleAsCells(companyId, py, pm, serviceType);
-  if (!prev || prev.dateCount === 0) {
-    return {
-      ...base,
-      status: 'failed',
-      reason: `${py}년 ${pm}월 배차표가 없어 순번을 이어받을 수 없음`,
-    };
-  }
-
-  const [enginePolicy, companyPolicy, leaves, operatingCounts] = await Promise.all([
-    loadEnginePolicy(companyId),
-    loadCompanyPolicy(companyId),
-    approvedLeavesByName(companyId, year, month),
-    routeOperatingCounts(companyId, serviceType),
-  ]);
-
-  const upstream = await fetch(`${engineUrl}/generate-from-cells`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-company-id': String(companyId) },
-    body: JSON.stringify({
-      year,
-      month,
-      history: [{ year: prev.year, month: prev.month, cells: prev.cells, groups: prev.groups }],
-      policy: mergeEnginePolicy(enginePolicy, companyPolicy),
-      leaves,
-      operating_counts: operatingCounts,
-      mains_only: mainsOnly,
-    }),
-  });
-  if (!upstream.ok) {
-    const text = await upstream.text();
-    let detail = text;
-    try {
-      detail = JSON.parse(text).detail ?? text;
-    } catch {
-      /* 원문 사용 */
-    }
-    return { ...base, status: 'failed', reason: String(detail).slice(0, 300) };
-  }
-  const data = (await upstream.json()) as { cells?: unknown };
+  const engine = await requestEngineCells(companyId, year, month, serviceType, mainsOnly);
+  if ('error' in engine) return { ...base, status: 'failed', reason: engine.error };
+  const data = { cells: engine.cells };
 
   const saved = await saveEngineDraft(companyId, createdBy, {
     year,

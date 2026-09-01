@@ -880,7 +880,9 @@ export default function SchedulePage() {
       const msg = (res.data as { message?: string }).message;
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
-      toast.success(msg ?? '스페어를 채웠습니다.');
+      // 메시지가 길다 — 몇 칸을 채웠고 무엇을 왜 건너뛰었는지 한 줄로 온다.
+      // 기본 3초로는 다 못 읽는다.
+      toast.success(msg ?? '스페어를 채웠습니다.', { duration: 8000 });
     },
     onError: (e: unknown) => {
       const msg =
@@ -2044,7 +2046,8 @@ export default function SchedulePage() {
             메인(정·부)은 다 깔려 있고, 스페어 자리 {vacancy.vacant}칸이 비어 있습니다
           </p>
           <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
-            빈 칸을 눌러 직접 채우시거나, 아래 버튼으로 맡기시면 됩니다. 맡겨도 이중 배정·연속근무·휴식 규칙은 지킵니다.
+            빈 칸을 눌러 직접 채우시거나, 아래 버튼으로 맡기시면 됩니다. 자동 채우기는 <strong>빈 칸에만</strong> 넣습니다 —
+            이미 채워진 칸과 직접 고치신 칸은 그대로 둡니다. 이중 배정·연속근무·휴식 규칙도 지킵니다.
           </p>
           {/* 기본 틀만 깔린 달에는 스페어가 한 칸도 안 잡혀 있다. 기본 화면인 게시
               양식은 행이 **차량**이라 배정 없는 사람은 아예 안 나온다 — 그래서

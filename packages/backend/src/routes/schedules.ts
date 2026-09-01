@@ -39,6 +39,7 @@ import { mergeEnginePolicy } from '../services/enginePolicyMapper';
 import { loadCompanyPolicy } from '../services/solverDispatchService';
 import { approvedLeavesByName } from './engine';
 import { ensureBaseFrameSchedule, fillBaseFrameWindow } from '../services/baseFrameService';
+import { fillSpareSlots } from '../services/fillSpareSlotsService';
 
 const router = Router();
 
@@ -411,6 +412,11 @@ router.post('/base-frame', requireRole('DISPATCH'), async (req: AuthRequest, res
  * (예전에는 '기본 틀' 이라는 이름의 초안만 대상이라, 담당자가 만든 초안에서
  *  버튼을 눌러도 엉뚱한 초안이 바뀌었다)
  *
+ * **빈 칸에만 넣는다.** 예전에는 초안을 통째로 지우고 다시 만들었는데, 그때
+ * 담당자가 직접 고친 칸과 수동 감차 표기가 같이 사라졌다. 지금은 삭제가 없다 —
+ * 이미 채워진 칸, 감차로 세워 둔 차, 그날 이미 다른 자리에 있는 기사는 전부
+ * 건너뛰고 몇 칸을 왜 건너뛰었는지 메시지로 돌려준다.
+ *
  * 채울 때 안전 규칙은 그대로 지킨다 — 이중 배정·연속근무 상한·오후 다음날
  * 오전 금지. 규칙을 어겨야만 채울 수 있는 칸은 비워둔 채 보고한다.
  */
@@ -435,21 +441,29 @@ router.post('/by-id/:id/fill-spares', requireRole('DISPATCH'), async (req: AuthR
       });
     }
 
-    // 빈 칸만 그리디로 메우면 메인 20일 / 스페어 16일로 다시 벌어진다.
-    // 엔진을 태워야 2,058칸을 108명에게 고르게 나눈다 — 기본 틀(누가 어느 차의
-    // 오전/오후를 타는지)은 그대로 유지되고 근무일수만 균등해진다.
-    const r = await ensureBaseFrameSchedule(
-      companyId, req.user!.id, target.year, target.month, target.serviceType,
-      /* mainsOnly */ false, target.name, /* force */ true,
-    );
-    if (r.status !== 'created') {
-      return res.status(422).json({ success: false, message: `스페어를 채우지 못했습니다: ${r.reason}` });
+    // **빈 칸에만** 넣는다. 초안을 다시 만들지 않는다 — 예전에는 통째로
+    // 지우고 새로 만들어서 담당자가 직접 고친 칸과 수동 감차 표기가 함께
+    // 사라졌다. 엔진이 만든 배차표는 답안지로만 쓴다.
+    const r = await fillSpareSlots(companyId, scheduleId);
+
+    const bits = [`빈 칸 ${r.filled}개를 채웠습니다`];
+    if (r.keptOccupied > 0) bits.push(`이미 배정된 ${r.keptOccupied}칸은 그대로 두었습니다`);
+    if (r.skippedDoubleBooked > 0) {
+      bits.push(`그날 이미 다른 자리에 있는 기사 ${r.skippedDoubleBooked}칸은 건너뛰었습니다`);
     }
-    return res.json({
-      success: true,
-      data: r,
-      message: `스페어까지 배치했습니다 (${r.slotCount ?? 0}칸).`,
-    });
+    if (r.skippedVehicleOff > 0) {
+      bits.push(`감차로 세워 두신 차 ${r.skippedVehicleOff}칸은 넣지 않았습니다`);
+    }
+    if (r.unregisteredNames.length > 0) {
+      const names = r.unregisteredNames.slice(0, 3).join(', ');
+      bits.push(
+        `기초 데이터에서 못 찾은 이름 ${r.unregisteredNames.length}명(${names}` +
+          `${r.unregisteredNames.length > 3 ? ' 외' : ''})은 넣지 못했습니다`,
+      );
+    }
+    if (r.remainingEmpty > 0) bits.push(`아직 빈 칸이 ${r.remainingEmpty}개 남았습니다`);
+
+    return res.json({ success: true, data: r, message: `${bits.join('. ')}.` });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.error(`[schedules/fill-spares] ${msg}`);
