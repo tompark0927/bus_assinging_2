@@ -104,6 +104,10 @@ export async function ensureBaseFrameSchedule(
   serviceType: ServiceType | null,
   /** true = 메인만 깔고 스페어 자리는 비워 둔다 (기본). false = 엔진이 스페어까지 채운다. */
   mainsOnly = true,
+  /** 저장할 초안 이름. 기본은 '기본 틀'. 담당자 초안을 채울 땐 그 이름을 준다. */
+  name: string = BASE_FRAME_NAME,
+  /** 건너뛰기 검사를 생략한다 — 담당자가 버튼을 직접 눌렀을 때. */
+  force = false,
 ): Promise<EnsureResult> {
   const base: Pick<EnsureResult, 'year' | 'month' | 'serviceType'> = { year, month, serviceType };
   const engineUrl = process.env.ENGINE_URL;
@@ -111,8 +115,10 @@ export async function ensureBaseFrameSchedule(
     return { ...base, status: 'failed', reason: 'ENGINE_URL 미설정' };
   }
 
-  const skip = await skipReason(companyId, year, month, serviceType);
-  if (skip) return { ...base, status: 'skipped', reason: skip };
+  if (!force) {
+    const skip = await skipReason(companyId, year, month, serviceType);
+    if (skip) return { ...base, status: 'skipped', reason: skip };
+  }
 
   const [py, pm] = prevMonth(year, month);
   const prev = await monthScheduleAsCells(companyId, py, pm, serviceType);
@@ -159,7 +165,7 @@ export async function ensureBaseFrameSchedule(
   const saved = await saveEngineDraft(companyId, createdBy, {
     year,
     month,
-    name: BASE_FRAME_NAME,
+    name,
     serviceType,
     cells: data.cells as never,
     // 같은 이름 초안 교체는 의도된 동작이다. 손댄 초안은 위 skipReason 이

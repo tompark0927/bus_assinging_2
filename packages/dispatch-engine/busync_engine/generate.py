@@ -398,46 +398,51 @@ def generate_month(
             fixed_cells[(d, v, sh.value)] = driver
     fixed_off = {k: set(v) for k, v in mframe.rest.items() if k in home_vehicle}
 
+    # 스페어도 같은 계단에 올린다.
+    #
+    # 예전에는 스페어에게 리듬이 없어서 "메인이 쓰고 남은 자리"만 받았다.
+    # 성민에서 메인 21일 / 스페어 11일로 갈렸다 — 같은 회사 기사인데 근무일수가
+    # 두 배 차이 났다. 2020년 수기 배차표는 107명 전원이 19~21일로 고르다.
+    #
+    # 스페어는 고정 차량이 없으니 '어느 칸'은 정할 수 없다. 대신 **쉬는 날**을
+    # 같은 주기로 깔아 준다. 그러면 그날 나올 수 있는 사람이 정해지고, 아래
+    # 근무일수 밴드가 2,058칸을 108명에게 고르게 나눈다.
+    spares = [k for k in drivers if k not in home_vehicle]
+    for i, k in enumerate(spares):
+        ph = cycle.staircase_phase(0, i)
+        off = {
+            d for d in dates
+            if not cycle.state(ph + (d - dates[0]).days)[0]
+        }
+        fixed_off[k] = off | set(leaves.get(k, ()))
+
     # 스페어 근무일수 하한은 **남은 슬롯**으로 다시 잰다. 메인이 틀대로 자리를
     # 차지하고 나면 스페어가 앉을 칸은 얼마 안 남는데, 원래 밴드(20~23일)를
     # 그대로 걸면 "이만큼은 일해야 한다"와 "앉을 자리가 없다"가 부딪혀 모델이
     # 통째로 INFEASIBLE 이 된다.
-    pinned_names = set(fixed_cells.values())
-    free_slots = len(operating) - sum(1 for c in fixed_cells if c in operating)
-    free_drivers = [k for k in drivers if k not in pinned_names]
-    if free_drivers:
-        cap = free_slots // len(free_drivers)
-        if lo > cap:
-            warnings.append(
-                f"스페어 {len(free_drivers)}명이 앉을 자리가 {free_slots}칸뿐이라 "
-                f"근무일수 하한을 {lo}일 → {cap}일로 낮췄습니다."
-            )
-            lo = cap
+    # 근무일수 밴드 = **공평한 몫**. 총 슬롯을 전원으로 나눈 값 언저리로 묶는다.
+    # 이게 메인과 스페어의 근무일수를 붙여 놓는 유일한 장치다 — 밴드가 없으면
+    # 솔버는 메인을 틀대로 꽉 채우고 스페어를 놀린다(둘 다 제약 위반이 아니다).
+    fair = len(operating) / max(len(drivers), 1)
+    lo, hi = max(0, int(fair) - 1), int(fair) + 2
+    warnings.append(
+        f"운행 {len(operating)}칸을 기사 {len(drivers)}명이 나눠 "
+        f"1인당 {fair:.1f}일이 공평한 몫입니다 — 근무일수를 {lo}~{hi}일로 맞춥니다."
+    )
 
-    # ── 주기가 인력과 맞는지 검산 ──
-    # 한 달 총 슬롯과 인원은 주기와 무관한 고정값이라, 주기가 정하는 것은 그
-    # 일을 메인과 스페어가 어떻게 나눠 갖느냐뿐이다. 메인 쪽으로 너무 몰면
-    # 스페어가 논다 — 성민에서 5근1휴+5근2휴(13일)로 짰다가 스페어가 월 7일
-    # 까지 떨어졌고, 담당자가 배차표를 보고서야 알았다. 생성할 때 알려준다.
-    n_days = len(dates)
-    if free_drivers and n_days:
-        spare_days = free_slots / len(free_drivers)
-        main_days = (
-            sum(len(v) for v in mframe.work.values()) / max(len(mframe.work), 1)
+    # 주기가 일감을 감당하는가. 4근2휴면 한 사람이 한 달에 나올 수 있는 날이
+    # 정해진다(30일 중 20일). 공평한 몫이 그보다 크면 아무리 잘 짜도 칸이 빈다 —
+    # 인력이 모자란 게 아니라 **주기가 헐거운** 것이다. 담당자가 배차표의 빈 칸을
+    # 보고 "사람이 없다"고 오해하지 않도록 먼저 알려준다.
+    can_work = len(dates) * (2 * cycle.work_days) / cycle.length
+    if fair > can_work + 0.5:
+        short = int((fair - can_work) * len(drivers))
+        warnings.append(
+            f"근무 주기({cycle.work_days}근 {cycle.rest_days}휴)로는 한 사람이 한 달에 "
+            f"최대 {can_work:.0f}일까지만 나올 수 있는데, 공평한 몫은 {fair:.1f}일입니다 — "
+            f"약 {short}칸이 빌 수밖에 없습니다. [배차 설정 → 운영 정책]에서 연속 "
+            f"근무일을 늘리거나 기사를 더 등록해 주세요."
         )
-        if spare_days < main_days * 0.6:
-            warnings.append(
-                f"근무 주기({cycle.work_days}근 {cycle.rest_days}휴)가 메인 쪽으로 치우쳐 "
-                f"있습니다 — 메인 월 {main_days:.0f}일 / 스페어 월 {spare_days:.0f}일. "
-                f"스페어를 더 쓰시려면 [배차 설정 → 운영 정책]에서 연속 근무일을 "
-                f"줄이세요(근무일을 1일 줄이면 스페어 몫이 크게 늘어납니다)."
-            )
-        elif spare_days > main_days * 1.4:
-            warnings.append(
-                f"근무 주기({cycle.work_days}근 {cycle.rest_days}휴)가 스페어 쪽으로 치우쳐 "
-                f"있습니다 — 메인 월 {main_days:.0f}일 / 스페어 월 {spare_days:.0f}일. "
-                f"메인이 놀고 있다면 [배차 설정 → 운영 정책]에서 연속 근무일을 늘리세요."
-            )
 
     stranded = sum(
         1 for (d, v, s) in fixed_cells if (d, v, s) not in operating

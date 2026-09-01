@@ -39,7 +39,6 @@ import { mergeEnginePolicy } from '../services/enginePolicyMapper';
 import { loadCompanyPolicy } from '../services/solverDispatchService';
 import { approvedLeavesByName } from './engine';
 import { ensureBaseFrameSchedule, fillBaseFrameWindow } from '../services/baseFrameService';
-import { fillVacancies } from '../services/vacancyFillService';
 
 const router = Router();
 
@@ -422,21 +421,34 @@ router.post('/by-id/:id/fill-spares', requireRole('DISPATCH'), async (req: AuthR
     return res.status(400).json({ success: false, message: '배차표 id 가 올바르지 않습니다.' });
   }
   try {
-    const r = await fillVacancies(companyId, scheduleId);
+    const target = await prisma.schedule.findFirst({
+      where: { id: scheduleId, companyId },
+      select: { year: true, month: true, name: true, serviceType: true, status: true },
+    });
+    if (!target) {
+      return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
+    }
+    if (target.status !== 'DRAFT') {
+      return res.status(422).json({
+        success: false,
+        message: '초안에서만 스페어를 채울 수 있습니다. 발행본은 수정하지 않습니다.',
+      });
+    }
+
+    // 빈 칸만 그리디로 메우면 메인 20일 / 스페어 16일로 다시 벌어진다.
+    // 엔진을 태워야 2,058칸을 108명에게 고르게 나눈다 — 기본 틀(누가 어느 차의
+    // 오전/오후를 타는지)은 그대로 유지되고 근무일수만 균등해진다.
+    const r = await ensureBaseFrameSchedule(
+      companyId, req.user!.id, target.year, target.month, target.serviceType,
+      /* mainsOnly */ false, target.name, /* force */ true,
+    );
+    if (r.status !== 'created') {
+      return res.status(422).json({ success: false, message: `스페어를 채우지 못했습니다: ${r.reason}` });
+    }
     return res.json({
       success: true,
-      data: {
-        filled: r.filled,
-        stillVacant: r.stillVacant.length,
-        usedDrivers: r.usedDrivers.length,
-      },
-      message:
-        r.filled === 0 && r.stillVacant.length === 0
-          ? '채울 빈 자리가 없습니다.'
-          : `${r.filled}칸을 채웠습니다.` +
-            (r.stillVacant.length
-              ? ` ${r.stillVacant.length}칸은 안전 규칙(이중 배정·연속근무·휴식)을 어겨야만 채울 수 있어 비워 뒀습니다.`
-              : ''),
+      data: r,
+      message: `스페어까지 배치했습니다 (${r.slotCount ?? 0}칸).`,
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
