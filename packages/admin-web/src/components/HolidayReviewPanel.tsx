@@ -272,7 +272,7 @@ export default function HolidayReviewPanel() {
 
           {/* 목록 — 월별 가로 배치. 세로로 20줄을 쌓으면 화면을 다 먹고,
               연휴가 며칠짜리인지도 눈에 안 들어온다. */}
-          <div className="mt-3 flex flex-col gap-3">
+          <div className="mt-3 max-h-[60vh] overflow-y-auto flex flex-col gap-3">
             {byMonth.map(([month, monthItems]) => (
               <div key={month} className="flex gap-3">
                 <div className="w-9 shrink-0 pt-2.5 text-xs font-semibold tabular-nums text-gray-400">

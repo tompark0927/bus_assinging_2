@@ -3075,12 +3075,10 @@ export default function SchedulePage() {
                     </div>
                   </dl>
                   <p className="mt-3 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                    순번 로테이션·감차·짝궁 교대·공정성은 [배차 설정 → 엔진 튜닝]을 따릅니다.
+                    배차 설정의 값을 따릅니다.
                     <br />
                     승인된 휴무는 생성 단계에서 자동으로 비워 둡니다. 면허·자격 만료와 주말휴무 부족은
                     발행 전 안전 검산에서 걸러집니다.
-                    <br />
-                    신규기사 단독 배정·사고 노선 제한은 아직 자동 반영되지 않습니다 — 생성 후 확인해 주세요.
                   </p>
                 </div>
 

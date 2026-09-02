@@ -4,6 +4,7 @@ import { ClipboardList, Plus, Trash2, Loader2, Search, ChevronLeft, ChevronRight
 import toast from 'react-hot-toast';
 import { safetyApi, usersApi } from '../services/api';
 import PageHeader from '../components/PageHeader';
+import { laborHelp } from '../help/helpContent';
 
 /**
  * 노무 관리 — 회사가 쓰던 장부를 그대로 옮긴 표.
@@ -171,6 +172,7 @@ export default function LaborPage() {
       <PageHeader
         icon={ClipboardList}
         title="노무 관리"
+        help={laborHelp}
         description="사고·지적사항 장부. 칸에 바로 입력하면 저장됩니다."
         actions={
           <div className="flex items-center bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm">
