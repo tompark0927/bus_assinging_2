@@ -173,7 +173,7 @@ export default function HolidayReviewPanel() {
   };
 
   return (
-    <section className="flex h-full min-h-0 flex-col rounded-xl border border-gray-200 bg-white p-5"> 
+    <section className="rounded-xl border border-gray-200 bg-white p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-gray-900">공휴일 (감차 적용일)</h3>
@@ -272,7 +272,7 @@ export default function HolidayReviewPanel() {
 
           {/* 목록 — 월별 가로 배치. 세로로 20줄을 쌓으면 화면을 다 먹고,
               연휴가 며칠짜리인지도 눈에 안 들어온다. */}
-          <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+          <div className="mt-3 flex flex-col gap-3">
             {byMonth.map(([month, monthItems]) => (
               <div key={month} className="flex gap-3">
                 <div className="w-9 shrink-0 pt-2.5 text-xs font-semibold tabular-nums text-gray-400">
