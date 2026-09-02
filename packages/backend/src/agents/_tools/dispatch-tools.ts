@@ -17,6 +17,7 @@
 
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../utils/prisma';
+import { resolveMonthScheduleIdsAllTypes } from '../../services/scheduleService';
 import { generateMonthlySchedule } from '../../services/scheduleService';
 import { generateMonthlyScheduleV2 } from '../../services/solverDispatchService';
 import { checkConstitutional } from '../_core/constitutional';
@@ -365,32 +366,40 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
     const mode = input.mode ?? 'summary';
 
     // 1. 배차표 헤더 조회 (slots 미포함 — 항상 가벼움)
-    // 멀티 초안: 발행본 우선, 없으면 가장 최근 초안
-    const scheduleSelect = { id: true, year: true, month: true, status: true, notes: true } as const;
-    const schedule =
-      (await prisma.schedule.findFirst({
-        where: { companyId: ctx.companyId, year: input.year, month: input.month, status: 'PUBLISHED' },
-        select: scheduleSelect,
-      })) ??
-      (await prisma.schedule.findFirst({
-        where: { companyId: ctx.companyId, year: input.year, month: input.month },
-        orderBy: { updatedAt: 'desc' },
-        select: scheduleSelect,
-      }));
-
-    if (!schedule) {
+    // 간선·지선·광역이 따로 발행되므로 그 달 배차표는 최대 4개다. 하나만 집으면
+    // 관리자가 챗으로 물어본 통계(슬롯 수·기사 수·결원)가 조용히 1/4 로 축소된다.
+    // 종류별 대표(발행본 우선 → 최근 초안)를 모두 대상으로 삼는다.
+    const scheduleIds = await resolveMonthScheduleIdsAllTypes(
+      ctx.companyId, input.year, input.month,
+    );
+    if (scheduleIds.length === 0) {
       return { exists: false, year: input.year, month: input.month, mode };
     }
+    const parts = await prisma.schedule.findMany({
+      where: { id: { in: scheduleIds }, companyId: ctx.companyId },
+      select: { id: true, year: true, month: true, status: true, notes: true, serviceType: true },
+      orderBy: { serviceType: 'asc' },
+    });
+    // 종류마다 상태가 다를 수 있다(간선 발행 + 지선 초안) → 'PARTIAL'
+    const statusSet = new Set(parts.map((p) => p.status));
+    const schedule = {
+      ids: scheduleIds,
+      year: parts[0].year,
+      month: parts[0].month,
+      status: statusSet.size === 1 ? [...statusSet][0] : 'PARTIAL',
+      notes: parts[0].notes,
+      serviceTypes: parts.map((p) => p.serviceType ?? 'ALL'),
+    };
 
     // 공통 통계 — 집계 쿼리로 슬롯 자체를 가져오지 않음
     const [totalSlots, workSlots, restSlots, droppedSlots, manualOverrides, distinctDrivers] = await Promise.all([
-      prisma.scheduleSlot.count({ where: { scheduleId: schedule.id } }),
-      prisma.scheduleSlot.count({ where: { scheduleId: schedule.id, isRestDay: false } }),
-      prisma.scheduleSlot.count({ where: { scheduleId: schedule.id, isRestDay: true } }),
-      prisma.scheduleSlot.count({ where: { scheduleId: schedule.id, status: 'DROPPED' } }),
-      prisma.scheduleSlot.count({ where: { scheduleId: schedule.id, isManualOverride: true } }),
+      prisma.scheduleSlot.count({ where: { scheduleId: { in: schedule.ids } } }),
+      prisma.scheduleSlot.count({ where: { scheduleId: { in: schedule.ids }, isRestDay: false } }),
+      prisma.scheduleSlot.count({ where: { scheduleId: { in: schedule.ids }, isRestDay: true } }),
+      prisma.scheduleSlot.count({ where: { scheduleId: { in: schedule.ids }, status: 'DROPPED' } }),
+      prisma.scheduleSlot.count({ where: { scheduleId: { in: schedule.ids }, isManualOverride: true } }),
       prisma.scheduleSlot.findMany({
-        where: { scheduleId: schedule.id },
+        where: { scheduleId: { in: schedule.ids } },
         select: { driverId: true },
         distinct: ['driverId'],
       }),
@@ -409,7 +418,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
     if (mode === 'summary') {
       // outliers 미리 계산해서 모델에게 다음 호출 힌트 제공 (사이즈 무관)
       const slots = await prisma.scheduleSlot.findMany({
-        where: { scheduleId: schedule.id },
+        where: { scheduleId: { in: schedule.ids } },
         select: {
           driverId: true,
           shift: true,
@@ -432,7 +441,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
       return {
         exists: true,
         mode: 'summary',
-        scheduleId: schedule.id,
+        scheduleIds: schedule.ids,
         year: schedule.year,
         month: schedule.month,
         status: schedule.status,
@@ -461,7 +470,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
       }
       const date = parseYmd(input.date);
       const slots = await prisma.scheduleSlot.findMany({
-        where: { scheduleId: schedule.id, date },
+        where: { scheduleId: { in: schedule.ids }, date },
         select: {
           id: true,
           driverId: true,
@@ -477,7 +486,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
       return {
         exists: true,
         mode: 'for_date',
-        scheduleId: schedule.id,
+        scheduleIds: schedule.ids,
         year: schedule.year,
         month: schedule.month,
         status: schedule.status,
@@ -511,7 +520,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
       }
 
       const slots = await prisma.scheduleSlot.findMany({
-        where: { scheduleId: schedule.id, driverId: input.driverId },
+        where: { scheduleId: { in: schedule.ids }, driverId: input.driverId },
         select: {
           id: true,
           routeId: true,
@@ -531,7 +540,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
       return {
         exists: true,
         mode: 'for_driver',
-        scheduleId: schedule.id,
+        scheduleIds: schedule.ids,
         driver,
         summary: baseSummary,
         driverStats: {
@@ -557,7 +566,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
       const threshold = input.outlierThreshold ?? 1.5;
       // 전체 슬롯 → calculateFairness → outlier driverId 만 추출
       const allSlots = await prisma.scheduleSlot.findMany({
-        where: { scheduleId: schedule.id },
+        where: { scheduleId: { in: schedule.ids } },
         select: {
           driverId: true,
           routeId: true,
@@ -585,7 +594,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
         return {
           exists: true,
           mode: 'for_outliers',
-          scheduleId: schedule.id,
+          scheduleIds: schedule.ids,
           summary: baseSummary,
           fairness: {
             score: fairness.fairnessScore,
@@ -612,7 +621,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
       // 슬롯 id 가 select 에 없어서 다시 조회 (outlier 만)
       const outlierSlots = await prisma.scheduleSlot.findMany({
         where: {
-          scheduleId: schedule.id,
+          scheduleId: { in: schedule.ids },
           driverId: { in: outlierIds },
         },
         select: {
@@ -640,7 +649,7 @@ const getActiveSchedule: AgentTool<GetActiveScheduleInput, unknown> = {
       return {
         exists: true,
         mode: 'for_outliers',
-        scheduleId: schedule.id,
+        scheduleIds: schedule.ids,
         summary: baseSummary,
         fairness: {
           score: fairness.fairnessScore,

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional, Sequence
 
 from .config import (
     DayClass,
@@ -63,8 +63,16 @@ def expand_pattern(
     calendar: ReductionCalendar,
     reduction: GroupReductionConfig | None = None,
     display: DisplayMode = DisplayMode.KEEP,
+    rest_preference: Callable[[dt.date], Sequence[str]] | None = None,
 ) -> PatternMatrix:
-    """전월 말일 슬롯 상태(start 전날)에서 [start, end] 패턴 전개."""
+    """전월 말일 슬롯 상태(start 전날)에서 [start, end] 패턴 전개.
+
+    rest_preference(d) 는 그날 **먼저 세우고 싶은 차량** 목록이다. 기본 틀에서
+    짝꿍이 통째로 쉬는 차량을 넘긴다 — 감차 대수는 그대로 두고 어느 차를
+    세울지만 바꾼다. 이걸 안 맞추면 근무하기로 된 정·부가 자기 차가 안 나가
+    앉을 자리를 잃고(고정기사 본인차량 원칙), 동시에 다른 차에는 스페어를
+    두 명씩 넣어야 한다.
+    """
     if set(last_slot_map.values()) != set(rule.perm.keys()):
         missing = set(rule.perm.keys()) - set(last_slot_map.values())
         raise ValueError(
@@ -79,16 +87,30 @@ def expand_pattern(
         cur = {v: rule.perm[s] for v, s in cur.items()}
         cls = calendar.day_class(d)
         resting: set[str] = set()
-        if cls != DayClass.WEEKDAY:
-            if reduction.mode == ReductionMode.FIXED_SLOTS:
-                slots = reduction.rest_slots.get(cls, frozenset())
-                resting = {v for v, s in cur.items() if s in slots}
-            else:
-                k = reduction.rest_counts.get(cls, 0)
-                order = reduction.pointer_order
-                if order and k:
-                    resting = {order[(ptr + j) % len(order)] for j in range(k)}
-                    ptr = (ptr + k) % len(order)
+        # 평일을 건너뛰지 않는다. 예전에는 `cls != WEEKDAY` 조건이 있어 "감차는
+        # 주말·공휴일에만" 이라고 전제했는데, 평일에도 상시 감차하는 회사가 있다
+        # (성민: 노선당 등록 14대, 평일 12·토 11·일공휴일 10). 그 회사는 평일
+        # 감차가 통째로 무시돼 다음 달이 '전 차량 매일 운행'으로 짜였다.
+        # WEEKDAY 키가 없으면 아래에서 자연히 감차 0 이므로, 주말만 감차하는
+        # 회사의 동작은 그대로다.
+        if reduction.mode == ReductionMode.FIXED_SLOTS:
+            slots = reduction.rest_slots.get(cls, frozenset())
+            resting = {v for v, s in cur.items() if s in slots}
+        else:
+            k = reduction.rest_counts.get(cls, 0)
+            order = reduction.pointer_order
+            if order and k:
+                # 기본 틀에서 짝꿍이 쉬는 차를 먼저 세우고, 모자라면 포인터로 채운다.
+                if rest_preference is not None:
+                    in_group = [v for v in rest_preference(d) if v in cur]
+                    resting = set(in_group[:k])
+                for j in range(len(order)):
+                    if len(resting) >= k:
+                        break
+                    resting.add(order[(ptr + j) % len(order)])
+                # 포인터는 선호와 무관하게 그대로 돈다 — 선호가 없는 날에도
+                # 기존 회사의 휴차 순환이 달라지지 않게.
+                ptr = (ptr + k) % len(order)
         running_sorted = sorted(
             (v for v in cur if v not in resting), key=lambda v: cur[v]
         )

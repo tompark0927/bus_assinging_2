@@ -23,6 +23,14 @@ enum DriverType {
   SPARE
 }
 
+/// 노선 종류 — 한 회사가 간선·지선·광역을 동시에 운영하는 경우가 있다.
+/// 배차표도 종류별로 따로 짜고 따로 발행하므로 노선·기사·배차표 모두 이 값을 갖는다.
+enum ServiceType {
+  TRUNK // 간선
+  BRANCH // 지선
+  WIDE_AREA // 광역
+}
+
 enum ShiftType {
   MORNING
   AFTERNOON
@@ -85,6 +93,12 @@ enum IncidentType {
   OTHER
 }
 
+/// 사고 과실 구분 — 회사가 쓰는 '가해현황/피해현황' 두 장부를 그대로 옮긴 것
+enum FaultType {
+  AT_FAULT // 가해
+  VICTIM // 피해
+}
+
 enum InspectionStatus {
   PASSED
   FAILED
@@ -92,20 +106,20 @@ enum InspectionStatus {
 }
 
 model Company {
-  id           Int      @id @default(autoincrement())
-  name         String
-  code         String   @unique // 회사별 고유 코드 (영문/숫자 2~10자, 로그인 시 사용)
-  isActive     Boolean  @default(true)
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String   @unique // 회사별 고유 코드 (영문/숫자 2~10자, 로그인 시 사용)
+  isActive  Boolean  @default(true)
   /// 회사 배차 정책 (CompanyPolicy JSON: workdayBands / restCycle / shiftSystem / crewModel / constitutional)
   /// null 이면 DEFAULT_POLICY (CITY_2SHIFT) 사용. solverDispatchService.loadCompanyPolicy 가 읽음.
-  policy       Json?
-  /// AI 배차 엔진 튜닝 정책 ({ values, holidays, special_reductions }).
-  /// 순번 로테이션·감차·짝궁 교대·예비·공정성 등 엔진 고유 설정의 단일 소스.
-  /// 예전엔 엔진 컨테이너 파일에 있었고(볼륨 없으면 재배포 시 유실), 지금은 여기가 주인이다.
-  /// enginePolicyStore.loadEnginePolicy / saveEnginePolicy 가 읽고 쓴다.
-  enginePolicy Json?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  /// AI 배차 엔진 튜닝 정책은 이 JSON 안 `__engineTuning` 키에 함께 둔다.
+  /// (별도 컬럼을 쓰려면 마이그레이션이 필요한데, 이 프로젝트의 마이그레이션
+  ///  이력이 깨져 있어 prisma migrate deploy 가 중간에서 멈춘다. 컬럼을 늘리면
+  ///  스키마와 DB가 어긋나 Company 를 읽는 모든 경로가 500이 된다 — 실제로
+  ///  2026-08-25 로그인 장애를 냈다. enginePolicyStore 가 이 키를 관리한다.)
+  policy    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   users              User[]
   buses              Bus[]
@@ -135,28 +149,30 @@ model Company {
 }
 
 model User {
-  id                     Int         @id @default(autoincrement())
-  companyId              Int         @default(1)
+  id                     Int          @id @default(autoincrement())
+  companyId              Int          @default(1)
   name                   String
-  email                  String?     @unique
+  email                  String?      @unique
   phone                  String?
   password               String?
-  mustChangePassword     Boolean     @default(false) // 최초 로그인 시 비밀번호 강제 변경
-  role                   Role        @default(DRIVER)
+  mustChangePassword     Boolean      @default(false) // 최초 로그인 시 비밀번호 강제 변경
+  role                   Role         @default(DRIVER)
   employeeId             String
   licenseNumber          String?
   licenseExpiresAt       DateTime? // 운전면허 만료일
   qualificationExpiresAt DateTime? // 버스운전자격증 만료일
   driverType             DriverType?
+  serviceType            ServiceType? // 이 기사가 타는 노선 종류 (간선/지선/광역). null = 미지정
+  hireDate               DateTime? // 입사일 (근속·신규 기사 판단 기준)
   shiftGroup             String? // "1조", "2조" (1일 2교대 시스템)
   assignedBusNumber      String? // 담당 차량번호 (엑셀에서 추출)
   hoboong                Int? // 호봉 (급여 등급)
-  vacationDays           Int         @default(15) // 연간 보유 휴가 일수 (관리자 기입/수정, 잔여 = 보유 - 올해 비반려 휴무요청 수)
-  kakaoId                String?     @unique
+  vacationDays           Int          @default(15) // 연간 보유 휴가 일수 (관리자 기입/수정, 잔여 = 보유 - 올해 비반려 휴무요청 수)
+  kakaoId                String?      @unique
   expoPushToken          String?
-  isActive               Boolean     @default(true)
-  createdAt              DateTime    @default(now())
-  updatedAt              DateTime    @updatedAt
+  isActive               Boolean      @default(true)
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
 
   company           Company            @relation(fields: [companyId], references: [id])
   routeAssignments  RouteAssignment[]
@@ -192,6 +208,7 @@ model User {
   @@index([companyId, role])
   @@index([companyId, isActive])
   @@index([driverType])
+  @@index([companyId, serviceType])
   @@index([licenseExpiresAt])
   @@index([qualificationExpiresAt])
 }
@@ -297,25 +314,26 @@ model MaintenanceRecord {
 }
 
 model Route {
-  id            Int      @id @default(autoincrement())
-  companyId     Int      @default(1)
+  id            Int          @id @default(autoincrement())
+  companyId     Int          @default(1)
   routeNumber   String // 회사별로 유일 (전역 X) — 다른 회사도 같은 노선번호를 가질 수 있음
   name          String
   description   String?
   startPoint    String?
   endPoint      String?
   shiftOffset   Int? // 순환 조율 기준 오프셋 (차량 순번 순환용)
+  serviceType   ServiceType? // 간선/지선/광역. null = 구분 없음
   /// 요일별 실제 운행 대수 — 등록 대수 전부가 매일 나가지는 않는다.
   /// (성민버스 예: 등록 14대 중 평일 12 / 토 11 / 일·공휴일 10)
   /// null 이면 "등록된 활성 차량 전부 운행"으로 본다.
   weekdayBuses  Int? // 월~금
   saturdayBuses Int? // 토
   holidayBuses  Int? // 일요일 + 법정 공휴일
-  fatigueScore  Int      @default(3) // 피로도 가중치 (1=꿀노선 ~ 5=기피노선)
+  fatigueScore  Int          @default(3) // 피로도 가중치 (1=꿀노선 ~ 5=기피노선)
   fatigueReason String? // 피로도 사유 (예: "상습 정체구간", "장거리")
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
   company           Company            @relation(fields: [companyId], references: [id])
   buses             Bus[]
@@ -409,26 +427,30 @@ model RouteAssignment {
 }
 
 model Schedule {
-  id        Int            @id @default(autoincrement())
-  companyId Int            @default(1)
-  year      Int
-  month     Int
+  id          Int            @id @default(autoincrement())
+  companyId   Int            @default(1)
+  year        Int
+  month       Int
   /// 초안 프로필 이름 — 같은 달에 여러 초안을 만들어 비교할 수 있다
-  name      String         @default("기본 초안")
-  status    ScheduleStatus @default(DRAFT)
-  notes     String?
-  createdBy Int
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  name        String         @default("기본 초안")
+  /// 노선 종류 — 간선·지선·광역을 각각 따로 짜고 따로 발행한다.
+  /// null = 구분 없음(전체) — 종류를 나누기 전에 만든 배차표가 여기 남는다.
+  serviceType ServiceType?
+  status      ScheduleStatus @default(DRAFT)
+  notes       String?
+  createdBy   Int
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
 
   company  Company           @relation(fields: [companyId], references: [id])
   slots    ScheduleSlot[]
   patterns SchedulePattern[]
 
   // 월당 DRAFT 는 여러 개 허용 (멀티 초안 프로필).
-  // PUBLISHED 는 월당 1개만 — DB 부분 unique 인덱스로 강제
+  // PUBLISHED 는 월 × 노선종류당 1개만 — DB 부분 unique 인덱스로 강제
   // (Prisma 로 표현 불가, 마이그레이션 SQL 의 Schedule_one_published_per_month 참조)
   @@index([companyId, year, month])
+  @@index([companyId, year, month, serviceType])
   @@index([companyId])
   @@index([status])
   @@index([companyId, status])
@@ -857,6 +879,12 @@ model DailyInspection {
   @@index([companyId, date])
 }
 
+/// 사고·지적사항 이력.
+///
+/// 회사가 실제로 쓰던 장부 두 종류를 한 테이블에 담는다:
+///   · 가해/피해현황 (월별 시트) — 사건번호·장소·대물/대인 건수·보험·징계
+///   · 승무원 근태현황 (기사별) — 좌측 '사고내용' + 우측 '지적사항'
+/// 양식 칸은 전부 nullable — 담당자가 아는 것만 채우고 나머지는 비워 둔다.
 model IncidentRecord {
   id          Int          @id @default(autoincrement())
   companyId   Int
@@ -867,9 +895,26 @@ model IncidentRecord {
   penalty     Int? // 과태료/벌금 (원)
   isResolved  Boolean      @default(false)
   resolvedAt  DateTime?
-  notes       String?
+  notes       String? // 양식의 '비고'
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
+
+  // ── 현장 양식 칸 ───────────────────────────────
+  faultType     FaultType? // 가해 / 피해 (지적사항은 null)
+  caseNumber    String? // 사건번호 (예: 성26-1가1-9번2304)
+  vehicleNumber String? // 차량번호 — Bus 와 FK 로 묶지 않는다: 폐차·이관된 차량의
+  //                       과거 사고 기록이 사라지면 안 되고, 장부에는 이미 없는
+  //                       차량번호가 그대로 적혀 있다
+  location      String? // 장소
+  /// 사고 구분 — 양식이 건수로 적는다 (대물/대인 × 자차/타차)
+  propertySelf  Int?
+  propertyOther Int?
+  injurySelf    Int?
+  injuryOther   Int?
+  insurer       String? // 보험사
+  insuranceNote String? // 보험접수 (예: 버스공제조합 / 무혐의처리 / 각자처리)
+  discipline    String? // 징계여부 (예: 징계예정 / 정식징계예정)
+  compensation  Int? // 자차 견적·보상금액 (원)
 
   company Company @relation(fields: [companyId], references: [id])
   driver  User    @relation(fields: [driverId], references: [id])
@@ -880,6 +925,8 @@ model IncidentRecord {
   @@index([type])
   @@index([companyId, driverId])
   @@index([isResolved])
+  @@index([companyId, date])
+  @@index([companyId, faultType])
 }
 
 model TrainingRecord {

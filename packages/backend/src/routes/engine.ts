@@ -65,7 +65,7 @@ const POLICY_INJECT_PATHS = ['/generate', '/inspect'];
  * 휴무를 합치면 **일하기로 된 사람까지 빠져** 공석이 생긴다. 이름을 구분한
  * 뒤에야 반영된다 (배차 저장 경로의 동명이인 정책과 같은 판단).
  */
-async function approvedLeavesByName(
+export async function approvedLeavesByName(
   companyId: number,
   year: number,
   month: number,

@@ -232,6 +232,14 @@ export const userValidation = {
       .optional()
       .isIn(['MAIN', 'SPARE'])
       .withMessage('기사 유형은 MAIN 또는 SPARE여야 합니다.'),
+    body('serviceType')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['TRUNK', 'BRANCH', 'WIDE_AREA'])
+      .withMessage('노선 종류는 간선(TRUNK)·지선(BRANCH)·광역(WIDE_AREA) 중 하나여야 합니다.'),
+    body('hireDate')
+      .optional({ nullable: true, checkFalsy: true })
+      .isISO8601().withMessage('입사일은 날짜 형식(YYYY-MM-DD)이어야 합니다.'),
+    optionalString('assignedBusNumber', '담당 차량 번호', { max: 20 }),
     body('vacationDays')
       .optional()
       .isInt({ min: 0, max: 366 }).withMessage('휴가 일수는 0~366 사이의 정수여야 합니다.')
@@ -258,6 +266,14 @@ export const userValidation = {
       .optional()
       .isIn(['MAIN', 'SPARE'])
       .withMessage('기사 유형은 MAIN 또는 SPARE여야 합니다.'),
+    body('serviceType')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['TRUNK', 'BRANCH', 'WIDE_AREA'])
+      .withMessage('노선 종류는 간선(TRUNK)·지선(BRANCH)·광역(WIDE_AREA) 중 하나여야 합니다.'),
+    body('hireDate')
+      .optional({ nullable: true, checkFalsy: true })
+      .isISO8601().withMessage('입사일은 날짜 형식(YYYY-MM-DD)이어야 합니다.'),
+    optionalString('assignedBusNumber', '담당 차량 번호', { max: 20 }),
     body('isActive')
       .optional()
       .isBoolean().withMessage('활성 상태는 boolean이어야 합니다.'),
@@ -359,6 +375,10 @@ export const routeValidation = {
     optionalString('description', '설명'),
     optionalString('startPoint', '출발지', { max: 100 }),
     optionalString('endPoint', '도착지', { max: 100 }),
+    body('serviceType')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['TRUNK', 'BRANCH', 'WIDE_AREA'])
+      .withMessage('노선 종류는 간선(TRUNK)·지선(BRANCH)·광역(WIDE_AREA) 중 하나여야 합니다.'),
     // 요일별 운행 대수 — 빈 값은 '미설정'이라 허용한다
     ...(['weekdayBuses', 'saturdayBuses', 'holidayBuses'] as const).map((f) =>
       body(f)
@@ -374,6 +394,10 @@ export const routeValidation = {
     optionalString('description', '설명'),
     optionalString('startPoint', '출발지', { max: 100 }),
     optionalString('endPoint', '도착지', { max: 100 }),
+    body('serviceType')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['TRUNK', 'BRANCH', 'WIDE_AREA'])
+      .withMessage('노선 종류는 간선(TRUNK)·지선(BRANCH)·광역(WIDE_AREA) 중 하나여야 합니다.'),
     // 요일별 운행 대수 — 빈 값은 '미설정'이라 허용한다
     ...(['weekdayBuses', 'saturdayBuses', 'holidayBuses'] as const).map((f) =>
       body(f)
@@ -811,6 +835,34 @@ export const approvalValidation = {
 // ─────────────────────────────────────────────────────────────────
 // SAFETY
 // ─────────────────────────────────────────────────────────────────
+/**
+ * 노무 관리 표의 양식 칸 검증 — 생성·수정이 같은 규칙을 쓴다.
+ * 전부 선택 항목: 담당자가 아는 칸만 채우고 나머지는 비워 둔다.
+ */
+const incidentFormValidators = [
+  body('faultType')
+    .optional({ nullable: true, checkFalsy: true })
+    .isIn(['AT_FAULT', 'VICTIM']).withMessage('과실 구분은 가해(AT_FAULT) 또는 피해(VICTIM)여야 합니다.'),
+  optionalString('caseNumber', '사건번호', { max: 50 }),
+  optionalString('vehicleNumber', '차량번호', { max: 20 }),
+  optionalString('location', '장소', { max: 200 }),
+  optionalString('insurer', '보험사', { max: 50 }),
+  optionalString('insuranceNote', '보험접수', { max: 200 }),
+  optionalString('discipline', '징계여부', { max: 100 }),
+  optionalString('notes', '비고', { max: 1000 }),
+  ...(['propertySelf', 'propertyOther', 'injurySelf', 'injuryOther'] as const).map((f) =>
+    body(f)
+      .custom((v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 999))
+      .withMessage('사고 구분 건수는 0~999 범위여야 합니다.'),
+  ),
+  // 금액은 장부에 "32,000" 처럼 콤마가 섞여 들어온다
+  ...(['penalty', 'compensation'] as const).map((f) =>
+    body(f)
+      .custom((v) => v == null || v === '' || Number.isFinite(Number(String(v).replace(/[,\s₩]/g, ''))))
+      .withMessage('금액은 숫자여야 합니다.'),
+  ),
+];
+
 export const safetyValidation = {
   createIncident: validate([
     isIntId('body', 'driverId', '기사 ID'),
@@ -818,11 +870,20 @@ export const safetyValidation = {
       .notEmpty().withMessage('날짜는 필수입니다.')
       .isISO8601().withMessage('유효한 날짜 형식이어야 합니다.'),
     requiredString('type', '유형', { min: 1, max: 50 }),
-    requiredString('description', '설명', { min: 1, max: 2000 }),
-    body('penalty')
-      .optional()
-      .isFloat({ min: 0 }).withMessage('벌금은 0 이상이어야 합니다.'),
-    optionalString('notes', '메모', { max: 1000 }),
+    // 표에서 새 행을 만들 때는 내용이 아직 비어 있다 — 담당자가 날짜부터 적고
+    // 내용을 나중에 채우는 게 실제 순서라 필수로 막지 않는다
+    optionalString('description', '내용', { max: 2000 }),
+    ...incidentFormValidators,
+  ]),
+
+  updateIncident: validate([
+    isIntId('param', 'id', '사고 기록 ID'),
+    body('date')
+      .optional({ nullable: true, checkFalsy: true })
+      .isISO8601().withMessage('유효한 날짜 형식이어야 합니다.'),
+    optionalString('type', '유형', { max: 50 }),
+    optionalString('description', '내용', { max: 2000 }),
+    ...incidentFormValidators,
   ]),
 
   resolveIncident: validate([

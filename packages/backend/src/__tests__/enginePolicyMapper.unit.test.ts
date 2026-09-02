@@ -57,16 +57,20 @@ describe('mapCompanyPolicyToEngineValues', () => {
 });
 
 describe('mergeEnginePolicy', () => {
-  it('엔진 고유 설정·공휴일은 보존하고 겹치는 키만 덮어쓴다', () => {
+  it('저장된 엔진 튜닝 값은 버리고 공휴일만 보존한다', () => {
+    // 2026-08-31: 엔진 튜닝 설정 22개를 걷어냈다. 회사마다 쌓인 값이 솔버
+    // 가중치와 싸워 달마다 배차표 모양이 달라졌기 때문이다(8월 붕괴 원인).
+    // 이제 배차 규칙은 기본 틀(엔진 frame.py)이 정하고, 회사가 고르는 것은
+    // 공휴일뿐이다. 넘어가는 값은 운영 정책이 주인인 법규 항목만.
     const saved = {
       values: { rotation_step: -1, fairness_lambda: 7, monthly_work_days: [20, 23] },
       holidays: ['2026-08-15'],
       special_reductions: [['2026-09-01', '2026-09-03', '아시아드'] as [string, string, string]],
     };
     const merged = mergeEnginePolicy(saved, POLICY_PRESETS.CITY_2SHIFT);
-    expect(merged.values?.rotation_step).toBe(-1);
-    expect(merged.values?.fairness_lambda).toBe(7);
-    expect(merged.values?.monthly_work_days).toEqual([18, 23]); // 배차 설정이 이긴다
+    expect(merged.values?.rotation_step).toBeUndefined();
+    expect(merged.values?.fairness_lambda).toBeUndefined();
+    expect(merged.values?.monthly_work_days).toEqual([18, 23]); // 운영 정책은 그대로 간다
     expect(merged.holidays).toEqual(['2026-08-15']);
     expect(merged.special_reductions).toHaveLength(1);
   });

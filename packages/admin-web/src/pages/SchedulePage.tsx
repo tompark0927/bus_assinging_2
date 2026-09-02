@@ -30,7 +30,7 @@ import {
   Layers,
   Copy,
 } from 'lucide-react';
-import { schedulesApi, routesApi, busesApi, usersApi, dayOffApi, companyPolicyApi } from '../services/api';
+import { schedulesApi, routesApi, busesApi, usersApi, dayOffApi, companyPolicyApi, type ScheduleServiceType } from '../services/api';
 import { format, getDaysInMonth } from 'date-fns';
 import toast from 'react-hot-toast';
 import PrintOptionsModal from '../components/PrintOptionsModal';
@@ -129,6 +129,9 @@ interface Driver {
   employeeId: string;
   /** 기초 데이터의 담당 차량 — 같은 차번을 가진 두 메인 기사가 '짝꿍' */
   assignedBusNumber?: string | null;
+  /** 노선 종류 — 간선/지선/광역. 미지정 기사는 어느 배차표에나 설 수 있다 */
+  serviceType?: string | null;
+  isActive?: boolean;
   licenseExpiresAt?: string | null;
   qualificationExpiresAt?: string | null;
 }
@@ -206,6 +209,20 @@ const CREW_KIND_LABEL: Record<string, string> = {
   TRIO: '3인 승무',
 };
 
+/**
+ * 노선 종류 탭 — 한 회사가 간선·지선·광역을 함께 운영하면 배차표도 따로 짜고
+ * 따로 발행한다. '' = 전체(구분 없음): 종류를 나누기 전에 만든 배차표가 여기 남고,
+ * 한 종류만 운행하는 회사는 이 탭만 쓰면 된다.
+ */
+const SERVICE_TABS: { value: ScheduleServiceType; label: string; hint: string }[] = [
+  { value: '', label: '전체', hint: '노선 종류를 나누지 않은 배차표' },
+  { value: 'TRUNK', label: '간선', hint: '간선 노선만 모아 따로 발행' },
+  { value: 'BRANCH', label: '지선', hint: '지선 노선만 모아 따로 발행' },
+  { value: 'WIDE_AREA', label: '광역', hint: '광역 노선만 모아 따로 발행' },
+];
+const SERVICE_TAB_LABEL = (v: ScheduleServiceType) =>
+  SERVICE_TABS.find((t) => t.value === v)?.label ?? '전체';
+
 export default function SchedulePage() {
   const queryClient = useQueryClient();
 
@@ -254,6 +271,8 @@ export default function SchedulePage() {
     setShowPolicyNudge(false);
     navigate('/dashboard/settings');
   }, [navigate]);
+  // 노선 종류 탭 (간선/지선/광역). '' = 전체(구분 없음)
+  const [serviceType, setServiceType] = useState<ScheduleServiceType>('');
   // 멀티 초안(프로필): 선택된 배차표 ID (null = 발행본 우선 → 최근 초안)
   const [selectedScheduleId, setSelectedScheduleId] = useState<number | null>(null);
   const [newDraftName, setNewDraftName] = useState('');
@@ -308,15 +327,16 @@ export default function SchedulePage() {
 
   // ─── 데이터 조회 ───
 
-  // 월 이동 시 프로필 선택 초기화
+  // 월 이동·노선 종류 전환 시 프로필 선택 초기화 — 다른 탭의 초안 id 를 들고 가면
+  // 그 배차표가 그대로 보여 탭이 안 바뀐 것처럼 보인다.
   useEffect(() => {
     setSelectedScheduleId(null);
-  }, [year, month]);
+  }, [year, month, serviceType]);
 
   // 이 달의 배차표 프로필 목록 (발행본 + 초안들)
   const { data: draftList = [] } = useQuery<DraftSummary[]>({
-    queryKey: ['schedule-drafts', year, month],
-    queryFn: () => schedulesApi.listDrafts(year, month).then((r) => r.data.data ?? []),
+    queryKey: ['schedule-drafts', year, month, serviceType],
+    queryFn: () => schedulesApi.listDrafts(year, month, serviceType).then((r) => r.data.data ?? []),
   });
 
   const {
@@ -325,8 +345,8 @@ export default function SchedulePage() {
     isError,
     error,
   } = useQuery<Schedule>({
-    queryKey: ['schedule', year, month, selectedScheduleId],
-    queryFn: () => schedulesApi.get(year, month, selectedScheduleId ?? undefined).then((r) => r.data.data),
+    queryKey: ['schedule', year, month, selectedScheduleId, serviceType],
+    queryFn: () => schedulesApi.get(year, month, selectedScheduleId ?? undefined, serviceType).then((r) => r.data.data),
     retry: 1,
   });
 
@@ -609,7 +629,10 @@ export default function SchedulePage() {
    * import   = 이미 짜 놓은 배차표를 그대로 읽어온다 (솔버 미실행)
    * 엔진을 쓰지 않는 회사도 화면·인쇄물·기사앱·안전검사를 그대로 쓰게 하는 경로.
    */
-  const [engineMode, setEngineMode] = useState<'generate' | 'import'>('generate');
+  // 'previous' = 파일 없이 지난달 배차표(DB)에서 이어받기. 기본값으로 둔다 —
+  // 담당자가 가장 자주 하는 일이 "지난달 걸로 이번 달 짜 주세요" 이고,
+  // 그 일에 내보내기→재업로드 왕복은 필요 없다.
+  const [engineMode, setEngineMode] = useState<'previous' | 'generate' | 'import'>('previous');
   const [engineUnmatched, setEngineUnmatched] = useState<{ vehicles: string[]; drivers: string[] } | null>(null);
   const engineFileRef = useRef<HTMLInputElement>(null);
 
@@ -631,6 +654,31 @@ export default function SchedulePage() {
   const engineGenerateMutation = useMutation({
     mutationFn: async (opts?: { confirmOverwrite?: boolean; confirmMismatch?: boolean }) => {
       let draft = (opts?.confirmOverwrite || opts?.confirmMismatch) ? pendingEngineDraftRef.current : null;
+      if (!draft && engineMode === 'previous') {
+        // 파일 없이 — 지난달 배차표가 이미 DB 에 있다. 내보내기→재업로드 왕복은
+        // 그 과정에서 순번을 잃어 "로테이션 추론 실패"를 만들던 길이다.
+        const res = (await schedulesApi.generateFromPrevious({ year, month, serviceType })).data.data as {
+          cells: Record<string, Record<string, unknown>>;
+          audit: { ok: boolean; violations: unknown[] };
+          warnings: string[];
+          source: { year: number; month: number; vehicles: number; dates: number; filledCells: number; hasSlotPatterns: boolean };
+        };
+        draft = { cells: res.cells, audit: res.audit, warnings: res.warnings ?? [] };
+        pendingEngineDraftRef.current = draft;
+        const src = res.source;
+        toast.success(
+          `${src.year}년 ${src.month}월 배차표에서 이어받았습니다 ` +
+          `(${src.vehicles}대 · ${src.dates}일 · 배정 ${src.filledCells}칸).`,
+        );
+        // 순번이 없으면 새로 시작한다 — 담당자가 게시 전에 확인해야 한다
+        if (!src.hasSlotPatterns) {
+          toast(
+            '지난달 배차표에 순번(로테이션) 정보가 없어 순번을 차량 순서대로 새로 시작했습니다. ' +
+            '게시 전에 순번을 확인해 주세요.',
+            { icon: '⚠️', duration: 10000 },
+          );
+        }
+      }
       if (!draft) {
         if (!engineFile) throw new Error('배차표 엑셀을 선택해 주세요.');
         const form = new FormData();
@@ -659,6 +707,7 @@ export default function SchedulePage() {
       }
       const saved = (await schedulesApi.saveFromEngine({
         year, month,
+        serviceType,
         name: newDraftName.trim() || undefined,
         cells: draft.cells,
         confirmOverwrite: opts?.confirmOverwrite,
@@ -667,6 +716,7 @@ export default function SchedulePage() {
         scheduleId: number; slotCount: number;
         unmatched: { vehicles: string[]; drivers: string[] };
         ambiguousNames: { name: string; candidates: { employeeId: string }[] }[];
+        serviceTypeMismatch: { name: string; driverServiceType: string }[];
       };
       return { draft, saved };
     },
@@ -690,6 +740,17 @@ export default function SchedulePage() {
         `${year}년 ${month}월 초안 생성 완료 — 배정 ${saved.slotCount}건${unmatchedNote}` +
         (draft.audit.ok ? ', 제약 위반 0건' : `, 위반 ${draft.audit.violations.length}건 확인 필요`)
       );
+      // 다른 노선 종류 기사 — 간선 배차표에 지선 기사를 넣지 않는다.
+      // 기초 데이터가 틀렸는지 파일이 틀렸는지는 담당자만 안다.
+      if (saved.serviceTypeMismatch?.length) {
+        const names = saved.serviceTypeMismatch.slice(0, 5).map((m) => m.name).join(', ');
+        toast(
+          `${SERVICE_TAB_LABEL(serviceType)} 배차표라 다른 종류 기사 ${saved.serviceTypeMismatch.length}명은 배정하지 않았습니다: ` +
+          `${names}${saved.serviceTypeMismatch.length > 5 ? ' 외' : ''} — ` +
+          '기초 데이터 > 기사의 노선 종류를 확인해주세요.',
+          { icon: '⚠️', duration: 10000 },
+        );
+      }
       // 동명이인 — 추측 배정하지 않고 보류했다. 담당자가 구분해줘야 채워진다.
       if (saved.ambiguousNames?.length) {
         const list = saved.ambiguousNames
@@ -751,7 +812,7 @@ export default function SchedulePage() {
 
   const publishMutation = useMutation({
     mutationFn: (opts?: { force?: boolean }) =>
-      schedulesApi.publish(year, month, schedule?.id, opts?.force),
+      schedulesApi.publish(year, month, schedule?.id, opts?.force, serviceType),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
@@ -796,8 +857,43 @@ export default function SchedulePage() {
     },
   });
 
+  // 기본 틀의 빈 스페어 자리를 엔진에 맡긴다.
+  // 기본 틀은 메인만 깔려 있고 스페어 칸은 비어 있는 게 정상이다 —
+  // 담당자가 직접 채우는 게 기본이고, 이 버튼은 "AI 가 짜면 어떻게 나오나"를
+  // 보고 싶을 때 쓴다.
+  /**
+   * 초안의 빈 칸은 사고가 아니라 **스페어 자리**다.
+   *
+   * 배차표 생성은 메인만 깔린 기본 틀을 만든다. 그 위에서 담당자가 직접
+   * 채우거나 [스페어 자동 채우기]로 맡기거나 고른다. 그래서 초안에서는
+   * 빨간 공석 경고 대신 안내와 버튼을 보여준다.
+   * (발행본에서 빈 칸이 남아 있는 건 진짜 사고라 빨간 경고 그대로다)
+   */
+  const isDraft = schedule?.status === 'DRAFT';
+
+  const fillSparesMutation = useMutation({
+    mutationFn: () => {
+      if (!schedule?.id) throw new Error('배차표를 먼저 선택해 주세요.');
+      return schedulesApi.fillSpares(schedule.id);
+    },
+    onSuccess: (res) => {
+      const msg = (res.data as { message?: string }).message;
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-drafts'] });
+      // 메시지가 길다 — 몇 칸을 채웠고 무엇을 왜 건너뛰었는지 한 줄로 온다.
+      // 기본 3초로는 다 못 읽는다.
+      toast.success(msg ?? '스페어를 채웠습니다.', { duration: 8000 });
+    },
+    onError: (e: unknown) => {
+      const msg =
+        (e as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        '스페어 배치 중 오류가 발생했습니다.';
+      toast.error(msg);
+    },
+  });
+
   const deleteMutation = useMutation({
-    mutationFn: () => schedulesApi.delete(year, month, schedule?.id),
+    mutationFn: () => schedulesApi.delete(year, month, schedule?.id, serviceType),
     onSuccess: () => {
       // 삭제된 프로필의 생성 결과 저장본도 함께 정리
       if (schedule?.id) {
@@ -927,6 +1023,28 @@ export default function SchedulePage() {
         seen.set(slot.driver.id, slot.driver);
       }
     }
+
+    // ── 배차가 한 칸도 없는 기사도 '빈 행'으로 세운다 (초안 한정) ──
+    // 기본 틀은 메인(정·부)만 깔고 스페어 자리는 비워 둔다. 그런데 이 표의
+    // 행은 슬롯에서 뽑기 때문에 슬롯이 0개인 스페어는 화면에서 통째로
+    // 사라졌다 — "스페어는 직접 채우세요"라고 해 놓고 누를 칸이 없었다.
+    // 기초 데이터에 등록된 기사는 빈 행으로라도 세워 두고, 그 행의 날짜 칸을
+    // 눌러(+) 바로 채우게 한다.
+    // 발행본은 그 달의 기록이므로 건드리지 않는다 — 초안에서만.
+    if (schedule.status === 'DRAFT') {
+      for (const u of allUsersList) {
+        if (seen.has(u.id) || u.isActive === false) continue;
+        // 노선 종류 게이트 — 간선 배차표에 지선 기사를 세우지 않는다.
+        // 구분 미지정 기사는 통과(engineScheduleService 의 배정 규칙과 같다).
+        if (serviceType && u.serviceType && u.serviceType !== serviceType) continue;
+        seen.set(u.id, {
+          id: u.id,
+          name: u.name,
+          driverType: u.driverType,
+          employeeId: u.employeeId,
+        });
+      }
+    }
     // ── 배차표 행 순서 ──
     // 실물 배차표의 규칙 두 가지를 그대로 따른다.
     //   1) 스페어(예비)는 **무조건 맨 아래**
@@ -1005,7 +1123,7 @@ export default function SchedulePage() {
       }
       return a.name.localeCompare(b.name, 'ko');
     });
-  }, [schedule?.slots, allUsersList]);
+  }, [schedule?.slots, schedule?.status, allUsersList, serviceType]);
 
   // 근무일수 중앙값 — 엑셀 배차총괄의 "목표(22일) 대비 차이" 열에 대응.
   // 회사마다 목표가 달라 고정값 대신 중앙값을 기준으로 편차를 보여준다.
@@ -1022,6 +1140,13 @@ export default function SchedulePage() {
     const mid = Math.floor(counts.length / 2);
     return counts.length % 2 ? counts[mid] : Math.round((counts[mid - 1] + counts[mid]) / 2);
   }, [allDrivers, driverSlotMap]);
+
+  // 한 칸도 배정되지 않은 기사 — 기본 틀만 깔린 초안의 스페어가 여기 해당한다.
+  // 위 배너에서 "몇 명이 아직 비어 있는지"를 알려주고 기사별 보기로 보내는 근거.
+  const unassignedDrivers = useMemo(
+    () => allDrivers.filter((d) => !driverSlotMap.get(d.id)?.size),
+    [allDrivers, driverSlotMap],
+  );
 
   // 일일배차: 그날 배정 없는 스페어 기사 — 엑셀 sp칸(대기 명단)
   const spareStandby = useMemo(() => {
@@ -1134,14 +1259,14 @@ export default function SchedulePage() {
 
   const handleExport = useCallback(async () => {
     try {
-      const res = await schedulesApi.exportExcel(year, month, schedule?.id);
+      const res = await schedulesApi.exportExcel(year, month, schedule?.id, serviceType);
       const blob = new Blob([res.data], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `배차표_${year}년_${month}월.xlsx`;
+      a.download = `배차표_${year}년_${month}월${serviceType ? `_${SERVICE_TAB_LABEL(serviceType)}` : ''}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
       toast.success('엑셀 파일이 다운로드되었습니다.');
@@ -1414,9 +1539,27 @@ export default function SchedulePage() {
             </div>
           }
         >
+          {/* 노선 종류 탭 — 간선·지선·광역을 각각 따로 짜고 따로 발행한다 */}
+          <div className="mt-3 inline-flex rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 p-1" data-print-hide>
+            {SERVICE_TABS.map((t) => (
+              <button
+                key={t.value || 'ALL'}
+                onClick={() => setServiceType(t.value)}
+                title={t.hint}
+                className={`px-5 py-2 rounded-lg text-base font-semibold transition-colors ${
+                  serviceType === t.value
+                    ? 'bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 shadow-sm'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
           <div className="flex items-center gap-3 mt-2">
             <span className="text-lg text-gray-600 dark:text-gray-400">
-              {year}년 {month}월
+              {year}년 {month}월{serviceType && ` · ${SERVICE_TAB_LABEL(serviceType)}`}
             </span>
             {statusConfig && (
               <span
@@ -1703,7 +1846,7 @@ export default function SchedulePage() {
         <div className="card text-center py-24">
           <Calendar size={64} className="mx-auto text-gray-300 dark:text-gray-600 mb-5" />
           <h3 className="text-2xl font-semibold text-gray-700 dark:text-gray-300 mb-3">
-            {year}년 {month}월 배차표가 없습니다
+            {year}년 {month}월 {serviceType && `${SERVICE_TAB_LABEL(serviceType)} `}배차표가 없습니다
           </h3>
           <p className="text-lg text-gray-400 dark:text-gray-500 mb-8">AI 자동 생성으로 최적의 배차표를 만들어 보세요.</p>
           <button
@@ -1740,7 +1883,7 @@ export default function SchedulePage() {
       )}
 
       {showManpower && (
-        <ManpowerModal year={year} month={month} onClose={() => setShowManpower(false)} />
+        <ManpowerModal year={year} month={month} serviceType={serviceType} onClose={() => setShowManpower(false)} />
       )}
 
       {/* ─── 벌크 변경 모달 ─── */}
@@ -1804,7 +1947,9 @@ export default function SchedulePage() {
       {/* 인쇄 전용 제목 — 화면에서는 숨김, 인쇄 시에만 표시 */}
       {schedule && (
         <div className="hidden print:block text-center mb-2">
-          <h2 className="text-xl font-bold text-black">{year}년 {month}월 배차표</h2>
+          <h2 className="text-xl font-bold text-black">
+            {year}년 {month}월 {serviceType && `${SERVICE_TAB_LABEL(serviceType)} `}배차표
+          </h2>
         </div>
       )}
       {/* ─── 뷰 전환 — 게시 양식은 순번 데이터가 있을 때만 노출 ─── */}
@@ -1894,8 +2039,52 @@ export default function SchedulePage() {
         </div>
       )}
 
+      {/* ─── 기본 틀 — 빈 칸은 사고가 아니라 스페어 자리다 ─── */}
+      {vacancy.vacant > 0 && isDraft && (
+        <div className="rounded-lg border border-blue-300 bg-blue-50 p-3 print:hidden dark:border-blue-700 dark:bg-blue-900/20">
+          <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+            메인(정·부)은 다 깔려 있고, 스페어 자리 {vacancy.vacant}칸이 비어 있습니다
+          </p>
+          <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
+            빈 칸을 눌러 직접 채우시거나, 아래 버튼으로 맡기시면 됩니다. 자동 채우기는 <strong>빈 칸에만</strong> 넣습니다 —
+            이미 채워진 칸과 직접 고치신 칸은 그대로 둡니다. 이중 배정·연속근무·휴식 규칙도 지킵니다.
+          </p>
+          {/* 기본 틀만 깔린 달에는 스페어가 한 칸도 안 잡혀 있다. 기본 화면인 게시
+              양식은 행이 **차량**이라 배정 없는 사람은 아예 안 나온다 — 그래서
+              "메인밖에 없다"로 보인다. 행이 **기사**인 기사별 보기로 보내 준다. */}
+          {unassignedDrivers.length > 0 && (
+            <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
+              아직 한 칸도 배정되지 않은 기사 {unassignedDrivers.length}명(
+              {unassignedDrivers.slice(0, 3).map((d) => d.name).join(', ')}
+              {unassignedDrivers.length > 3 ? ' 외' : ''})은{' '}
+              <strong>기사별 보기</strong>에 빈 행으로 서 있습니다 — 그 행의 날짜 칸(+)을
+              눌러 직접 채우시면 됩니다.
+            </p>
+          )}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => fillSparesMutation.mutate()}
+              disabled={fillSparesMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+            >
+              <Sparkles size={15} />
+              {fillSparesMutation.isPending ? '채우는 중…' : '스페어 자동 채우기'}
+            </button>
+            {unassignedDrivers.length > 0 && effectiveViewMode !== 'driver' && (
+              <button
+                onClick={() => setViewMode('driver')}
+                className="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-3.5 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50 dark:border-blue-700 dark:bg-transparent dark:text-blue-300 dark:hover:bg-blue-900/30"
+              >
+                <Users size={15} />
+                기사별 보기에서 직접 채우기
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ─── 공석 경고 — 운행 차량인데 아무도 없는 칸. 버스가 못 나간다 ─── */}
-      {vacancy.vacant > 0 && (
+      {vacancy.vacant > 0 && !isDraft && (
         <div className="rounded-lg border border-red-300 bg-red-50 p-3 print:hidden dark:border-red-800 dark:bg-red-900/20">
           <p className="text-sm font-semibold text-red-800 dark:text-red-300">
             ⚠ 공석 {vacancy.vacant}칸 — 배정된 기사가 없어 그 버스는 운행할 수 없습니다
@@ -1917,7 +2106,7 @@ export default function SchedulePage() {
               const url = URL.createObjectURL(res.data as Blob);
               const a = document.createElement('a');
               a.href = url;
-              a.download = `일일배차표_${date}.xlsx`;
+              a.download = `일일배차표_${date}${serviceType ? `_${SERVICE_TAB_LABEL(serviceType)}` : ''}.xlsx`;
               a.click();
               URL.revokeObjectURL(url);
             } catch {
@@ -2015,7 +2204,7 @@ export default function SchedulePage() {
                   const url = URL.createObjectURL(res.data as Blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `일일배차표_${effectiveDailyDate}.xlsx`;
+                  a.download = `일일배차표_${effectiveDailyDate}${serviceType ? `_${SERVICE_TAB_LABEL(serviceType)}` : ''}.xlsx`;
                   a.click();
                   URL.revokeObjectURL(url);
                 } catch {
@@ -2249,6 +2438,16 @@ export default function SchedulePage() {
                       >
                         <div className="text-base font-bold text-blue-700 dark:text-blue-400">{driverWorkCount}일</div>
                         <div className="text-sm text-gray-400 dark:text-gray-500">{driverRestCount}휴</div>
+                        {/* 한 칸도 안 잡힌 기사 — 기본 틀의 스페어가 여기 해당한다.
+                            0일/0휴만 보이면 고장으로 오해하므로 이유를 적어 둔다. */}
+                        {driverWorkCount === 0 && driverRestCount === 0 && (
+                          <div
+                            title="이 배차표에 배정이 하나도 없습니다 — 날짜 칸을 눌러 채워 주세요"
+                            className="text-xs font-semibold text-gray-400 dark:text-gray-500"
+                          >
+                            미배정
+                          </div>
+                        )}
                         {/* 중앙값 대비 편차 — 엑셀 배차총괄의 목표 대비 차이 열 */}
                         {workDayMedian > 0 && driverWorkCount > 0 && (
                           <div
@@ -2718,7 +2917,7 @@ export default function SchedulePage() {
       {showGenerateModal && (
         <Modal
           onClose={() => setShowGenerateModal(false)}
-          title={`${year}년 ${month}월 배차표 생성`}
+          title={`${year}년 ${month}월 ${serviceType ? `${SERVICE_TAB_LABEL(serviceType)} ` : ''}배차표 생성`}
           maxWidth="max-w-xl"
           icon={<Sparkles size={24} className="text-blue-600" />}
         >
@@ -2726,7 +2925,8 @@ export default function SchedulePage() {
             {/* 만드는 방식 — 엔진이 짜기 / 이미 짠 표 그대로 가져오기 */}
             <div className="flex gap-2">
               {([
-                ['generate', 'AI 엔진으로 짜기', '과거 배차표에서 규칙을 이어받아 새로 생성'],
+                ['previous', '지난달 배차표로 짜기', '파일 없이 — 지난달 것을 그대로 이어받습니다'],
+                ['generate', '엑셀 올려서 짜기', '과거 배차표 파일에서 규칙을 이어받아 새로 생성'],
                 ['import', '엑셀 그대로 가져오기', '이미 짜 놓은 배차표를 그대로 읽어옴'],
               ] as const).map(([mode, label, desc]) => (
                 <button
@@ -2745,7 +2945,20 @@ export default function SchedulePage() {
               ))}
             </div>
 
+            {engineMode === 'previous' && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-4 text-[14px] text-gray-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-gray-200">
+                <p className="font-semibold text-gray-800 dark:text-gray-100">
+                  {month === 1 ? year - 1 : year}년 {month === 1 ? 12 : month - 1}월 배차표를 이어받습니다
+                </p>
+                <p className="mt-1 text-gray-600 dark:text-gray-400">
+                  이미 저장된 배차표를 그대로 씁니다 — 엑셀을 내보내고 다시 올릴 필요가 없습니다.
+                  지난달 배차표에 순번(로테이션)이 없으면 순번을 차량 순서대로 새로 시작하고 그 사실을 알려드립니다.
+                </p>
+              </div>
+            )}
+
             {/* 엑셀 업로드 — 모드에 따라 요구하는 파일이 다르다 */}
+            {engineMode !== 'previous' && (
             <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-800 dark:bg-blue-900/20">
               <label className="block text-base font-semibold text-gray-800 dark:text-gray-200 mb-1">
                 {engineMode === 'import' ? '가져올 배차표 엑셀' : '과거 배차표 엑셀'}{' '}
@@ -2781,6 +2994,7 @@ export default function SchedulePage() {
                 {engineFile ? engineFile.name : '엑셀 선택'}
               </button>
             </div>
+            )}
 
             <div>
               <label className="block text-base font-semibold text-gray-700 dark:text-gray-300 mb-2">
@@ -2918,7 +3132,7 @@ export default function SchedulePage() {
             </button>
             <button
               onClick={() => engineGenerateMutation.mutate({})}
-              disabled={engineGenerateMutation.isPending || !engineFile}
+              disabled={engineGenerateMutation.isPending || (engineMode !== 'previous' && !engineFile)}
               className="btn-primary flex-1 text-base py-3 min-h-[52px] inline-flex items-center justify-center gap-2 disabled:opacity-40"
             >
               {engineGenerateMutation.isPending ? (
@@ -2926,11 +3140,17 @@ export default function SchedulePage() {
                   <Loader2 size={20} className="animate-spin" />{' '}
                   {engineMode === 'import'
                     ? '엑셀을 읽어 배차표로 저장하고 있습니다…'
-                    : 'AI가 최적 배차를 계산하고 있습니다... (최대 3분)'}
+                    : engineMode === 'previous'
+                    ? '지난달 배차표를 이어받아 계산하고 있습니다… (1~2분)'
+                    : 'AI가 최적 배차를 계산하고 있습니다... (1~2분)'}
                 </>
               ) : engineMode === 'import' ? (
                 <>
                   <Upload size={20} /> 엑셀 그대로 가져오기
+                </>
+              ) : engineMode === 'previous' ? (
+                <>
+                  <Sparkles size={20} /> 지난달 배차표로 짜기
                 </>
               ) : (
                 <>

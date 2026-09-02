@@ -8,15 +8,61 @@ import { getPagination, paginatedResponse } from '../utils/pagination';
 // 사고/위반 이력
 // ─────────────────────────────────────────
 
+/** 노무 관리 표에서 넘어오는 양식 칸 — 빈 문자열은 "안 적음(null)"으로 본다 */
+const FORM_TEXT_FIELDS = [
+  'caseNumber', 'vehicleNumber', 'location', 'insurer', 'insuranceNote', 'discipline',
+] as const;
+const FORM_INT_FIELDS = [
+  'propertySelf', 'propertyOther', 'injurySelf', 'injuryOther', 'compensation', 'penalty',
+] as const;
+
+const nullableText = (v: unknown): string | null | undefined =>
+  v === undefined ? undefined : v === null || String(v).trim() === '' ? null : String(v).trim();
+
+const nullableInt = (v: unknown): number | null | undefined => {
+  if (v === undefined) return undefined;
+  if (v === null || String(v).trim() === '') return null;
+  // 장부에는 "32,000" 처럼 콤마가 섞여 들어온다
+  const n = Number(String(v).replace(/[,\s₩]/g, ''));
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+};
+
+/** 요청 본문에서 양식 칸만 추려 Prisma data 로 만든다 (미지정 필드는 건드리지 않음) */
+function pickFormFields(body: Record<string, unknown>): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  for (const f of FORM_TEXT_FIELDS) {
+    const v = nullableText(body[f]);
+    if (v !== undefined) data[f] = v;
+  }
+  for (const f of FORM_INT_FIELDS) {
+    const v = nullableInt(body[f]);
+    if (v !== undefined) data[f] = v;
+  }
+  if (body.faultType !== undefined) {
+    const ft = String(body.faultType ?? '').trim().toUpperCase();
+    data.faultType = ft === 'AT_FAULT' || ft === 'VICTIM' ? ft : null;
+  }
+  if (body.notes !== undefined) data.notes = nullableText(body.notes);
+  return data;
+}
+
 export const getIncidents = async (req: AuthRequest, res: Response) => {
   try {
-    const { driverId, type, resolved } = req.query;
+    const { driverId, type, resolved, faultType, year } = req.query;
     const companyId = req.user!.companyId;
 
     const where: Record<string, unknown> = { companyId };
     if (driverId) where.driverId = Number(driverId);
     if (type) where.type = type;
     if (resolved !== undefined) where.isResolved = resolved === 'true';
+    // 가해/피해 장부를 따로 보는 화면용. 'NONE' = 과실 구분이 없는 지적사항만
+    if (faultType === 'NONE') where.faultType = null;
+    else if (faultType === 'AT_FAULT' || faultType === 'VICTIM') where.faultType = faultType;
+    // 장부는 연 단위로 관리한다 (예: "성민 가해현황 2026년")
+    const y = Number(year);
+    if (Number.isInteger(y) && y > 1900) {
+      where.date = { gte: new Date(Date.UTC(y, 0, 1)), lt: new Date(Date.UTC(y + 1, 0, 1)) };
+    }
 
     const pagination = getPagination(req);
     const [incidents, total] = await Promise.all([
@@ -39,7 +85,7 @@ export const getIncidents = async (req: AuthRequest, res: Response) => {
 
 export const createIncident = async (req: AuthRequest, res: Response) => {
   try {
-    const { driverId, date, type, description, penalty, notes } = req.body;
+    const { driverId, date, type, description } = req.body;
     const companyId = req.user!.companyId;
 
     // Verify driver belongs to same company
@@ -54,14 +100,61 @@ export const createIncident = async (req: AuthRequest, res: Response) => {
         driverId: Number(driverId),
         date: new Date(date),
         type,
-        description,
-        penalty: penalty ? Number(penalty) : null,
-        notes,
+        // 표에서 새 행을 만들 때는 내용이 아직 비어 있을 수 있다 —
+        // 담당자가 날짜부터 적고 내용을 나중에 채우는 게 실제 순서다
+        description: typeof description === 'string' ? description : '',
+        ...pickFormFields(req.body as Record<string, unknown>),
       },
       include: { driver: { select: { id: true, name: true, employeeId: true } } },
     });
 
     return res.status(201).json({ success: true, data: incident });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+/**
+ * 노무 관리 표의 셀 편집 — 보낸 칸만 바꾼다.
+ * 표에서 한 칸씩 고치는 흐름이라 부분 수정이 기본이다.
+ */
+export const updateIncident = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const companyId = req.user!.companyId;
+
+    const existing = await prisma.incidentRecord.findFirst({ where: { id, companyId } });
+    if (!existing) return res.status(404).json({ success: false, message: '이력을 찾을 수 없습니다.' });
+
+    const body = req.body as Record<string, unknown>;
+    const data: Record<string, unknown> = pickFormFields(body);
+
+    if (body.driverId !== undefined) {
+      const driver = await prisma.user.findFirst({ where: { id: Number(body.driverId), companyId } });
+      if (!driver) return res.status(404).json({ success: false, message: '기사를 찾을 수 없습니다.' });
+      data.driverId = driver.id;
+    }
+    if (body.date !== undefined) {
+      const d = new Date(String(body.date));
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ success: false, message: '날짜 형식이 올바르지 않습니다.' });
+      }
+      data.date = d;
+    }
+    if (body.type !== undefined) data.type = body.type;
+    if (body.description !== undefined) data.description = String(body.description ?? '');
+    if (body.isResolved !== undefined) {
+      data.isResolved = body.isResolved === true;
+      data.resolvedAt = body.isResolved === true ? new Date() : null;
+    }
+
+    const updated = await prisma.incidentRecord.update({
+      where: { id },
+      data,
+      include: { driver: { select: { id: true, name: true, employeeId: true } } },
+    });
+    return res.json({ success: true, data: updated });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });

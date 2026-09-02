@@ -10,7 +10,7 @@ import {
   Settings,
   Info,
   RotateCcw,
-  BrainCircuit,
+  CalendarDays,
   SlidersHorizontal,
 } from 'lucide-react';
 import { companyPolicyApi } from '../services/api';
@@ -129,8 +129,6 @@ export default function DispatchSettingsPage() {
 
   const [policy, setPolicy] = useState<CompanyPolicy | null>(null);
   const [dirty, setDirty] = useState(false);
-  // 엔진 튜닝 탭의 저장 상태 — 두 탭 저장 버튼을 헤더 한곳에서 그리기 위해 자식이 보고한다.
-  const [engineSave, setEngineSave] = useState<{ dirty: boolean; saving: boolean; save: () => void } | null>(null);
 
   useEffect(() => {
     if (data?.policy && !policy) {
@@ -194,7 +192,7 @@ export default function DispatchSettingsPage() {
         help={dispatchSettingsHelp}
         icon={Settings}
         title="배차 설정"
-        description="회사 운영 정책과 AI 엔진 튜닝을 한 곳에서 관리합니다. 배차표 생성과 발행 전 안전 검산이 이 설정을 따릅니다."
+        description="회사 운영 정책과 공휴일을 관리합니다. 배차표 생성과 발행 전 안전 검산이 이 설정을 따릅니다."
         actions={
           <>
             {tab === 'policy' && dirty && (
@@ -215,16 +213,6 @@ export default function DispatchSettingsPage() {
                 저장
               </button>
             )}
-            {tab === 'engine' && engineSave && (
-              <button
-                onClick={engineSave.save}
-                disabled={!engineSave.dirty || engineSave.saving}
-                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-2 text-[15px] font-medium"
-              >
-                {engineSave.saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                저장
-              </button>
-            )}
           </>
         }
       >
@@ -236,11 +224,12 @@ export default function DispatchSettingsPage() {
         )}
       </PageHeader>
 
-      {/* 탭 — 운영 정책(사람이 정하는 규칙) / 엔진 튜닝(엔진 카탈로그 자동 렌더링) */}
+      {/* 탭 — 운영 정책(법규·근무 규칙) / 공휴일(감차 대상일을 회사가 고른다).
+          엔진 튜닝 22개 설정은 2026-08-31 에 걷어냈다 — 기본 틀이 규칙을 정한다. */}
       <div className="flex gap-1 border-b border-gray-200 dark:border-white/10">
         {([
           ['policy', '운영 정책', SlidersHorizontal],
-          ['engine', '엔진 튜닝', BrainCircuit],
+          ['engine', '공휴일', CalendarDays],
         ] as const).map(([key, label, Icon]) => (
           <button
             key={key}
@@ -352,7 +341,12 @@ export default function DispatchSettingsPage() {
               </select>
             </Field>
 
-            <Field label="연속 근무일" hint="휴무 사이의 근무일 수">
+            {/* 근무 주기 — 기본 틀(엔진 frame.py)이 이 값으로 계단을 깐다.
+                시내 2교대는 보통 5근2휴, 마을버스는 6근1휴다. */}
+            <Field
+              label="연속 근무일"
+              hint="휴무 사이의 근무일 수. 배차표의 기본 틀이 이 값으로 짜입니다 (시내 보통 5일, 마을 6일)"
+            >
               <NumberInput
                 value={policy.restCycle.workDays}
                 min={1}
@@ -361,7 +355,10 @@ export default function DispatchSettingsPage() {
               />
             </Field>
 
-            <Field label="연속 휴무일" hint="근무 사이의 휴무일 수">
+            <Field
+              label="연속 휴무일"
+              hint="근무 뒤에 쉬는 일수. 근무일을 늘리면 메인이 더 일하고 스페어가 덜 나갑니다 — 생성할 때 배분을 알려드립니다"
+            >
               <NumberInput
                 value={policy.restCycle.restDays}
                 min={1}
@@ -662,7 +659,7 @@ export default function DispatchSettingsPage() {
         </Section>
           </>
         ) : (
-          <EngineTuningSection onGoToPolicy={() => setTab('policy')} onSaveStateChange={setEngineSave} />
+          <EngineTuningSection onGoToPolicy={() => setTab('policy')} />
         )}
     </div>
   );

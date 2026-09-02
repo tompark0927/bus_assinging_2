@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Calendar, AlertTriangle, Database, LogOut,
   Settings,
   ShieldCheck,
-  CalendarOff, Bus, UserCog, Building2, ScrollText,
+  CalendarOff, Bus, UserCog, Building2, ScrollText, ClipboardList,
   PanelLeftClose, PanelLeft,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -46,8 +46,11 @@ const navGroups: NavGroup[] = [
     items: [
       { to: '/dashboard', labelKey: '대시보드', icon: LayoutDashboard },
       { to: '/dashboard/schedule', labelKey: '배차표 관리', icon: Calendar, roles: ['DISPATCH'] },
-      { to: '/dashboard/emergency', labelKey: '대타 관리', icon: AlertTriangle, roles: ['DISPATCH'] },
-      { to: '/dashboard/dayoff', labelKey: '휴무 요청', icon: CalendarOff, roles: ['DISPATCH', 'HR'] },
+      { to: '/dashboard/labor', labelKey: '노무 관리', icon: ClipboardList, roles: ['DISPATCH', 'HR', 'SAFETY_MGR'] },
+      // 대타 관리·휴무 요청 — 정식 오픈 전까지 숨김 (라우트·페이지는 그대로 두고 네비게이션에서만 제외).
+      // 되살릴 때는 아래 두 줄과 CommandPalette·useKeyboardShortcuts·DashboardPage 의 같은 주석을 함께 푼다.
+      // { to: '/dashboard/emergency', labelKey: '대타 관리', icon: AlertTriangle, roles: ['DISPATCH'] },
+      // { to: '/dashboard/dayoff', labelKey: '휴무 요청', icon: CalendarOff, roles: ['DISPATCH', 'HR'] },
       { to: '/dashboard/today', labelKey: '오늘 운행 현황', icon: Bus, roles: ['DISPATCH'] },
       { to: '/dashboard/inspect', labelKey: '배차표 검산', icon: ShieldCheck, roles: ['DISPATCH'] },
     ],

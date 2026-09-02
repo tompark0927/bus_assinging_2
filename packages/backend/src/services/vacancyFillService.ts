@@ -1,4 +1,5 @@
 import { prisma } from '../utils/prisma';
+import { driverScopeFor } from '../utils/serviceType';
 import { ShiftType } from '@prisma/client';
 import { operatingCells } from './operatingPlanService';
 import logger from '../utils/logger';
@@ -52,7 +53,7 @@ export async function fillVacancies(
 ): Promise<VacancyFillResult> {
   const schedule = await prisma.schedule.findFirst({
     where: { id: scheduleId, companyId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, serviceType: true },
   });
   if (!schedule) throw new Error('배차표를 찾을 수 없습니다.');
   if (schedule.status !== 'DRAFT') {
@@ -66,7 +67,9 @@ export async function fillVacancies(
       select: { driverId: true, date: true, shift: true, busId: true },
     }),
     prisma.user.findMany({
-      where: { companyId, role: 'DRIVER', isActive: true },
+      // 공석은 이 배차표 종류의 기사로만 메운다 — 급하다고 지선 기사를
+      // 간선 칸에 넣으면 배차표가 조용히 뒤섞인다
+      where: { companyId, role: 'DRIVER', isActive: true, ...driverScopeFor(schedule.serviceType) },
       select: { id: true, name: true },
     }),
     prisma.bus.findMany({

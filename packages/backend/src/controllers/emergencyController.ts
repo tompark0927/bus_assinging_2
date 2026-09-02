@@ -7,6 +7,8 @@ import logger from '../utils/logger';
 import { parseIdParam } from '../utils/helpers';
 import { getPagination, paginatedResponse } from '../utils/pagination';
 import { emitToCompany } from '../services/socketService';
+import { wouldExceedWeeklyWork, filterEligibleDropsForDriver } from '../services/weeklyRestEligibility';
+import { loadCompanyPolicy } from '../services/solverDispatchService';
 
 export const getEmergencyDrops = async (req: AuthRequest, res: Response) => {
   try {
@@ -36,11 +38,19 @@ export const getEmergencyDrops = async (req: AuthRequest, res: Response) => {
       prisma.emergencyDrop.count({ where }),
     ]);
 
+    // 기사 앱: 본인 드랍 + 주휴일(근로기준법 제55조) 위반이 되는 대타는 목록에서 제외한다.
+    // 애초에 보이지 않아야 "수락했는데 거부당하는" 헛걸음이 없다.
+    // (관리자·배차 권한은 전체 현황을 봐야 하므로 필터하지 않음)
+    let visibleDrops = drops;
+    if (req.user!.role === 'DRIVER' && statusFilter === 'OPEN') {
+      visibleDrops = await filterEligibleDropsForDriver(req.user!.id, drops, req.user!.companyId);
+    }
+
     // agentEnabled: AI 충원 에이전트 활성 여부 — 웹에서 상태 배지를 정확히 표시하기 위함
     return res.json({
       success: true,
       agentEnabled: isEmergencyAgentEnabled(),
-      ...paginatedResponse(drops, total, pagination),
+      ...paginatedResponse(visibleDrops, total, pagination),
     });
   } catch (error) {
     logger.error(error);
@@ -98,7 +108,10 @@ export const createEmergencyDrop = async (req: AuthRequest, res: Response) => {
       prisma.emergencyDrop.create({
         data: {
           slotId,
-          driverId: req.user!.id,
+          // 드랍 기사 = 슬롯의 실제 주인 (요청자가 아님).
+          // 관리자가 다른 기사의 슬롯을 대신 드랍하면 req.user.id 는 관리자이므로
+          // 반드시 slot.driverId 를 써야 "드랍 기사" 필드가 올바르게 표시된다.
+          driverId: slot.driverId,
           reason,
           status: 'OPEN',
         },
@@ -218,8 +231,20 @@ export const acceptEmergencySlot = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Update drop + slot atomically with optimistic lock on status
+    // Update drop + slot atomically with optimistic lock on status.
+    // 주휴일(근로기준법 제55조) 가드는 **트랜잭션 안에서** 재검사한다 — 같은 주의
+    // 대타 여러 건을 동시에 수락해 상한을 넘기는 경쟁 조건을 원자적으로 막는다.
+    const dateISO = drop.slot.date.toISOString().slice(0, 10);
     const result = await prisma.$transaction(async (tx) => {
+      const rest = await wouldExceedWeeklyWork(tx, {
+        driverId: req.user!.id,
+        dateISO,
+        companyId: req.user!.companyId,
+        excludeSlotId: drop.slotId,
+      });
+      if (!rest.eligible) {
+        throw new Error('WEEKLY_REST_VIOLATION');
+      }
       const claimed = await tx.emergencyDrop.updateMany({
         where: { id: dropId, status: 'OPEN' },
         data: {
@@ -286,6 +311,13 @@ export const acceptEmergencySlot = async (req: AuthRequest, res: Response) => {
   } catch (error: unknown) {
     if (error instanceof Error && error.message === 'ALREADY_FILLED') {
       return res.status(409).json({ success: false, message: '이미 다른 기사님이 수락한 슬롯입니다.' });
+    }
+    if (error instanceof Error && error.message === 'WEEKLY_REST_VIOLATION') {
+      return res.status(409).json({
+        success: false,
+        code: 'WEEKLY_REST_VIOLATION',
+        message: '주휴일 보장(근로기준법 제55조)으로 이 날짜의 대타는 수락할 수 없습니다. 해당 주에 이미 최대 근무일에 도달했습니다.',
+      });
     }
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
@@ -393,7 +425,30 @@ export const getManualFillCandidates = async (req: AuthRequest, res: Response) =
       orderBy: { name: 'asc' },
     });
 
-    return res.json({ success: true, data: drivers });
+    // 각 후보에 주휴일(근로기준법 제55조) 위반 여부를 표시한다 — **제외하지 않는다.**
+    // 급한 결원은 사람이 판단해야 하므로, 관리자에게 사유를 보여주고 오버라이드
+    // 배정을 선택하게 한다. (admin-web EmergencyPage 가 이 필드로 배지를 그린다)
+    const dateISO = drop.slot.date.toISOString().slice(0, 10);
+    const policy = await loadCompanyPolicy(req.user!.companyId);
+    const withRest = await Promise.all(
+      drivers.map(async (d) => {
+        const rest = await wouldExceedWeeklyWork(prisma, {
+          driverId: d.id,
+          dateISO,
+          companyId: req.user!.companyId,
+          excludeSlotId: drop.slotId,
+          policy,
+        });
+        return {
+          ...d,
+          weeklyRestViolation: !rest.eligible,
+          weeklyWorkDays: rest.weeklyWorkDays,
+          maxWeeklyWorkDays: rest.maxDays,
+        };
+      }),
+    );
+
+    return res.json({ success: true, data: withRest });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
@@ -404,7 +459,11 @@ export const manualFillEmergency = async (req: AuthRequest, res: Response) => {
   try {
     const dropId = parseIdParam(req.params.id, res, '드랍 ID');
     if (dropId === null) return;
-    const { driverId } = req.body as { driverId?: number };
+    const { driverId, override, overrideReason } = req.body as {
+      driverId?: number;
+      override?: boolean;
+      overrideReason?: string;
+    };
     if (!driverId || typeof driverId !== 'number') {
       return res.status(400).json({ success: false, message: '기사 ID가 필요합니다.' });
     }
@@ -452,6 +511,27 @@ export const manualFillEmergency = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    // 주휴일(근로기준법 제55조) 검사 — 막지 않고 경고한다. 사유를 입력해야 강제 배정된다.
+    const dateISO = drop.slot.date.toISOString().slice(0, 10);
+    const rest = await wouldExceedWeeklyWork(prisma, {
+      driverId: candidate.id,
+      dateISO,
+      companyId: req.user!.companyId,
+      excludeSlotId: drop.slotId,
+    });
+    if (!rest.eligible && (override !== true || !overrideReason?.trim())) {
+      return res.status(409).json({
+        success: false,
+        code: 'WEEKLY_REST_OVERRIDE_REQUIRED',
+        requiresOverride: true,
+        weeklyWorkDays: rest.weeklyWorkDays,
+        maxWeeklyWorkDays: rest.maxDays,
+        message: `${candidate.name} 기사님은 해당 주에 이미 ${rest.weeklyWorkDays}일 근무 중입니다. 배정 시 주휴일(근로기준법 제55조)이 보장되지 않습니다. 강제 배정하려면 사유를 입력하세요.`,
+      });
+    }
+    /** 위반을 알고도 배정한 경우 — 슬롯에 사유를 남겨 감사 추적이 되게 한다 */
+    const isOverride = !rest.eligible && override === true;
+
     // 트랜잭션: drop FILLED + slot driver/status 업데이트
     const result = await prisma.$transaction(async (tx) => {
       const claimed = await tx.emergencyDrop.updateMany({
@@ -465,7 +545,16 @@ export const manualFillEmergency = async (req: AuthRequest, res: Response) => {
       if (claimed.count === 0) throw new Error('ALREADY_FILLED');
       await tx.scheduleSlot.update({
         where: { id: drop.slotId },
-        data: { driverId: candidate.id, status: 'FILLED' },
+        data: {
+          driverId: candidate.id,
+          status: 'FILLED',
+          ...(isOverride
+            ? {
+                isManualOverride: true,
+                overrideReason: `주휴일 초과 강제배정(주 ${rest.weeklyWorkDays}일): ${overrideReason!.trim()}`,
+              }
+            : {}),
+        },
       });
       return claimed;
     });
@@ -504,7 +593,10 @@ export const manualFillEmergency = async (req: AuthRequest, res: Response) => {
       manualAssign: true,
     });
 
-    logger.info(`[Emergency] 관리자 수동 충원 — drop=${dropId}, driver=${candidate.id} by admin=${req.user!.id}`);
+    logger.info(
+      `[Emergency] 관리자 수동 충원 — drop=${dropId}, driver=${candidate.id} by admin=${req.user!.id}` +
+        (isOverride ? ` [주휴일 초과 강제배정: 주 ${rest.weeklyWorkDays}일, 사유="${overrideReason?.trim()}"]` : ''),
+    );
 
     return res.json({
       success: true,

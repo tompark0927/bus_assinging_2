@@ -15,12 +15,12 @@ const DEMO = {
 
 async function login(page: import('@playwright/test').Page) {
   await page.goto('/login');
-  await page.getByLabel(/회사 코드/).clear();
-  await page.getByLabel(/회사 코드/).fill(DEMO.companyCode);
-  await page.getByLabel(/이메일/).clear();
-  await page.getByLabel(/이메일/).fill(DEMO.email);
-  await page.getByLabel(/비밀번호/).clear();
-  await page.getByLabel(/비밀번호/).fill(DEMO.password);
+  await page.getByLabel('회사 코드', { exact: true }).clear();
+  await page.getByLabel('회사 코드', { exact: true }).fill(DEMO.companyCode);
+  await page.getByLabel('이메일', { exact: true }).clear();
+  await page.getByLabel('이메일', { exact: true }).fill(DEMO.email);
+  await page.getByLabel('비밀번호', { exact: true }).clear();
+  await page.getByLabel('비밀번호', { exact: true }).fill(DEMO.password);
   await page.getByRole('button', { name: /로그인/ }).click();
   await page.waitForURL(/dashboard/, { timeout: 10000 });
 }

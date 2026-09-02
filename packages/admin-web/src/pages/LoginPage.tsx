@@ -75,8 +75,9 @@ export default function LoginPage() {
               </div>
             )}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">회사 코드</label>
+              <label htmlFor="login-company-code" className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">회사 코드</label>
               <input
+                id="login-company-code"
                 type="text"
                 value={companyCode}
                 onChange={(e) => setCompanyCode(e.target.value)}
@@ -86,8 +87,9 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">이메일</label>
+              <label htmlFor="login-email" className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">이메일</label>
               <input
+                id="login-email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -97,9 +99,10 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">비밀번호</label>
+              <label htmlFor="login-password" className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">비밀번호</label>
               <div className="relative">
                 <input
+                  id="login-password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}

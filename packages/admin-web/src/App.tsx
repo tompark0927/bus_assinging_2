@@ -17,6 +17,7 @@ const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 // 요금제 페이지는 기능 준비 중이라 임시 숨김 (추후 복구) — 라우트/링크도 함께 비활성화됨
 // const PricingPage = lazy(() => import('./pages/PricingPage'));
 const SupportPage = lazy(() => import('./pages/SupportPage'));
+const LaborPage = lazy(() => import('./pages/LaborPage'));
 const TermsPage = lazy(() => import('./pages/TermsPage'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
 const AccountDeletionPage = lazy(() => import('./pages/AccountDeletionPage'));
@@ -69,6 +70,7 @@ export default function App() {
             >
               <Route index element={<Suspense fallback={<PageLoadingFallback />}><DashboardPage /></Suspense>} />
               <Route path="schedule" element={<Suspense fallback={<PageLoadingFallback />}><SchedulePage /></Suspense>} />
+              <Route path="labor" element={<Suspense fallback={<PageLoadingFallback />}><LaborPage /></Suspense>} />
               <Route path="dayoff" element={<Suspense fallback={<PageLoadingFallback />}><DayOffPage /></Suspense>} />
               <Route path="emergency" element={<Suspense fallback={<PageLoadingFallback />}><EmergencyPage /></Suspense>} />
               <Route path="daily-reports" element={<Suspense fallback={<PageLoadingFallback />}><DailyReportsPage /></Suspense>} />

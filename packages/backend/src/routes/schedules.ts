@@ -12,6 +12,7 @@ import {
   getAIRecommendations,
   bisExport,
   getMyMonthlySummary,
+  getMergedMonthSchedule,
   listMonthSchedules,
   duplicateSchedule,
   renameSchedule,
@@ -31,6 +32,14 @@ import logger from '../utils/logger';
 import { prisma } from '../utils/prisma';
 import { scheduleValidation } from '../middleware/validate';
 import { computeManpowerPlan } from '../services/manpowerService';
+import { parseServiceType, serviceTypeLabel } from '../utils/serviceType';
+import { monthScheduleAsCells, routeOperatingCounts } from '../services/scheduleToCellsService';
+import { loadEnginePolicy } from '../services/enginePolicyStore';
+import { mergeEnginePolicy } from '../services/enginePolicyMapper';
+import { loadCompanyPolicy } from '../services/solverDispatchService';
+import { approvedLeavesByName } from './engine';
+import { ensureBaseFrameSchedule, fillBaseFrameWindow } from '../services/baseFrameService';
+import { fillSpareSlots } from '../services/fillSpareSlotsService';
 
 const router = Router();
 
@@ -90,6 +99,18 @@ router.get('/', getScheduleList);
  */
 router.get('/:year/:month', ...scheduleValidation.getSchedule, getSchedule);
 router.get('/:year/:month/summary', ...scheduleValidation.getSchedule, getMyMonthlySummary);
+
+/**
+ * @swagger
+ * /schedules/{year}/{month}/merged:
+ *   get:
+ *     summary: 월 배차표 통합 조회 (간선·지선·광역 합침)
+ *     description: >
+ *       대시보드·오늘 운행 현황용. 노선 종류별 대표 배차표(발행본 우선 → 최근 초안)를
+ *       골라 슬롯을 하나로 합쳐 돌려준다. ?publishedOnly=1 이면 발행본만.
+ *     tags: [Schedules]
+ */
+router.get('/:year/:month/merged', requireRole('DISPATCH'), ...scheduleValidation.getSchedule, getMergedMonthSchedule);
 // 멀티 초안: 해당 월의 모든 배차표(초안 프로필 + 발행본) 목록
 router.get('/:year/:month/drafts', requireRole('DISPATCH'), ...scheduleValidation.getSchedule, listMonthSchedules);
 // 멀티 초안: 배차표 복제 (새 초안 프로필로)
@@ -159,7 +180,7 @@ router.post(
       const { generateMonthlyScheduleV2 } = await import(
         '../services/solverDispatchService'
       );
-      const { year, month, name, workDays, restDays, newHireDriverIds, blockedRoutes } = req.body as {
+      const { year, month, name, workDays, restDays, newHireDriverIds, blockedRoutes, serviceType } = req.body as {
         year: number;
         month: number;
         /** 초안 프로필 이름 (선택) — 미지정 시 "초안 N" 자동 부여 */
@@ -169,6 +190,8 @@ router.post(
         restDays?: number;
         newHireDriverIds?: number[];
         blockedRoutes?: { routeId: number; driverIds: number[] }[];
+        /** 간선(TRUNK)/지선(BRANCH)/광역(WIDE_AREA) — 미지정 시 구분 없음(전체) */
+        serviceType?: string;
       };
       if (!year || !month || month < 1 || month > 12) {
         return res
@@ -193,6 +216,7 @@ router.post(
             : undefined,
         newHireDriverIds: Array.isArray(newHireDriverIds) ? newHireDriverIds : undefined,
         blockedRoutes: Array.isArray(blockedRoutes) ? blockedRoutes : undefined,
+        serviceType: parseServiceType(serviceType),
       });
       return res.status(201).json({
         scheduleId: result.scheduleId,
@@ -237,14 +261,225 @@ router.post(
  *       매칭 실패 항목은 unmatched로 전부 돌려준다.
  *     tags: [Schedules]
  */
+/**
+ * @swagger
+ * /schedules/generate-from-previous:
+ *   post:
+ *     summary: 지난달 배차표로 이번 달 짜기 (파일 업로드 없이)
+ *     description: >
+ *       지난달 배차표는 이미 DB 에 있고 순번(SchedulePattern)까지 저장돼 있다.
+ *       내보내기 → 다시 업로드라는 왕복은 그 과정에서 순번을 잃어 "로테이션
+ *       추론 실패"를 만든다. DB 에서 직접 읽어 엔진에 넘긴다.
+ *     tags: [Schedules]
+ */
+router.post('/generate-from-previous', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  const engineUrl = process.env.ENGINE_URL;
+  if (!engineUrl) {
+    return res.status(503).json({ success: false, message: '배차 엔진이 설정되지 않았습니다 (ENGINE_URL 미설정).' });
+  }
+  try {
+    const body = (req.body ?? {}) as {
+      year?: number; month?: number; withSpares?: boolean; serviceType?: string;
+    };
+    const year = Number(body.year);
+    const month = Number(body.month);
+    const withSpares = !!body.withSpares;
+    const serviceType = parseServiceType(body.serviceType);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+      return res.status(400).json({ success: false, message: 'year/month 가 필요합니다.' });
+    }
+    const companyId = req.user!.companyId;
+
+    // 직전 달 (1월이면 전년 12월)
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevMonth = month === 1 ? 12 : month - 1;
+
+    const prev = await monthScheduleAsCells(companyId, prevYear, prevMonth, serviceType);
+    if (!prev || prev.dateCount === 0) {
+      const label = serviceType ? `${serviceTypeLabel(serviceType)} ` : '';
+      return res.status(422).json({
+        success: false,
+        message:
+          `${prevYear}년 ${prevMonth}월 ${label}배차표가 없어 이어받을 수 없습니다. ` +
+          '먼저 지난달 배차표를 만들거나, 지난달이 담긴 엑셀을 올려 생성해 주세요.',
+      });
+    }
+
+    const [enginePolicy, companyPolicy, leaves, operatingCounts] = await Promise.all([
+      loadEnginePolicy(companyId),
+      loadCompanyPolicy(companyId),
+      approvedLeavesByName(companyId, year, month),
+      routeOperatingCounts(companyId, serviceType),
+    ]);
+
+    const upstream = await fetch(`${engineUrl}/generate-from-cells`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-company-id': String(companyId) },
+      body: JSON.stringify({
+        year, month,
+        history: [{ year: prev.year, month: prev.month, cells: prev.cells, groups: prev.groups }],
+        policy: mergeEnginePolicy(enginePolicy, companyPolicy),
+        leaves,
+        // 요일별 운행 대수는 기초 데이터의 등록값이 진실이다 (지난달 실적 추론보다 정확)
+        operating_counts: operatingCounts,
+        // 기본 틀만 만든다 — 메인(정·부)만 깔고 **스페어 칸은 비운다**.
+        // 담당자가 직접 채우거나 [스페어 자동 채우기]로 맡기거나 고르게 하는 게
+        // 이 제품의 흐름이다. 엔진이 처음부터 다 채워 버리면 고를 여지가 없다.
+        // withSpares=true 를 명시하면 예전처럼 한 번에 다 채운다.
+        mains_only: !withSpares,
+      }),
+    });
+    const text = await upstream.text();
+    if (!upstream.ok) {
+      let detail = text;
+      try { detail = JSON.parse(text).detail ?? text; } catch { /* 원문 사용 */ }
+      return res.status(upstream.status === 422 ? 422 : 502).json({ success: false, message: String(detail) });
+    }
+    const data = JSON.parse(text);
+
+    // 순번이 없으면 엔진이 '차량 순서대로 새로 시작' 한다 — 담당자가 그 사실을
+    // 알아야 게시 전에 순번을 확인한다
+    return res.json({
+      success: true,
+      data: {
+        ...data,
+        source: {
+          scheduleId: prev.scheduleId,
+          year: prev.year,
+          month: prev.month,
+          hasSlotPatterns: prev.hasSlotPatterns,
+          vehicles: prev.vehicleCount,
+          dates: prev.dateCount,
+          filledCells: prev.filledCells,
+        },
+      },
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`[schedules/generate-from-previous] ${msg}`);
+    return res.status(502).json({
+      success: false,
+      message: `배차 엔진에 연결하지 못했습니다: ${msg}`,
+    });
+  }
+});
+
+/**
+ * 기본 틀을 지금 깔아 달라 — 담당자가 기다리지 않고 바로 받는 경로.
+ *
+ * 평소에는 하루 1회 틱(`tickBaseFrames`)이 앞으로 12개월치를 유지한다.
+ * 이 엔드포인트는 방금 기초 데이터를 고쳤거나 첫 도입일 때 쓴다.
+ *
+ * body: { year?, month?, months?, serviceType? }
+ *   year/month 를 주면 그 달 하나만, 안 주면 이번 달부터 months 개월치.
+ */
+router.post('/base-frame', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  const companyId = req.user!.companyId;
+  const createdBy = req.user!.id;
+  const { year, month, months } = (req.body ?? {}) as {
+    year?: number; month?: number; months?: number;
+  };
+  const serviceType = parseServiceType((req.body as { serviceType?: string })?.serviceType);
+
+  try {
+    if (Number.isInteger(year) && Number.isInteger(month)) {
+      const r = await ensureBaseFrameSchedule(
+        companyId, createdBy, year as number, month as number, serviceType,
+      );
+      return res.json({ success: true, data: { results: [r] } });
+    }
+    const now = new Date();
+    const results = await fillBaseFrameWindow(
+      companyId, createdBy,
+      { year: now.getFullYear(), month: now.getMonth() + 1 },
+      Number.isInteger(months) ? (months as number) : undefined,
+    );
+    return res.json({ success: true, data: { results } });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`[schedules/base-frame] ${msg}`);
+    return res.status(502).json({ success: false, message: `기본 틀 생성에 실패했습니다: ${msg}` });
+  }
+});
+
+/**
+ * 스페어 자리를 자동으로 채운다 — 담당자가 직접 채우는 대신 맡기는 버튼.
+ *
+ * 배차표 생성은 **메인만 깔린 기본 틀**을 만든다(스페어 칸은 비어 있다).
+ * 담당자는 그 위에서 직접 채우거나, 이 버튼으로 맡기거나 고를 수 있다.
+ *
+ * 지금 보고 있는 초안에 그대로 적용한다 — 이름이 무엇이든 상관없다.
+ * (예전에는 '기본 틀' 이라는 이름의 초안만 대상이라, 담당자가 만든 초안에서
+ *  버튼을 눌러도 엉뚱한 초안이 바뀌었다)
+ *
+ * **빈 칸에만 넣는다.** 예전에는 초안을 통째로 지우고 다시 만들었는데, 그때
+ * 담당자가 직접 고친 칸과 수동 감차 표기가 같이 사라졌다. 지금은 삭제가 없다 —
+ * 이미 채워진 칸, 감차로 세워 둔 차, 그날 이미 다른 자리에 있는 기사는 전부
+ * 건너뛰고 몇 칸을 왜 건너뛰었는지 메시지로 돌려준다.
+ *
+ * 채울 때 안전 규칙은 그대로 지킨다 — 이중 배정·연속근무 상한·오후 다음날
+ * 오전 금지. 규칙을 어겨야만 채울 수 있는 칸은 비워둔 채 보고한다.
+ */
+router.post('/by-id/:id/fill-spares', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
+  const companyId = req.user!.companyId;
+  const scheduleId = Number(req.params.id);
+  if (!Number.isInteger(scheduleId)) {
+    return res.status(400).json({ success: false, message: '배차표 id 가 올바르지 않습니다.' });
+  }
+  try {
+    const target = await prisma.schedule.findFirst({
+      where: { id: scheduleId, companyId },
+      select: { year: true, month: true, name: true, serviceType: true, status: true },
+    });
+    if (!target) {
+      return res.status(404).json({ success: false, message: '배차표를 찾을 수 없습니다.' });
+    }
+    if (target.status !== 'DRAFT') {
+      return res.status(422).json({
+        success: false,
+        message: '초안에서만 스페어를 채울 수 있습니다. 발행본은 수정하지 않습니다.',
+      });
+    }
+
+    // **빈 칸에만** 넣는다. 초안을 다시 만들지 않는다 — 예전에는 통째로
+    // 지우고 새로 만들어서 담당자가 직접 고친 칸과 수동 감차 표기가 함께
+    // 사라졌다. 엔진이 만든 배차표는 답안지로만 쓴다.
+    const r = await fillSpareSlots(companyId, scheduleId);
+
+    const bits = [`빈 칸 ${r.filled}개를 채웠습니다`];
+    if (r.keptOccupied > 0) bits.push(`이미 배정된 ${r.keptOccupied}칸은 그대로 두었습니다`);
+    if (r.skippedDoubleBooked > 0) {
+      bits.push(`그날 이미 다른 자리에 있는 기사 ${r.skippedDoubleBooked}칸은 건너뛰었습니다`);
+    }
+    if (r.skippedVehicleOff > 0) {
+      bits.push(`감차로 세워 두신 차 ${r.skippedVehicleOff}칸은 넣지 않았습니다`);
+    }
+    if (r.unregisteredNames.length > 0) {
+      const names = r.unregisteredNames.slice(0, 3).join(', ');
+      bits.push(
+        `기초 데이터에서 못 찾은 이름 ${r.unregisteredNames.length}명(${names}` +
+          `${r.unregisteredNames.length > 3 ? ' 외' : ''})은 넣지 못했습니다`,
+      );
+    }
+    if (r.remainingEmpty > 0) bits.push(`아직 빈 칸이 ${r.remainingEmpty}개 남았습니다`);
+
+    return res.json({ success: true, data: r, message: `${bits.join('. ')}.` });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`[schedules/fill-spares] ${msg}`);
+    return res.status(422).json({ success: false, message: msg });
+  }
+});
+
 router.post('/from-engine', requireRole('DISPATCH'), async (req: AuthRequest, res) => {
   try {
-    const { year, month, name, cells, confirmOverwrite, confirmMismatch } = req.body ?? {};
+    const { year, month, name, cells, confirmOverwrite, confirmMismatch, serviceType } = req.body ?? {};
     if (!Number.isInteger(year) || !Number.isInteger(month) || !cells || typeof cells !== 'object') {
       return res.status(400).json({ success: false, message: 'year, month, cells 가 필요합니다.' });
     }
     const result = await saveEngineDraft(req.user!.companyId, req.user!.id, {
       year, month, name, cells,
+      serviceType: parseServiceType(serviceType),
       confirmOverwrite: confirmOverwrite === true,
       confirmMismatch: confirmMismatch === true,
     });
@@ -295,7 +530,11 @@ router.get('/:year/:month/manpower', requireRole('DISPATCH'), async (req: AuthRe
     if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
       return res.status(400).json({ success: false, message: '연도·월이 올바르지 않습니다.' });
     }
-    const plan = await computeManpowerPlan(req.user!.companyId, year, month);
+    // 배차표 관리의 노선 종류 탭에서 부른다 — 그 종류의 인력만 계산해야
+    // 종류별 과부족이 상쇄되지 않는다
+    const plan = await computeManpowerPlan(
+      req.user!.companyId, year, month, parseServiceType(req.query.serviceType),
+    );
     return res.json({ success: true, data: plan });
   } catch (error) {
     logger.error(`[schedules/manpower] ${error}`);
@@ -414,7 +653,7 @@ router.post('/by-id/:id/rematch-drivers', requireRole('DISPATCH'), async (req: A
  * @swagger
  * /schedules/by-id/{id}/cell-explain:
  *   get:
- *     summary: "왜 이 기사가 이 칸인가" — 저장된 배차표에서 배정 근거 재구성
+ *     summary: '"왜 이 기사가 이 칸인가" — 저장된 배차표에서 배정 근거 재구성'
  *     description: 엔진 초안이 사라진 뒤에도, 담당자가 손으로 고친 칸까지 설명한다.
  *     tags: [Schedules]
  */

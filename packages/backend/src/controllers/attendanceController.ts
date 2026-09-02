@@ -110,9 +110,12 @@ export const getWeeklyHoursAnalysis = async (req: AuthRequest, res: Response) =>
     const startDate = new Date(Number(year), Number(month) - 1, 1);
     const endDate = new Date(Number(year), Number(month), 0);
 
+    // 주 52시간 판정은 **실제로 확정된 근무**만 세야 한다. 초안까지 합치면
+    // 같은 달 초안이 2~3개일 때 근무시간이 그 배수로 뻥튀기돼 허위 초과 경고가
+    // 뜬다. (종류별 발행본끼리는 서로 다른 슬롯이라 합산이 맞다)
     const slots = await prisma.scheduleSlot.findMany({
       where: {
-        schedule: { companyId },
+        schedule: { companyId, status: 'PUBLISHED' },
         date: { gte: startDate, lte: endDate },
         isRestDay: false,
       },

@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "8be839b4-6067-43db-8e5b-c9216857744e"
+      }
+    },
+    "android": {
+      "package": "com.junejinho.busync"
+    }
+  }
+}

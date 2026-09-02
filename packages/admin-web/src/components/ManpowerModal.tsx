@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Users, X } from 'lucide-react';
-import { schedulesApi } from '../services/api';
+import { schedulesApi, type ScheduleServiceType } from '../services/api';
 
 /**
  * 인력 계산 — "이 배차를 돌리려면 몇 명이 필요한가".
@@ -41,14 +41,18 @@ interface ManpowerPlan {
 interface Props {
   year: number;
   month: number;
+  /** 배차표 관리의 노선 종류 탭 — 그 종류의 인력만 계산한다 */
+  serviceType?: ScheduleServiceType;
   onClose: () => void;
 }
 
-export default function ManpowerModal({ year, month, onClose }: Props) {
+export default function ManpowerModal({ year, month, serviceType, onClose }: Props) {
   const { data, isLoading, error } = useQuery({
-    queryKey: ['manpower', year, month],
+    // 종류를 안 넘기면 회사 전체 숫자가 나와, 간선 10명 부족 + 지선 10명 남음이
+    // 상쇄돼 '적정'으로 보인다.
+    queryKey: ['manpower', year, month, serviceType],
     queryFn: async () => {
-      const res = await schedulesApi.manpower(year, month);
+      const res = await schedulesApi.manpower(year, month, serviceType);
       return res.data.data as ManpowerPlan;
     },
   });

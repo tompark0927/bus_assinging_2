@@ -156,12 +156,16 @@ describe('getSchedule controller', () => {
       id: 1, year: 2026, month: 3, status: 'PUBLISHED',
       slots: [{ id: 100, driverId: 10, date: new Date('2026-03-01') }],
     };
-    mockPrisma.schedule.findFirst.mockResolvedValue(scheduleData);
+    // 간선·지선·광역이 각각 따로 발행되므로 그 달 발행본은 여러 개일 수 있다.
+    // 내 슬롯이 들어 있는 배차표를 골라야 한다 — 첫 번째를 무조건 집으면
+    // 다른 종류의 빈 배차표가 기사 화면에 뜬다.
+    const otherType = { id: 2, year: 2026, month: 3, status: 'PUBLISHED', slots: [] };
+    mockPrisma.schedule.findMany.mockResolvedValue([otherType, scheduleData]);
 
     await getSchedule(req, res);
 
     // 기사에게는 발행본(PUBLISHED)만, 본인 슬롯만 노출
-    expect(mockPrisma.schedule.findFirst).toHaveBeenCalledWith(
+    expect(mockPrisma.schedule.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { companyId: 1, year: 2026, month: 3, status: 'PUBLISHED' },
         include: expect.objectContaining({
@@ -174,6 +178,32 @@ describe('getSchedule controller', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: scheduleData });
   });
 
+  it('merges the driver\'s slots across every published schedule of the month', async () => {
+    // 월 중 간선→지선으로 옮겼거나 옛 '전체' 발행본이 남아 있으면 한 기사가
+    // 두 발행본에 걸친다. 하나만 골라 주면 나머지 근무일이 기사 앱에서 통째로
+    // 사라지고, 기사는 "그 뒤로 배차가 없네" 하고 출근하지 않는다.
+    const req = createAuthReq({
+      params: { year: '2026', month: '3' },
+      user: { id: 10, companyId: 1, email: 'driver@test.busync.kr', role: 'DRIVER', name: '김기사' },
+    } as any);
+    const res = createMockRes();
+
+    const early = { id: 1, serviceType: 'TRUNK', status: 'PUBLISHED', slots: [
+      { id: 100, driverId: 10, date: new Date('2026-03-20') },
+      { id: 101, driverId: 10, date: new Date('2026-03-02') },
+    ] };
+    const late = { id: 2, serviceType: 'BRANCH', status: 'PUBLISHED', slots: [
+      { id: 102, driverId: 10, date: new Date('2026-03-11') },
+    ] };
+    mockPrisma.schedule.findMany.mockResolvedValue([early, late]);
+
+    await getSchedule(req, res);
+
+    const sent = (res.json as jest.Mock).mock.calls[0][0].data;
+    // 두 배차표의 슬롯이 모두, 날짜순으로 들어온다
+    expect(sent.slots.map((s: { id: number }) => s.id)).toEqual([101, 102, 100]);
+  });
+
   it('should return null data when no published schedule exists (DRIVER)', async () => {
     const req = createAuthReq({
       params: { year: '2025', month: '1' },
@@ -181,7 +211,7 @@ describe('getSchedule controller', () => {
     } as any);
     const res = createMockRes();
 
-    mockPrisma.schedule.findFirst.mockResolvedValue(null);
+    mockPrisma.schedule.findMany.mockResolvedValue([]);
 
     await getSchedule(req, res);
 
@@ -196,7 +226,8 @@ describe('getSchedule controller', () => {
 
     await getSchedule(req, res);
 
-    expect(getScheduleWithSlots).toHaveBeenCalledWith(1, 2026, 3, 7);
+    // 5번째 인자 = 노선 종류 탭. 미지정이면 '전체'(구분 없음) 버킷(null)
+    expect(getScheduleWithSlots).toHaveBeenCalledWith(1, 2026, 3, 7, null);
   });
 
   it('should return 500 on error', async () => {
@@ -267,7 +298,7 @@ describe('generateSchedule controller', () => {
 
     await generateSchedule(req, res);
 
-    expect(generateMonthlySchedule).toHaveBeenCalledWith(1, 2026, 4, 1, { workDays: 4, restDays: 1 });
+    expect(generateMonthlySchedule).toHaveBeenCalledWith(1, 2026, 4, 1, { workDays: 4, restDays: 1, serviceType: null });
   });
 
   it('should return 400 when service throws known error', async () => {
@@ -319,10 +350,11 @@ describe('publishSchedule controller', () => {
 
     await publishSchedule(req, res);
 
-    // scheduleId 미지정 → 최근 DRAFT 를 updatedAt 내림차순으로 조회
+    // scheduleId 미지정 → 그 탭(노선 종류)의 최근 DRAFT 를 updatedAt 내림차순으로 조회.
+    // serviceType 미지정이면 '전체'(구분 없음) 버킷 = null
     expect(mockPrisma.schedule.findFirst).toHaveBeenNthCalledWith(1,
       expect.objectContaining({
-        where: { companyId: 1, year: 2026, month: 3, status: 'DRAFT' },
+        where: { companyId: 1, year: 2026, month: 3, serviceType: null, status: 'DRAFT' },
         orderBy: { updatedAt: 'desc' },
       }),
     );
@@ -698,7 +730,8 @@ describe('deleteSchedule controller', () => {
 
     await deleteSchedule(req, res);
 
-    expect(resolveMonthScheduleId).toHaveBeenCalledWith(1, 2026, 4, 7);
+    // 5번째 인자 = 노선 종류 탭 (미지정 → '전체' 버킷 null)
+    expect(resolveMonthScheduleId).toHaveBeenCalledWith(1, 2026, 4, 7, null);
     expect(mockPrisma.schedule.delete).toHaveBeenCalledWith({ where: { id: 7 } });
   });
 
@@ -906,17 +939,27 @@ describe('getMyMonthlySummary controller', () => {
     const req = driverReq('2026', '5');
     const res = createMockRes();
 
-    mockPrisma.schedule.findFirst.mockResolvedValue({
-      id: 1,
-      year: 2026,
-      month: 5,
-      slots: [
-        { isRestDay: false, status: 'SCHEDULED' }, // work
-        { isRestDay: false, status: 'FILLED' },     // work
-        { isRestDay: true, status: 'SCHEDULED' },   // rest
-        { isRestDay: false, status: 'DROPPED' },     // rest (merged)
-      ],
-    });
+    // 간선·지선이 따로 발행되면 그 달 발행본이 여러 개 — 전부 합산해야 한다
+    mockPrisma.schedule.findMany.mockResolvedValue([
+      {
+        id: 1,
+        year: 2026,
+        month: 5,
+        slots: [
+          { isRestDay: false, status: 'SCHEDULED' }, // work
+          { isRestDay: false, status: 'FILLED' },     // work
+          { isRestDay: true, status: 'SCHEDULED' },   // rest
+        ],
+      },
+      {
+        id: 2,
+        year: 2026,
+        month: 5,
+        slots: [
+          { isRestDay: false, status: 'DROPPED' },     // rest (merged)
+        ],
+      },
+    ]);
     mockPrisma.emergencyDrop.count.mockResolvedValue(2);
 
     await getMyMonthlySummary(req, res);
@@ -931,7 +974,7 @@ describe('getMyMonthlySummary controller', () => {
     const req = driverReq('2026', '7');
     const res = createMockRes();
 
-    mockPrisma.schedule.findFirst.mockResolvedValue(null);
+    mockPrisma.schedule.findMany.mockResolvedValue([]);
     mockPrisma.emergencyDrop.count.mockResolvedValue(0);
 
     await getMyMonthlySummary(req, res);
@@ -946,7 +989,7 @@ describe('getMyMonthlySummary controller', () => {
     const req = driverReq('2026', '5');
     const res = createMockRes();
 
-    mockPrisma.schedule.findFirst.mockResolvedValue({ id: 1, year: 2026, month: 5, slots: [] });
+    mockPrisma.schedule.findMany.mockResolvedValue([{ id: 1, year: 2026, month: 5, slots: [] }]);
     mockPrisma.emergencyDrop.count.mockResolvedValue(3);
 
     await getMyMonthlySummary(req, res);
@@ -964,7 +1007,7 @@ describe('getMyMonthlySummary controller', () => {
     const req = driverReq('2026', '5');
     const res = createMockRes();
 
-    mockPrisma.schedule.findFirst.mockRejectedValue(new Error('DB error'));
+    mockPrisma.schedule.findMany.mockRejectedValue(new Error('DB error'));
 
     await getMyMonthlySummary(req, res);
 

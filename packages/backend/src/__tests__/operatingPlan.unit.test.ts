@@ -8,6 +8,20 @@
 
 jest.mock('../utils/prisma');
 
+// 회사가 고른 공휴일 — 기본은 "확정 전"(카탈로그 그대로).
+// 개별 테스트에서 mockAppliedHolidays 를 바꿔 회사 선택을 흉내낸다.
+let mockAppliedHolidays: ((year: number, month: number) => Map<string, string>) | null = null;
+jest.mock('../services/holidayPolicyService', () => {
+  const real = jest.requireActual('../utils/holidays');
+  return {
+    getAppliedHolidaysForMonth: jest.fn(async (_companyId: number, year: number, month: number) =>
+      mockAppliedHolidays
+        ? mockAppliedHolidays(year, month)
+        : real.getHolidaysForMonth(year, month),
+    ),
+  };
+});
+
 import { prisma } from '../utils/prisma';
 import {
   buildOperatingPlan,
@@ -62,7 +76,10 @@ describe('countForDate — 그날 몇 대가 나가나', () => {
 });
 
 describe('buildOperatingPlan', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockAppliedHolidays = null;
+  });
 
   const 성민 = () => [
     route(1, '16', 14, { weekdayBuses: 12, saturdayBuses: 11, holidayBuses: 10 }),
@@ -79,6 +96,20 @@ describe('buildOperatingPlan', () => {
     // 만큼 더 나온다. 2026년 이후 실사용 구간에서는 이 격차가 없다.
     expect(plan.totalCells).toBe(2112 + 24);
     expect(plan.unconfigured).toBe(false);
+  });
+
+  it('회사가 감차하지 않기로 한 공휴일은 평일 대수로 계산한다', async () => {
+    // 근로자의 날(2026-05-01, 금)을 넣었을 때와 뺐을 때의 차이를 본다.
+    mockPrisma.route.findMany.mockResolvedValue(성민());
+    mockAppliedHolidays = () => new Map([['2026-05-01', '근로자의 날']]);
+    const withHoliday = await buildOperatingPlan(1, 2026, 5);
+
+    mockPrisma.route.findMany.mockResolvedValue(성민());
+    mockAppliedHolidays = () => new Map();
+    const withoutHoliday = await buildOperatingPlan(1, 2026, 5);
+
+    // 휴일 10대 → 평일 12대, 3노선 × 2대 × 2교대 = 12칸 차이
+    expect(withoutHoliday.totalCells - withHoliday.totalCells).toBe(12);
   });
 
   it('공휴일은 일요일과 같은 대수로 계산한다 (2026 설날 연휴)', async () => {

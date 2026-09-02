@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { prisma } from '../utils/prisma';
+import { serviceTypeLabel } from '../utils/serviceType';
 
 /**
  * 일일배차표(게시용) 엑셀 출력 — 현장이 실제로 붙이는 그 종이.
@@ -36,7 +37,7 @@ export async function buildDailyPostingXlsx(
 ): Promise<{ buffer: Buffer; filename: string }> {
   const schedule = await prisma.schedule.findFirst({
     where: { id: scheduleId, companyId },
-    select: { id: true, year: true, month: true, notes: true },
+    select: { id: true, year: true, month: true, notes: true, serviceType: true },
   });
   if (!schedule) throw new Error('배차표를 찾을 수 없습니다.');
 
@@ -110,12 +111,17 @@ export async function buildDailyPostingXlsx(
 
   // ── 엑셀 그리기 ──
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet(dateStr, {
+  const typeTag = schedule.serviceType ? serviceTypeLabel(schedule.serviceType) : '';
+  const ws = wb.addWorksheet(typeTag ? `${dateStr} ${typeTag}` : dateStr, {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
 
   const d = new Date(`${dateStr}T00:00:00`);
-  ws.getCell(1, 1).value = `${dateStr} (${WEEKDAY_KO[d.getDay()]})`;
+  // 종류를 함께 찍는다 — 같은 날 간선·지선 두 장을 뽑으면 종이 위에서 구별할
+  // 방법이 날짜밖에 없다. 잘못된 장을 차고지에 붙이면 그날이 통째로 어긋난다.
+  ws.getCell(1, 1).value = typeTag
+    ? `${dateStr} (${WEEKDAY_KO[d.getDay()]}) · ${typeTag}`
+    : `${dateStr} (${WEEKDAY_KO[d.getDay()]})`;
   ws.getCell(1, 1).font = { bold: true, size: 14 };
 
   const thin = { style: 'thin' as const };
@@ -168,5 +174,5 @@ export async function buildDailyPostingXlsx(
   });
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-  return { buffer, filename: `일일배차표_${dateStr}.xlsx` };
+  return { buffer, filename: `일일배차표_${dateStr}${typeTag ? `_${typeTag}` : ''}.xlsx` };
 }

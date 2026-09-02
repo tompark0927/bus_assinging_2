@@ -141,9 +141,26 @@ def replay_underlying(
         if len(slot_map(roster, group, d)) == group.size:
             start = d
             break
-    if start is None:
-        return {}
-    out: dict[dt.date, dict[str, int]] = {start: slot_map(roster, group, start)}
+    if start is not None:
+        base = slot_map(roster, group, start)
+    else:
+        # 전 차량이 순번을 가진 날이 **하루도 없는** 회사가 있다. 성민 실측이
+        # 그렇다: 노선당 등록 14대인데 평일 12·토 11·휴일 10대만 나가므로
+        # 전면운행일이 0일이다. 예전에는 여기서 {} 를 돌려줬고, 그러면
+        # 감차 모델 추론이 통째로 비어 다음 달이 '전 차량 매일 운행'으로
+        # 짜였다(슬롯 20%↑ → 인력 부족 → 짝궁 상보까지 포기).
+        #
+        # 관측이 가장 많은 날에서 출발하고, 그날 빠진 차량에는 쓰이지 않은
+        # 순번을 차번순으로 채워 완전한 매핑을 만든다. 로테이션은 감차와
+        # 무관하게 매일 돌기 때문에 언더라잉은 전 차량이 갖는 게 맞다.
+        start = max(dates, key=lambda d: len(slot_map(roster, group, d)))
+        base = dict(slot_map(roster, group, start))
+        used = set(base.values())
+        free = [s for s in range(1, group.size + 1) if s not in used]
+        for v in group.vehicles:
+            if v not in base and free:
+                base[v] = free.pop(0)
+    out: dict[dt.date, dict[str, int]] = {start: dict(base)}
     cur = dict(out[start])
     d = start
     while d < dates[-1]:
@@ -256,8 +273,25 @@ def infer_reduction_model(
                 pointer_start=s0,
             )
             return cfg, display, inferred_holidays, p
-    # 적합 실패 — 빈 설정 반환 (담당자 확인 필요)
-    return GroupReductionConfig(), display, inferred_holidays, 0
+    # 적합 실패 — 어느 차를 세우는지는 못 읽었지만 **몇 대를 세우는지**는
+    # 확실히 안다. 그것마저 버리면 다음 달이 '전 차량 매일 운행'으로 짜여
+    # 슬롯이 20% 넘게 부풀고, 인력이 모자란 것처럼 되어 솔버가 밴드를
+    # 완화하면서 짝궁 상보(같은 날 휴무·A/P 스왑)까지 포기한다.
+    # 실제로 2026-08 생성에서 슬롯 2160 → 2604 로 늘고 짝궁이 어긋났다.
+    #
+    # 어느 차를 세울지는 포인터가 고르게 돌린다. 차량 조합을 못박지 않는
+    # 편이 오히려 낫다 — 못박으면 감차일이 짝궁 휴무와 어긋나 그 짝궁의
+    # 휴무가 2일에서 3~4일로 늘어난다(실측).
+    fallback_counts: dict[DayClass, Counter] = defaultdict(Counter)
+    for d in days:
+        fallback_counts[day_class(d)][len(reduced[d])] += 1
+    cfg = GroupReductionConfig(
+        mode=ReductionMode.VEHICLE_POINTER,
+        rest_counts={cls: c.most_common(1)[0][0] for cls, c in fallback_counts.items()},
+        pointer_order=order,
+        pointer_start=0,
+    )
+    return cfg, display, inferred_holidays, 0
 
 
 def infer_profiles(rosters: list[MonthlyRoster]) -> dict[str, DriverProfile]:

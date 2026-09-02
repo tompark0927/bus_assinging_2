@@ -1,7 +1,8 @@
 import { prisma } from '../utils/prisma';
-import { SlotStatus, ShiftType } from '@prisma/client';
+import { SlotStatus, ShiftType, ServiceType } from '@prisma/client';
 import logger from '../utils/logger';
 import { getHolidaysForMonth } from '../utils/holidays';
+import { serviceTypeLabel, driverScopeFor, routeScopeFor } from '../utils/serviceType';
 
 interface ScheduleSlotInput {
   scheduleId: number;
@@ -86,12 +87,19 @@ export async function generateMonthlySchedule(
     workDays?: number;
     restDays?: number;
     customRules?: string;
+    /** 간선/지선/광역 — 지정하면 그 종류의 노선·기사만으로 짠다. null = 구분 없음(전 노선) */
+    serviceType?: ServiceType | null;
   }
 ): Promise<{ scheduleId: number; slotsCreated: number; warnings: string[]; fairnessReport: FairnessReportEntry[] }> {
   const workDays = rules?.workDays ?? 5;
   const restDays = rules?.restDays ?? 2;
   const cycleLength = workDays + restDays;
   const warnings: string[] = [];
+  const serviceType = rules?.serviceType ?? null;
+  // 종류를 지정하면 그 종류의 노선·기사만 배차 대상이다.
+  // 구분 미지정 기사는 제외되며, 몇 명이 빠졌는지 아래에서 경고로 남긴다.
+  const routeScope = routeScopeFor(serviceType);
+  const driverScope = driverScopeFor(serviceType);
 
   // ── 커스텀 규칙 파싱 ────────────────────────────────
   let maxConsecutiveWork = 0; // 0 = 제한 없음
@@ -112,22 +120,27 @@ export async function generateMonthlySchedule(
   }
 
   // ── 데이터 조회 ──────────────────────────────────────
+  const prevScheduleIds = await resolveMonthScheduleIdsAllTypes(
+    companyId,
+    month === 1 ? year - 1 : year,
+    month === 1 ? 12 : month - 1,
+  );
   const [mainDrivers, spareDrivers, routes, blacklistRules, allPreferences, previousSlots] = await Promise.all([
     prisma.user.findMany({
-      where: { companyId, role: 'DRIVER', isActive: true, driverType: 'MAIN' },
+      where: { companyId, role: 'DRIVER', isActive: true, driverType: 'MAIN', ...driverScope },
       include: {
         routeAssignments: { where: { isActive: true }, include: { route: { include: { buses: { where: { isActive: true } } } } }, take: 1 },
         dayOffRequests: { where: { status: 'APPROVED', date: { gte: new Date(year, month - 1, 1), lt: new Date(year, month, 1) } } },
       },
     }) as Promise<(Awaited<ReturnType<typeof prisma.user.findMany>>[number] & { routeAssignments: any[]; dayOffRequests: any[]; licenseExpiresAt: Date | null; qualificationExpiresAt: Date | null })[]>,
     prisma.user.findMany({
-      where: { companyId, role: 'DRIVER', isActive: true, driverType: 'SPARE' },
+      where: { companyId, role: 'DRIVER', isActive: true, driverType: 'SPARE', ...driverScope },
       include: {
         dayOffRequests: { where: { status: 'APPROVED', date: { gte: new Date(year, month - 1, 1), lt: new Date(year, month, 1) } } },
       },
     }) as Promise<(Awaited<ReturnType<typeof prisma.user.findMany>>[number] & { dayOffRequests: any[]; licenseExpiresAt: Date | null; qualificationExpiresAt: Date | null })[]>,
     prisma.route.findMany({
-      where: { companyId, isActive: true },
+      where: { companyId, isActive: true, ...routeScope },
       include: { buses: { where: { isActive: true } } },
     }),
     // 블랙리스트 태그 (하드룰만)
@@ -140,10 +153,11 @@ export async function generateMonthlySchedule(
       where: { driver: { companyId } },
       orderBy: { priority: 'asc' },
     }),
-    // 지난달 슬롯 (피로도 누적 계산용)
+    // 지난달 슬롯 (피로도 누적 계산용) — 종류별 대표 1개씩만.
+    // 초안까지 긁으면 같은 기사가 여러 번 세어져 피로도가 부풀려진다.
     prisma.scheduleSlot.findMany({
       where: {
-        schedule: { companyId },
+        scheduleId: { in: prevScheduleIds },
         date: {
           gte: new Date(year, month - 2, 1),
           lt: new Date(year, month - 1, 1),
@@ -154,8 +168,34 @@ export async function generateMonthlySchedule(
     }),
   ]);
 
-  if (routes.length === 0) throw new Error('등록된 노선이 없습니다. 먼저 노선을 등록해주세요.');
-  if (mainDrivers.length === 0 && spareDrivers.length === 0) throw new Error('등록된 활성 기사가 없습니다.');
+  // 구분 미지정 기사는 어느 종류 배차표에도 넣지 않는다 — 조용히 빠지면
+  // "왜 이 사람이 배차표에 없지?" 가 되므로 반드시 드러낸다.
+  if (serviceType) {
+    const unassigned = await prisma.user.count({
+      where: { companyId, role: 'DRIVER', isActive: true, serviceType: null },
+    });
+    if (unassigned > 0) {
+      warnings.push(
+        `[노선 구분] 구분 미지정 기사 ${unassigned}명은 ${serviceTypeLabel(serviceType)} 배차표에서 제외했습니다. ` +
+        '기초 데이터 > 기사에서 노선 종류를 지정해주세요.',
+      );
+    }
+  }
+
+  if (routes.length === 0) {
+    throw new Error(
+      serviceType
+        ? `${serviceTypeLabel(serviceType)} 노선이 없습니다. 기초 데이터 > 노선에서 종류를 지정해주세요.`
+        : '등록된 노선이 없습니다. 먼저 노선을 등록해주세요.',
+    );
+  }
+  if (mainDrivers.length === 0 && spareDrivers.length === 0) {
+    throw new Error(
+      serviceType
+        ? `${serviceTypeLabel(serviceType)} 기사가 없습니다. 기초 데이터 > 기사에서 노선 종류를 지정해주세요.`
+        : '등록된 활성 기사가 없습니다.',
+    );
+  }
 
   // ── 면허/자격증 만료 기사 필터링 ──────────────────────
   const monthEnd = new Date(year, month, 0); // 해당 월 마지막 날
@@ -217,13 +257,13 @@ export async function generateMonthlySchedule(
   // ── 새 초안 생성 (멀티 초안 — 기존 초안은 유지, 월당 최대 5개) ───────
   const schedule = await prisma.$transaction(async (tx) => {
     const draftCount = await tx.schedule.count({
-      where: { companyId, year, month, status: 'DRAFT' },
+      where: { companyId, year, month, serviceType, status: 'DRAFT' },
     });
     if (draftCount >= 5) {
       throw new Error('이 달의 초안이 이미 5개입니다. 사용하지 않는 초안을 삭제한 후 다시 생성해주세요.');
     }
     return tx.schedule.create({
-      data: { companyId, year, month, status: 'DRAFT', createdBy: adminId, name: `초안 ${draftCount + 1}` },
+      data: { companyId, year, month, serviceType, status: 'DRAFT', createdBy: adminId, name: `초안 ${draftCount + 1}` },
     });
   });
 
@@ -516,8 +556,10 @@ export async function resolveMonthScheduleId(
   year: number,
   month: number,
   scheduleId?: number,
+  serviceType: ServiceType | null = null,
 ): Promise<number | null> {
   if (scheduleId) {
+    // 명시된 배차표는 종류로 거르지 않는다 — 화면이 이미 그 배차표를 가리키고 있다.
     const s = await prisma.schedule.findFirst({
       where: { id: scheduleId, companyId, year, month },
       select: { id: true },
@@ -525,12 +567,12 @@ export async function resolveMonthScheduleId(
     return s?.id ?? null;
   }
   const published = await prisma.schedule.findFirst({
-    where: { companyId, year, month, status: 'PUBLISHED' },
+    where: { companyId, year, month, serviceType, status: 'PUBLISHED' },
     select: { id: true },
   });
   if (published) return published.id;
   const latest = await prisma.schedule.findFirst({
-    where: { companyId, year, month },
+    where: { companyId, year, month, serviceType },
     orderBy: { updatedAt: 'desc' },
     select: { id: true },
   });
@@ -550,9 +592,12 @@ export async function uniqueScheduleName(
   base: string,
   tx: { schedule: { findMany: typeof prisma.schedule.findMany } } = prisma,
   excludeId?: number,
+  serviceType: ServiceType | null = null,
 ): Promise<string> {
+  // 이름은 같은 (월 × 노선 종류) 안에서만 겹치면 된다 — 간선·지선이 각각
+  // "기본 초안" 을 가질 수 있어야 한다.
   const rows = await tx.schedule.findMany({
-    where: { companyId, year, month, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    where: { companyId, year, month, serviceType, ...(excludeId ? { id: { not: excludeId } } : {}) },
     select: { name: true },
   });
   const taken = new Set(rows.map((r) => r.name));
@@ -565,13 +610,48 @@ export async function uniqueScheduleName(
   return `${trimmed} (${Date.now() % 10000})`.slice(0, 50);
 }
 
+/**
+ * 그 달의 **모든 노선 종류**에서 대표 배차표 id 를 모은다 (종류당 1개).
+ *
+ * 간선·지선·광역이 따로 발행되면서 "그 달 배차표"가 최대 4개가 됐다. 회사 전체를
+ * 보는 곳(대시보드·오늘 운행 현황·BIS 연동)은 종류를 나눌 이유가 없으므로 전부
+ * 합쳐야 한다. 종류별로 발행본 우선 → 없으면 가장 최근 초안을 고른다.
+ *
+ * 종류당 1개로 좁히는 게 핵심이다 — 같은 종류의 초안 5개를 다 합치면 슬롯이
+ * 5배로 뻥튀기돼 통계가 통째로 거짓이 된다.
+ */
+export async function resolveMonthScheduleIdsAllTypes(
+  companyId: number,
+  year: number,
+  month: number,
+  publishedOnly = false,
+): Promise<number[]> {
+  const all = await prisma.schedule.findMany({
+    where: {
+      companyId, year, month,
+      ...(publishedOnly ? { status: 'PUBLISHED' as const } : {}),
+    },
+    select: { id: true, serviceType: true, status: true },
+    orderBy: { updatedAt: 'desc' },
+  });
+  const pick = new Map<string, (typeof all)[number]>();
+  for (const sch of all) {
+    const key = sch.serviceType ?? '_ALL';
+    const cur = pick.get(key);
+    if (!cur) { pick.set(key, sch); continue; }
+    if (cur.status !== 'PUBLISHED' && sch.status === 'PUBLISHED') pick.set(key, sch);
+  }
+  return [...pick.values()].map((s) => s.id);
+}
+
 export async function getScheduleWithSlots(
   companyId: number,
   year: number,
   month: number,
   scheduleId?: number,
+  serviceType: ServiceType | null = null,
 ) {
-  const id = await resolveMonthScheduleId(companyId, year, month, scheduleId);
+  const id = await resolveMonthScheduleId(companyId, year, month, scheduleId, serviceType);
   if (id === null) return null;
   return prisma.schedule.findFirst({
     where: { id, companyId },

@@ -3,18 +3,34 @@ import logger from '../utils/logger';
 import type { EnginePolicyDoc } from './enginePolicyMapper';
 
 /**
- * AI 엔진 튜닝 정책 저장소 — **단일 소스는 Postgres (`Company.enginePolicy`)**.
+ * AI 엔진 튜닝 정책 저장소 — **단일 소스는 Postgres (`Company.policy.__engineTuning`)**.
  *
  * 예전에는 엔진 컨테이너의 파일(`ENGINE_DATA_DIR/policies/{companyId}.json`)이
  * 정책의 주인이었다. 볼륨이 붙어 있지 않으면 재배포마다 설정이 초기화되고,
  * 백업·감사로그·멀티테넌시가 전부 DB에 있는데 정책만 밖에 있는 구조였다.
  * 이제 저장은 DB가 하고, 엔진은 요청마다 policy_json 을 받는 stateless 계산기다.
  *
+ * **전용 컬럼이 아니라 기존 policy JSON 안에 두는 이유**: 이 프로젝트는
+ * 마이그레이션 이력이 깨져 있어(`20260428000000` 이 "column already exists"로
+ * 실패) `prisma migrate deploy` 가 거기서 멈춘다. 컬럼을 추가하면 스키마에는
+ * 있고 DB에는 없는 상태가 되어 Company 를 읽는 모든 쿼리가 500이 된다 —
+ * 2026-08-25 프로덕션 로그인 장애가 정확히 이것이었다. 마이그레이션 이력을
+ * 고치기 전까지는 컬럼을 늘리지 않는다.
+ *
  * 기존에 엔진 파일에 저장돼 있던 회사는 처음 읽을 때 한 번 DB로 옮긴다
  * (lazy migration — 별도 운영 작업 없이 이관된다).
  */
 
 const EMPTY: EnginePolicyDoc = { values: {}, holidays: [], special_reductions: [] };
+
+/** Company.policy JSON 안에서 엔진 튜닝이 사는 키 */
+export const ENGINE_TUNING_KEY = '__engineTuning';
+
+/** policy JSON 에서 엔진 튜닝 부분만 꺼낸다 */
+function tuningOf(policy: unknown): unknown {
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return null;
+  return (policy as Record<string, unknown>)[ENGINE_TUNING_KEY] ?? null;
+}
 
 const ENGINE_URL = () => process.env.ENGINE_URL;
 
@@ -31,6 +47,12 @@ function coerce(raw: unknown): EnginePolicyDoc | null {
     special_reductions: Array.isArray(doc.special_reductions)
       ? (doc.special_reductions as [string, string, string][])
       : [],
+    // 공휴일 확인 이력은 형식을 여기서 따지지 않는다 — holidayPolicyService 가
+    // 읽을 때 검증한다. 여기서 떨어뜨리면 저장할 때마다 이력이 날아간다.
+    holiday_review:
+      doc.holiday_review && typeof doc.holiday_review === 'object' && !Array.isArray(doc.holiday_review)
+        ? (doc.holiday_review as Record<string, unknown>)
+        : undefined,
   };
 }
 
@@ -56,18 +78,15 @@ async function fetchLegacyFromEngine(companyId: number): Promise<EnginePolicyDoc
 export async function loadEnginePolicy(companyId: number): Promise<EnginePolicyDoc> {
   const company = await prisma.company.findUnique({
     where: { id: companyId },
-    select: { enginePolicy: true },
+    select: { policy: true },
   });
-  const stored = coerce(company?.enginePolicy);
+  const stored = coerce(tuningOf(company?.policy));
   if (stored) return stored;
 
   const legacy = await fetchLegacyFromEngine(companyId);
   if (!legacy) return EMPTY;
   try {
-    await prisma.company.update({
-      where: { id: companyId },
-      data: { enginePolicy: legacy as unknown as object },
-    });
+    await persist(companyId, legacy);
     logger.info(`[EnginePolicy] 엔진 파일 정책을 DB 로 이관 — companyId=${companyId}`);
   } catch (err) {
     // 이관 실패해도 읽은 값으로 진행한다 (다음 요청에서 다시 시도)
@@ -132,10 +151,36 @@ export async function saveEnginePolicy(
     values: doc.values ?? {},
     holidays,
     special_reductions: special,
+    holiday_review: doc.holiday_review,
   };
+  await persist(companyId, next);
+  return next;
+}
+
+/**
+ * 검증 없이 문서를 그대로 저장한다 — 이미 검증을 마친 호출자용
+ * (holidayPolicyService 처럼 자기 형식을 스스로 검증하는 쪽).
+ */
+export async function persistEnginePolicy(companyId: number, doc: EnginePolicyDoc): Promise<void> {
+  await persist(companyId, doc);
+}
+
+/**
+ * policy JSON 안의 엔진 튜닝만 갈아끼운다 — 운영 정책 쪽은 그대로 둔다.
+ * (반대 방향 보호는 companiesController.updateCompanyPolicy 에 있다)
+ */
+async function persist(companyId: number, doc: EnginePolicyDoc): Promise<void> {
+  const company = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: { policy: true },
+  });
+  const base =
+    company?.policy && typeof company.policy === 'object' && !Array.isArray(company.policy)
+      ? { ...(company.policy as Record<string, unknown>) }
+      : {};
+  base[ENGINE_TUNING_KEY] = doc;
   await prisma.company.update({
     where: { id: companyId },
-    data: { enginePolicy: next as unknown as object },
+    data: { policy: base as unknown as object },
   });
-  return next;
 }

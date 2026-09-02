@@ -44,6 +44,8 @@ from busync_engine.importer.monthly import (
     looks_like_monthly_sheet,
     parse_monthly_sheet,
 )
+from busync_engine.importer.daily_detail import has_daily_detail, parse_daily_detail
+from busync_engine.importer.from_cells import roster_from_cells
 from busync_engine.importer.weekly import SHEET_YM_RE, parse_workbook_month
 from busync_engine.policy import CompanyPolicy, catalog_as_json
 from busync_engine.recommend import analyze
@@ -116,6 +118,16 @@ def _load_rosters(path: str, division: str, sheets: list[str]) -> list:
 
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
+        # Busync 가 내보낸 파일이면 '일별 상세' 시트를 우선한다.
+        # 그 파일의 첫 시트는 행=기사 / 셀=노선번호라 아래 차량 중심 파서로는
+        # 한 글자도 안 읽힌다 — 그러면 빈 결과가 나가고 백엔드가 애먼 기초
+        # 데이터를 의심하게 만든다. '일별 상세' 는 (날짜×차량×오전/오후×기사)를
+        # 한 행씩 갖고 있어 오히려 원본 양식보다 정확하다.
+        if has_daily_detail(wb):
+            roster = parse_daily_detail(wb, division)
+            if roster is not None:
+                return [roster]
+
         out = []
         for name in sheets:
             ws = wb[name]
@@ -326,6 +338,16 @@ async def import_endpoint(
         raise HTTPException(422, "시트에서 배차 데이터를 읽지 못했습니다")
 
     roster = rosters[-1]
+    # 시트는 찾았는데 한 칸도 못 읽은 경우 — 여기서 막지 않으면 빈 cells 가
+    # 그대로 나가고, 백엔드는 "차량번호가 하나도 일치하지 않습니다"라며
+    # 엉뚱하게 기초 데이터를 의심하게 만든다. 원인은 파일 양식이다.
+    if not roster.entries:
+        raise HTTPException(
+            422,
+            f"'{names[-1]}' 시트에서 배차 내용을 한 칸도 읽지 못했습니다. "
+            "이 파일이 배차표 양식(행=차량, 칸=기사 이름)인지 확인해 주세요. "
+            "Busync 에서 내보낸 파일이라면 '일별 상세' 시트가 함께 있어야 읽을 수 있습니다.",
+        )
     cells: dict = defaultdict(dict)
     filled = 0
     for (d, v), e in sorted(roster.entries.items()):
@@ -417,6 +439,128 @@ async def backtest_endpoint(
     return out
 
 
+def _generation_response(result, year: int, month: int) -> dict:
+    """생성 결과 → 응답 dict. 파일 경로와 JSON 경로가 같은 형식을 내도록 공유한다."""
+    # 패턴(1단계)에서 언더라잉 슬롯·운행여부·그룹을 끌어와 셀에 붙인다.
+    # 백엔드가 이 값들을 SchedulePattern으로 영속화해 다음 달 로테이션을 이어간다.
+    pattern_meta: dict[tuple[dt.date, str], dict] = {}
+    for gname, pat in result.patterns.items():
+        for (d, v), cell in pat.items():
+            pattern_meta[(d, v)] = {
+                "underlying": cell.underlying_slot,
+                "operating": cell.operating,
+                "group": gname,
+            }
+    cells: dict = defaultdict(dict)
+    for (d, v), e in sorted(result.roster.entries.items()):
+        meta = pattern_meta.get((d, v), {})
+        cells[d.isoformat()][v] = {
+            "slot": e.slot_label,
+            "display_slot": e.slot_index,
+            "am": e.am.driver or e.am.raw,
+            "pm": e.pm.driver or e.pm.raw,
+            "underlying": meta.get("underlying"),
+            "operating": meta.get("operating", True),
+            "group": meta.get("group"),
+        }
+    return {
+        "draft_id": _store_draft(result),
+        "year": year,
+        "month": month,
+        "groups": [
+            {"name": g.name, "vehicles": g.vehicles} for g in result.roster.groups
+        ],
+        "solver_status": result.assignment.status,
+        "objective": result.assignment.objective,
+        "warnings": result.warnings,
+        "audit": {
+            "ok": result.audit.ok,
+            "violations": [
+                {"rule": v.rule, "message": v.message} for v in result.audit.violations
+            ],
+        },
+        "unfilled": [[d.isoformat(), v, s] for d, v, s in result.assignment.unfilled],
+        "fairness": {
+            "slot_balance_stdev": round(result.fairness.slot_balance_stdev, 2),
+            "weekend_off_stdev": round(result.fairness.weekend_off_stdev, 2),
+            "substitute_stdev": round(result.fairness.substitute_stdev, 2),
+        },
+        "cells": cells,
+    }
+
+
+@app.post("/generate-from-cells")
+async def generate_from_cells_endpoint(
+    payload: dict,
+    x_company_id: str = Header("default"),
+):
+    """이미 저장된 지난달 배차표(cells)로 이번 달을 짠다 — 파일 업로드 없이.
+
+    "지난달 배차표로 이번 달 짜기"에 엑셀 왕복이 필요할 이유가 없다. 지난달
+    배차표는 Busync 안에 있고 순번(SchedulePattern)까지 저장돼 있다. 백엔드가
+    그걸 cells 로 만들어 여기로 보내면 파일 경로와 똑같이 처리한다.
+
+    payload: {year, month, history: [{year, month, cells, groups?}], division?,
+              policy?, leaves?, home_config?, time_limit_s?}
+    """
+    year = int(payload.get("year") or 0)
+    month = int(payload.get("month") or 0)
+    if not (year and 1 <= month <= 12):
+        raise HTTPException(400, "year/month 가 필요합니다")
+
+    hist_in = payload.get("history") or []
+    if not hist_in:
+        raise HTTPException(400, "지난달 배차표(history)가 필요합니다")
+
+    division = str(payload.get("division") or "")
+    history = []
+    for h in hist_in:
+        r = roster_from_cells(
+            h.get("cells") or {},
+            int(h.get("year")),
+            int(h.get("month")),
+            division=division,
+            groups=h.get("groups"),
+        )
+        if not r.entries:
+            raise HTTPException(422, "지난달 배차표에서 배차 내용을 읽지 못했습니다")
+        history.append(r)
+    history.sort(key=lambda r: (r.year, r.month))
+
+    if payload.get("policy"):
+        policy = CompanyPolicy.from_dict(payload["policy"])
+    else:
+        saved = _company_policy_path(x_company_id)
+        policy = (
+            CompanyPolicy.from_dict(json.loads(saved.read_text()))
+            if saved.exists() else CompanyPolicy()
+        )
+    leaves = {
+        k: {dt.date.fromisoformat(x) for x in v}
+        for k, v in (payload.get("leaves") or {}).items()
+    }
+    # 요일별 운행 대수는 **추론하지 말고 등록값을 쓴다**. 회사가 기초 데이터
+    # (노선 > 평일/토/일·공휴일 대수)에 이미 정확히 적어 뒀는데, 지난달 실적에서
+    # 되짚으면 평일 상시 감차를 공휴일로 오해해 대수가 뭉개진다.
+    # {"16": {"weekday": 12, "sat": 11, "sunhol": 10, "fleet": 14}}
+    operating_counts = payload.get("operating_counts") or None
+    try:
+        result = generate_month(
+            history, policy, year, month,
+            leaves=leaves,
+            home_vehicle_config=payload.get("home_config") or None,
+            time_limit_s=float(payload.get("time_limit_s") or 90.0),
+            operating_counts=operating_counts,
+            # mains_only: 기본 틀만 깔고 스페어 자리는 비워 둔다.
+            # 담당자가 직접 채울지 엔진에 맡길지 고르게 하기 위함이다.
+            mains_only=bool(payload.get("mains_only")),
+        )
+    except (ValueError, RuntimeError) as ex:
+        raise HTTPException(422, str(ex))
+
+    return _generation_response(result, year, month)
+
+
 @app.post("/generate")
 async def generate_endpoint(
     file: UploadFile = File(...),
@@ -427,7 +571,7 @@ async def generate_endpoint(
     policy_json: str = Form(""),      # CompanyPolicy.to_dict() 형식. 비우면 저장된 회사 정책 사용
     leaves_json: str = Form("{}"),    # {기사명: ["YYYY-MM-DD", ...]}
     home_config_json: str = Form(""),  # {기사명: 차량} — 담당자 확정 월초 구성
-    time_limit_s: float = Form(180.0),
+    time_limit_s: float = Form(90.0),
     include_xlsx: bool = Form(False),
     x_company_id: str = Header("default"),
 ):
@@ -464,57 +608,7 @@ async def generate_endpoint(
     except (ValueError, RuntimeError) as ex:
         raise HTTPException(422, str(ex))
 
-    # 패턴(1단계)에서 언더라잉 슬롯·운행여부·그룹을 끌어와 셀에 붙인다.
-    # 백엔드가 이 값들을 SchedulePattern으로 영속화해 다음 달 로테이션을 이어간다.
-    pattern_meta: dict[tuple[dt.date, str], dict] = {}
-    for gname, pat in result.patterns.items():
-        for (d, v), cell in pat.items():
-            pattern_meta[(d, v)] = {
-                "underlying": cell.underlying_slot,
-                "operating": cell.operating,
-                "group": gname,
-            }
-
-    cells = defaultdict(dict)
-    for (d, v), e in sorted(result.roster.entries.items()):
-        meta = pattern_meta.get((d, v), {})
-        cells[d.isoformat()][v] = {
-            "slot": e.slot_label,
-            "display_slot": e.slot_index,
-            "am": e.am.driver or e.am.raw,
-            "pm": e.pm.driver or e.pm.raw,
-            "underlying": meta.get("underlying"),
-            "operating": meta.get("operating", True),
-            "group": meta.get("group"),
-        }
-    out = {
-        "draft_id": _store_draft(result),
-        "year": year,
-        "month": month,
-        "groups": [
-            {"name": g.name, "vehicles": g.vehicles}
-            for g in result.roster.groups
-        ],
-        "solver_status": result.assignment.status,
-        "objective": result.assignment.objective,
-        "warnings": result.warnings,
-        "audit": {
-            "ok": result.audit.ok,
-            "violations": [
-                {"rule": v.rule, "message": v.message}
-                for v in result.audit.violations
-            ],
-        },
-        "unfilled": [
-            [d.isoformat(), v, s] for d, v, s in result.assignment.unfilled
-        ],
-        "fairness": {
-            "slot_balance_stdev": round(result.fairness.slot_balance_stdev, 2),
-            "weekend_off_stdev": round(result.fairness.weekend_off_stdev, 2),
-            "substitute_stdev": round(result.fairness.substitute_stdev, 2),
-        },
-        "cells": cells,
-    }
+    out = _generation_response(result, year, month)
     if include_xlsx:
         from busync_engine.renderer import render_weekly_xlsx
 

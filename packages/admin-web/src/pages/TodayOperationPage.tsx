@@ -67,14 +67,16 @@ export default function TodayOperationPage() {
     weekday: 'long',
   });
 
-  const { data: schedule, isLoading: schedLoading } = useQuery<{ slots: Slot[]; status: string } | null>({
+  // 오늘 나가는 차는 간선이든 지선이든 다 나가는 차다 — 그 달 발행본을 전부
+  // 합쳐서 본다. 종류별로 하나만 집으면 나머지 노선이 화면에서 통째로 사라진다.
+  const { data: schedule, isLoading: schedLoading } = useQuery<{ slots: Slot[] } | null>({
     queryKey: ['schedule', 'today-operation', year, month],
     // 운행 현황은 발행된 배차표만 대상 — 초안 프로필 데이터가 노출되면 안 됨
     queryFn: () =>
-      schedulesApi.get(year, month)
+      schedulesApi.merged(year, month, true)
         .then((r) => {
-          const s = r.data.data as { slots: Slot[]; status: string } | null;
-          return s && s.status === 'PUBLISHED' ? s : null;
+          const d = r.data.data as { schedules: unknown[]; slots: Slot[] } | null;
+          return d && d.schedules.length > 0 ? { slots: d.slots } : null;
         })
         .catch(() => null),
   });

@@ -13,7 +13,13 @@ import {
   loadEnginePolicy,
   saveEnginePolicy,
   EnginePolicyValidationError,
+  ENGINE_TUNING_KEY,
 } from '../services/enginePolicyStore';
+import {
+  getHolidayReview,
+  saveHolidayReview,
+  HolidayReviewValidationError,
+} from '../services/holidayPolicyService';
 
 function generateEmployeeId(): string {
   return 'ADM' + Math.random().toString(36).substr(2, 6).toUpperCase();
@@ -57,19 +63,43 @@ export const registerCompany = async (req: Request, res: Response) => {
       return res.status(409).json({ success: false, message: '이미 사용 중인 전화번호입니다.' });
     }
 
-    // 회사 코드는 회사명으로부터 자동 생성한다 (예: 진호버스 → JHBUS, 충돌 시 JHOBUS).
-    const companyCode = await generateUniqueCompanyCode(
-      companyName,
-      async (code) => !!(await prisma.company.findUnique({ where: { code } })),
-    );
-
     const hashedPassword = await bcrypt.hash(adminPassword, 10);
     const employeeId = generateEmployeeId();
 
-    // batch transaction: $use 미들웨어와 interactive transaction 충돌 회피
-    const company = await prisma.company.create({
-      data: { name: companyName, code: companyCode },
-    });
+    // 회사 코드는 회사명으로부터 자동 생성한다 (예: 진호버스 → JHBUS, 충돌 시 JHOBUS).
+    // "비었나 확인 → 생성"은 원자적이지 않다: 비슷한 이름의 두 회사가 동시에 가입하면
+    // 둘 다 같은 코드를 비어 있다고 보고 한쪽이 unique 위반(P2002)으로 500 이 났다.
+    // 충돌하면 이미 찜한 코드들을 제외하고 다시 뽑아 재시도한다.
+    const claimed = new Set<string>();
+    let company: Awaited<ReturnType<typeof prisma.company.create>> | undefined;
+    let companyCode = '';
+    for (let attempt = 0; attempt < 5 && !company; attempt++) {
+      companyCode = await generateUniqueCompanyCode(
+        companyName,
+        async (code) =>
+          claimed.has(code) || !!(await prisma.company.findUnique({ where: { code } })),
+      );
+      try {
+        // batch transaction: $use 미들웨어와 interactive transaction 충돌 회피
+        company = await prisma.company.create({
+          data: { name: companyName, code: companyCode },
+        });
+      } catch (createError) {
+        const code = (createError as { code?: string })?.code;
+        const target = (createError as { meta?: { target?: string[] } })?.meta?.target ?? [];
+        if (code === 'P2002' && target.includes('code')) {
+          claimed.add(companyCode);
+          continue;
+        }
+        throw createError;
+      }
+    }
+    if (!company) {
+      return res.status(409).json({
+        success: false,
+        message: '회사 코드 생성에 실패했습니다. 회사명을 조금 다르게 입력해 다시 시도해주세요.',
+      });
+    }
 
     let user;
     try {
@@ -225,7 +255,21 @@ export const getCompanyPolicy = async (req: AuthRequest, res: Response) => {
     if (!company) {
       return res.status(404).json({ success: false, message: '회사 정보를 찾을 수 없습니다.' });
     }
-    let policy: unknown = company.policy && typeof company.policy === 'object' ? company.policy : null;
+    // 엔진 튜닝은 같은 JSON 안에 살지만 이 응답의 소관이 아니다.
+    // 빼지 않으면 설정 화면이 그대로 되돌려 보내면서 서로 덮어쓴다.
+    let policy: unknown = null;
+    if (company.policy && typeof company.policy === 'object' && !Array.isArray(company.policy)) {
+      const { [ENGINE_TUNING_KEY]: _engineTuning, ...rest } = company.policy as Record<string, unknown>;
+      policy = rest;
+    }
+    // 엔진 튜닝만 저장돼 있고 운영 정책은 한 번도 저장하지 않은 회사가 있다.
+    // 그때 `rest` 는 빈 객체 `{}` 가 되는데, 이걸 그대로 내려보내면 설정 화면이
+    // `policy.shiftSystem.kind` 를 읽다가 통째로 흰 화면이 된다("Cannot read
+    // properties of undefined"). 알맹이가 없으면 저장된 적 없는 것과 같으므로
+    // 기본 프리셋으로 내려준다.
+    if (policy && Object.keys(policy as Record<string, unknown>).length === 0) {
+      policy = null;
+    }
     let isDefault = false;
     if (!policy) {
       isDefault = true;
@@ -280,9 +324,20 @@ export const updateCompanyPolicy = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, message: 'crewModel.size 는 1~3 만 허용됩니다.' });
     }
 
+    // 엔진 튜닝은 같은 JSON 안에 있으므로 통째로 덮어쓰면 지워진다 — 옮겨 싣는다
+    const current = await prisma.company.findUnique({
+      where: { id: companyId },
+      select: { policy: true },
+    });
+    const carried =
+      current?.policy && typeof current.policy === 'object' && !Array.isArray(current.policy)
+        ? (current.policy as Record<string, unknown>)[ENGINE_TUNING_KEY]
+        : undefined;
+    const next = carried === undefined ? policy : { ...policy, [ENGINE_TUNING_KEY]: carried };
+
     await prisma.company.update({
       where: { id: companyId },
-      data: { policy },
+      data: { policy: next },
     });
     logger.info(`[CompanyPolicy] 정책 업데이트 — companyId=${companyId} preset=${policy.preset ?? 'CUSTOM'}`);
     return res.json({ success: true, data: { policy }, message: '정책이 저장되었습니다.' });
@@ -323,6 +378,57 @@ export const updateEnginePolicy = async (req: AuthRequest, res: Response) => {
     return res.json({ success: true, data: { policy: saved }, message: '엔진 설정이 저장되었습니다.' });
   } catch (error) {
     if (error instanceof EnginePolicyValidationError) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+/**
+ * GET /api/v1/companies/holidays/:year
+ * 그 해의 빨간날 후보 전체 + 이 회사가 무엇을 적용 중인지.
+ * 아직 확인하지 않은 해면 confirmed=false 로 내려가고, 화면이 확인을 요청한다.
+ */
+export const getCompanyHolidays = async (req: AuthRequest, res: Response) => {
+  try {
+    const year = Number(req.params.year);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      return res.status(400).json({ success: false, message: '연도가 올바르지 않습니다.' });
+    }
+    const review = await getHolidayReview(req.user!.companyId, year);
+    return res.json({ success: true, data: review });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+};
+
+/**
+ * PUT /api/v1/companies/holidays/:year
+ * body: { applied: string[], extra?: { date, name }[] }
+ */
+export const updateCompanyHolidays = async (req: AuthRequest, res: Response) => {
+  try {
+    const year = Number(req.params.year);
+    const body = (req.body ?? {}) as { applied?: unknown; extra?: unknown };
+    if (!Array.isArray(body.applied)) {
+      return res.status(400).json({ success: false, message: '적용할 날짜 목록(applied)이 필요합니다.' });
+    }
+    const review = await saveHolidayReview(req.user!.companyId, year, {
+      applied: body.applied as string[],
+      extra: Array.isArray(body.extra) ? (body.extra as { date: string; name: string }[]) : [],
+    });
+    logger.info(
+      `[Holidays] ${year}년 공휴일 확정 — companyId=${req.user!.companyId} 적용 ${review.appliedCount}일`,
+    );
+    return res.json({
+      success: true,
+      data: review,
+      message: `${year}년 공휴일 ${review.appliedCount}일을 적용했습니다.`,
+    });
+  } catch (error) {
+    if (error instanceof HolidayReviewValidationError) {
       return res.status(400).json({ success: false, message: error.message });
     }
     logger.error(error);

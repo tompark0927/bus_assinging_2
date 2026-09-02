@@ -226,6 +226,13 @@ export const companyPolicyApi = {
   getEngine: () => api.get('/companies/engine-policy'),
   updateEngine: (policy: Record<string, unknown>) =>
     api.put('/companies/engine-policy', { policy }),
+  // 공휴일(감차 적용일)은 엔진 정책과 별도 엔드포인트다 — 해마다 확인하는
+  // 흐름이라 저장 시점이 다르고, 엔진 튜닝을 저장할 때 딸려 덮이면 안 된다.
+  getHolidays: (year: number) => api.get(`/companies/holidays/${year}`),
+  saveHolidays: (
+    year: number,
+    body: { applied: string[]; extra: { date: string; name: string }[] },
+  ) => api.put(`/companies/holidays/${year}`, body),
 };
 
 /**
@@ -303,21 +310,65 @@ export const companyInfoApi = {
   update: (data: { name: string }) => api.put('/companies/me', data),
 };
 
+/**
+ * 노선 종류 — 간선/지선/광역. 배차표는 종류별로 따로 짜고 따로 발행한다.
+ * 빈 문자열은 '전체'(구분 없음) 버킷 — 종류를 나누기 전에 만든 배차표가 여기 남는다.
+ */
+export type ScheduleServiceType = '' | 'TRUNK' | 'BRANCH' | 'WIDE_AREA';
+
+/** 빈 값은 파라미터 자체를 빼서 서버의 '구분 없음' 기본값을 쓴다 */
+const svcParam = (t?: ScheduleServiceType) => (t ? { serviceType: t } : {});
+
 // Schedules
 export const schedulesApi = {
   list: () => api.get('/schedules'),
   // 인력 계산 — 근무 형태별 필요 인원 (격일제 → 1일 2교대 전환 검토용)
-  manpower: (year: number, month: number) => api.get(`/schedules/${year}/${month}/manpower`),
-  get: (year: number, month: number, scheduleId?: number) =>
-    api.get(`/schedules/${year}/${month}`, { params: scheduleId ? { scheduleId } : undefined }),
-  // 멀티 초안: 해당 월의 모든 배차표(초안 프로필 + 발행본) 목록
-  listDrafts: (year: number, month: number) => api.get(`/schedules/${year}/${month}/drafts`),
+  manpower: (year: number, month: number, serviceType?: ScheduleServiceType) =>
+    api.get(`/schedules/${year}/${month}/manpower`, { params: svcParam(serviceType) }),
+  get: (year: number, month: number, scheduleId?: number, serviceType?: ScheduleServiceType) =>
+    api.get(`/schedules/${year}/${month}`, {
+      params: { ...(scheduleId ? { scheduleId } : {}), ...svcParam(serviceType) },
+    }),
+  /**
+   * 월 배차표 통합 조회 — 간선·지선·광역을 가로질러 합친다.
+   * 대시보드·오늘 운행 현황처럼 "회사 전체가 이번 달 어떻게 굴러가나"를 보는 화면용.
+   * publishedOnly=true 면 발행본만 (초안이 현장 화면에 새지 않게).
+   */
+  merged: (year: number, month: number, publishedOnly?: boolean) =>
+    api.get(`/schedules/${year}/${month}/merged`, {
+      params: publishedOnly ? { publishedOnly: 1 } : undefined,
+    }),
+  // 멀티 초안: 해당 월 · 해당 노선 종류의 모든 배차표(초안 프로필 + 발행본) 목록
+  listDrafts: (year: number, month: number, serviceType?: ScheduleServiceType) =>
+    api.get(`/schedules/${year}/${month}/drafts`, { params: svcParam(serviceType) }),
   // 멀티 초안: 배차표를 새 초안 프로필로 복제
   duplicate: (scheduleId: number) => api.post(`/schedules/by-id/${scheduleId}/duplicate`),
   // 멀티 초안: 프로필 이름 변경
   rename: (scheduleId: number, name: string) => api.put(`/schedules/by-id/${scheduleId}/rename`, { name }),
-  generate: (data: { year: number; month: number; workDays?: number; restDays?: number }) =>
+  generate: (data: { year: number; month: number; workDays?: number; restDays?: number; serviceType?: ScheduleServiceType }) =>
     api.post('/schedules/generate', data),
+  /**
+   * 지난달 배차표로 이번 달 짜기 — 파일 업로드 없이.
+   * 지난달 배차표는 이미 DB 에 있고 순번까지 저장돼 있다.
+   */
+  generateFromPrevious: (data: { year: number; month: number; serviceType?: ScheduleServiceType }) =>
+    api.post('/schedules/generate-from-previous', data, { timeout: 300000 }),
+  /**
+   * 기본 틀을 지금 깔아 달라. year/month 를 주면 그 달만, 없으면 앞으로 12개월.
+   * 평소에는 서버가 하루 1회 알아서 유지한다.
+   */
+  buildBaseFrame: (data?: {
+    year?: number; month?: number; months?: number; serviceType?: ScheduleServiceType;
+  }) => api.post('/schedules/base-frame', data ?? {}, { timeout: 600000 }),
+  /**
+   * 지금 보고 있는 초안의 빈 스페어 자리를 자동으로 채운다.
+   *
+   * 본문은 `{}` 여야 한다. `null` 을 넘기면 axios 가 문자열 "null" 을
+   * application/json 으로 실어 보내고, 서버의 body-parser 가 그걸 거부해
+   * 라우트에 닿기도 전에 "서버 내부 오류"가 된다 (실제로 냈다).
+   */
+  fillSpares: (scheduleId: number) =>
+    api.post(`/schedules/by-id/${scheduleId}/fill-spares`, {}, { timeout: 300000 }),
   // AI 배차 엔진(Python) 생성 결과를 배차표 초안으로 저장
   saveFromEngine: (data: {
     year: number; month: number; name?: string;
@@ -326,6 +377,8 @@ export const schedulesApi = {
     confirmOverwrite?: boolean;
     /** 파일 명단이 기초 데이터와 안 맞아도 진행 — 없으면 409 + 대조 결과 반환 */
     confirmMismatch?: boolean;
+    /** 간선/지선/광역 탭 — 비우면 '전체'(구분 없음) */
+    serviceType?: ScheduleServiceType;
   }) => engineClient.post('/schedules/from-engine', data, { timeout: 180000 }),
   // 게시 양식 조회 (행=차량, 열=날짜 → 순번|오전|오후)
   posting: (scheduleId: number) => api.get(`/schedules/by-id/${scheduleId}/posting`),
@@ -359,6 +412,8 @@ export const schedulesApi = {
     restDays?: number;
     newHireDriverIds?: number[];
     blockedRoutes?: { routeId: number; driverIds: number[] }[];
+    /** 간선/지선/광역 탭 — 비우면 '전체'(구분 없음) */
+    serviceType?: ScheduleServiceType;
   }) => api.post('/schedules/generate-v2', data),
   updateSlot: (slotId: number, data: Record<string, unknown>) =>
     api.put(`/schedules/slots/${slotId}`, data),
@@ -366,16 +421,22 @@ export const schedulesApi = {
     api.post('/schedules/slots', data),
   overrideSlot: (slotId: number, data: Record<string, unknown>) =>
     api.put(`/schedules/slots/${slotId}/override`, data),
-  publish: (year: number, month: number, scheduleId?: number, force?: boolean) =>
+  publish: (year: number, month: number, scheduleId?: number, force?: boolean, serviceType?: ScheduleServiceType) =>
     api.put(`/schedules/${year}/${month}/publish`, {
       ...(scheduleId ? { scheduleId } : {}),
       // 같은 날 중복 배정이 있어도 발행 — 서버가 감사 로그에 기록한다
       ...(force ? { force: true } : {}),
+      ...svcParam(serviceType),
     }),
-  delete: (year: number, month: number, scheduleId?: number) =>
-    api.delete(`/schedules/${year}/${month}`, { params: scheduleId ? { scheduleId } : undefined }),
-  exportExcel: (year: number, month: number, scheduleId?: number) =>
-    api.get(`/schedules/${year}/${month}/export`, { responseType: 'blob', params: scheduleId ? { scheduleId } : undefined }),
+  delete: (year: number, month: number, scheduleId?: number, serviceType?: ScheduleServiceType) =>
+    api.delete(`/schedules/${year}/${month}`, {
+      params: { ...(scheduleId ? { scheduleId } : {}), ...svcParam(serviceType) },
+    }),
+  exportExcel: (year: number, month: number, scheduleId?: number, serviceType?: ScheduleServiceType) =>
+    api.get(`/schedules/${year}/${month}/export`, {
+      responseType: 'blob',
+      params: { ...(scheduleId ? { scheduleId } : {}), ...svcParam(serviceType) },
+    }),
   getAIRecommendations: (year: number, month: number, notes: string) =>
     api.post(`/schedules/${year}/${month}/ai-recommendations`, { notes }),
 };
@@ -480,6 +541,9 @@ export const inspectionApi = {
 export const safetyApi = {
   getIncidents: (params?: Record<string, string>) => api.get('/safety/incidents', { params }),
   createIncident: (data: Record<string, unknown>) => api.post('/safety/incidents', data),
+  // 노무 관리 표의 셀 편집 — 보낸 칸만 부분 수정
+  updateIncident: (id: number, data: Record<string, unknown>) =>
+    api.put(`/safety/incidents/${id}`, data),
   resolveIncident: (id: number, notes?: string) => api.put(`/safety/incidents/${id}/resolve`, { notes }),
   deleteIncident: (id: number) => api.delete(`/safety/incidents/${id}`),
 

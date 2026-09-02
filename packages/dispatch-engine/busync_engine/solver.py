@@ -34,11 +34,14 @@ from .models import Shift
 @dataclass
 class SolverWeights:
     own_vehicle: int = 1000        # S1
+    pair_together: int = 4000      # S6: 짝궁은 같은 날 함께 근무/휴무 (실측 100%)
     swap_after_leave: int = 30     # S2: 휴무 복귀 후 시프트 유지 시 페널티
     keep_shift: int = 60           # S3: 연속 근무일 시프트 변경 시 페널티
     weekday_pref: int = 20         # S4
     vehicle_affinity: int = 8      # S5: 숙련도 — 과거 탑승 빈도 기반
     group_affinity: int = 15       # 소속 그룹 밖 투입 페널티 (하드 금지 — 실측 교차 88건/월)
+    solo_rest: int = 300           # S7: 하루만 쉬고 나오는 톱니 (실측 30%)
+    solo_work: int = 500           # S7: 하루만 나오고 다시 쉬는 톱니 (실측 9%)
     spare_balance: int = 5         # S5: 예비 투입 횟수 분산
     fairness_lambda: int = 3       # λ: 공정성 분산항 (담당자 슬라이더 노출용)
 
@@ -52,6 +55,21 @@ class AssignmentProblem:
     # 결행 등으로 한쪽 시프트만 비는 케이스를 표현하기 위해 시프트 단위로 관리.
     operating: set[tuple[dt.date, str, str]]
     drivers: list[str]
+    # 기본 틀에서 확정된 메인 배정 — (날짜, 차량, 시프트) -> 기사.
+    # 솔버는 이 칸을 풀지 않는다. 붙박이로 박고 **스페어 자리만** 푼다.
+    fixed_cells: dict[tuple[dt.date, str, str], str] = field(default_factory=dict)
+    # 기본 틀에서 확정된 메인의 휴무일. 이 날은 다른 차에도 못 앉는다 —
+    # 안 막으면 솔버가 쉬는 사람을 남는 자리에 끌어다 써서 계단이 무너진다.
+    fixed_off: dict[str, set[dt.date]] = field(default_factory=dict)
+    # 기본 틀을 **하드**로 박는가.
+    #   True  — 메인은 틀 그대로 확정되고 솔버는 스페어 자리만 푼다.
+    #           "틀을 만들었으면 스페어를 채울 때 그 틀은 고정되어야 한다.
+    #            자동 채우기가 메인 배차를 건드리면 안 된다"(사장님 2026-09-01).
+    #   False — "일한다면 자기 차·자기 시프트" 조건부. 메인도 근무일을
+    #           스페어에게 양보할 수 있어 근무일수는 고르지만 틀이 흔들린다.
+    frame_hard: bool = False
+    # S8: 스페어가 톱니로 쉬지 않게 미리 깔아둔 '쉬어야 할 날' (선택)
+    preferred_rest: dict[str, set[dt.date]] = field(default_factory=dict)
     # H4: 기사별 휴무(OFF 고정)일
     leaves: dict[str, set[dt.date]] = field(default_factory=dict)
     # 백테스트 모드: 기사별 근무일을 실측으로 고정 (None이면 자유 — 생성 모드)
@@ -119,6 +137,8 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
     def available(k: str, d: dt.date) -> bool:
         if d in problem.leaves.get(k, ()):  # H4
             return False
+        if d in problem.fixed_off.get(k, ()):  # H0: 기본 틀 휴무일
+            return False
         if problem.forced_work_days is not None:
             return d in problem.forced_work_days.get(k, ())
         return True
@@ -138,6 +158,32 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
         for k in problem.drivers:
             if available(k, d) and candidate(k, v):
                 x[(k, d, v, s)] = m.NewBoolVar(f"x_{k}_{d}_{v}_{s}")
+
+    # H0: 기본 틀. 메인이 그날 **일한다면** 자기 차의 틀 시프트여야 한다.
+    #
+    # 예전에는 여기서 x == 1 로 못박았다. 그러면 메인은 틀의 근무일을 하루도
+    # 빠짐없이 다 채우게 되고, 남는 자리만 스페어가 받는다. 성민에서 메인
+    # 21~24일 / 스페어 4~11일로 갈렸다 — 스페어 인건비의 절반이 노는 셈이다.
+    #
+    # 실제 배차는 그렇지 않다. 정·부가 함께 쉬는 날 그 차가 나가야 하면
+    # **스페어 두 명이 그 차를 맡는다**(성민 7월 실측 152일 중 78일). 즉 메인도
+    # 틀의 근무일에 쉴 수 있고, 그 자리를 스페어가 받는다. 그래야 108명이
+    # 고르게 일한다.
+    #
+    # 그래서 조건부로 건다 — "일한다면 자기 차·자기 시프트". 짝꿍·오전/오후
+    # 교대·순번 구조는 그대로 지켜지고, 근무일수만 아래 H5 가 고르게 만든다.
+    slot_set = set(slots)
+    pinned_drivers: set[str] = set()
+    #: (기사, 날짜) -> 그 사람이 그날 앉아야 할 틀 자리. works 가 만들어진 뒤 건다.
+    frame_cell: dict[tuple[str, dt.date], cp_model.IntVar] = {}
+    for (d, v, s), k in problem.fixed_cells.items():
+        if (d, v, s) not in slot_set:
+            continue  # 그날 감차된 차 — 틀에는 근무지만 나갈 차가 없다
+        key = (k, d, v, s)
+        if key not in x:
+            continue  # 승인 휴무·후보 제한과 겹침 — 스페어가 메운다
+        frame_cell[(k, d)] = x[key]
+        pinned_drivers.add(k)
 
     # H1: 운행 슬롯마다 정확히 1명 (allow_unfilled면 미충원 슬랙 + 큰 페널티)
     unfilled_penalties = []
@@ -179,6 +225,17 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
                 m.Add(pv == 0)
             shift_pm[(k, d)] = pv
 
+    # H0 적용.
+    #   frame_hard — 틀에 자리가 있으면 **그날 그 사람은 반드시 그 자리에 앉는다**.
+    #     메인 배차가 스페어를 채우는 과정에서 바뀌지 않는다.
+    #   그 외 — "일한다면 자기 자리"라는 조건부. 일하지 않는 것(= 스페어가 대신
+    #     맡는 것)을 허용해 근무일수를 고르게 만들지만, 틀이 흔들린다.
+    for (k, d), var in frame_cell.items():
+        if problem.frame_hard or (k, d) not in works:
+            m.Add(var == 1)
+        else:
+            m.Add(var == 1).OnlyEnforceIf(works[(k, d)])
+
     # 백테스트 모드: 근무일 강제
     if problem.forced_work_days is not None:
         for k in problem.drivers:
@@ -190,23 +247,91 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
         # 가용일 기준으로 자동 일할 (스펙 2.8)
         lo, hi = problem.work_days_band
         for k in problem.drivers:
+            if k in pinned_drivers:
+                # 기본 틀이 이 사람의 근무일을 이미 확정했다. 밴드를 겹쳐 걸면
+                # 12일 주기가 만드는 근무일수와 밴드(20~23)가 부딪혀 모델이
+                # 통째로 INFEASIBLE 이 된다.
+                continue
             kvars = [works[(k, d)] for d in dates if (k, d) in works]
             if kvars:
-                m.Add(sum(kvars) >= min(lo, len(kvars)))
+                # 계단식 계획(S8)이 있으면 근무일수 하한은 걸지 않는다.
+                # 계획이 이미 '이 사람은 이 날들에 쉰다'를 정해 놨고, 하루에
+                # 일할 수 있는 사람 수는 슬롯 수보다 딱 2명 많을 뿐이라
+                # (2144 vs 2142) 근무일수는 계획이 사실상 확정한다.
+                # 하한을 같이 걸면 '이 날 쉰다'와 '이만큼은 일해야 한다'가
+                # 그룹 단위로 부딪혀 모델이 통째로 INFEASIBLE 이 된다 —
+                # 기사는 같은 그룹 차량만 몰 수 있어서, 그룹 슬롯이 다 차면
+                # 남는 사람은 일하고 싶어도 앉을 자리가 없기 때문이다.
+                if not problem.preferred_rest.get(k):
+                    m.Add(sum(kvars) >= min(lo, len(kvars)))
                 m.Add(sum(kvars) <= hi)
 
     # H3: 연속 근무 ≤ max_consecutive
     win = problem.max_consecutive + 1
     for k in problem.drivers:
+        if problem.frame_hard and k in pinned_drivers:
+            # 틀이 이 사람의 근무일을 이미 확정했다. 겹쳐 걸면 틀이 한도를
+            # 넘는 순간 모델이 통째로 INFEASIBLE 이 된다 — 틀 자체가 한도를
+            # 넘는지는 generate 단계에서 경고로 알린다.
+            continue
         for i in range(len(dates) - win + 1):
             span = [works[(k, dates[i + j])] for j in range(win)
                     if (k, dates[i + j]) in works]
             if len(span) == win:
                 m.Add(sum(span) <= problem.max_consecutive)
 
+    penalties: list[cp_model.LinearExpr] = list(unfilled_penalties)
+
+    # ── S7: 근무·휴무를 덩어리로 (톱니 방지) ──
+    # 성민 7월 실측(107명): 근무블록은 4일 57%·3일 17%, 휴무블록은 2일 51%.
+    #
+    # 근무일수 밴드(H5)와 연속근무 한도(H3)만으로는 이 모양이 나오지 않는다.
+    # 총 근무일수만 맞으면 되니 솔버는 하루 일하고 하루 쉬는 톱니도 똑같이
+    # 정답으로 친다. 실제로 8월 생성본은 휴무블록 1일이 66%까지 치솟았다.
+    #
+    # 큰 틀은 아래 S8(계단식 계획)이 하드로 잡는다. S7 이 맡는 건 그 계획에
+    # 없는 사람과, 계획상 근무일이지만 그날 앉을 자리가 없어 쉬게 되는
+    # 여유 인원의 하루다 — 그 하루를 이미 있는 휴무 블록 옆에 붙여 준다.
+    # 하드로 못 거는 이유: 연차가 하루만 껴 있거나 월 경계에 걸리면 1일
+    # 블록이 불가피하다 — 실측에도 30%/9% 존재한다.
+    for k in problem.drivers:
+        for i in range(1, len(dates) - 1):
+            dp, dc, dn = dates[i - 1], dates[i], dates[i + 1]
+            if (k, dp) not in works or (k, dc) not in works or (k, dn) not in works:
+                continue
+            wp, wc, wn = works[(k, dp)], works[(k, dc)], works[(k, dn)]
+            # 일·쉼·일 → 하루짜리 휴무
+            sr = m.NewBoolVar(f"solo_rest_{k}_{dc}")
+            m.AddBoolAnd([wp, wc.Not(), wn]).OnlyEnforceIf(sr)
+            m.AddBoolOr([wp.Not(), wc, wn.Not()]).OnlyEnforceIf(sr.Not())
+            penalties.append(sr * w.solo_rest)
+            # 쉼·일·쉼 → 하루짜리 근무
+            sw = m.NewBoolVar(f"solo_work_{k}_{dc}")
+            m.AddBoolAnd([wp.Not(), wc, wn.Not()]).OnlyEnforceIf(sw)
+            m.AddBoolOr([wp, wc.Not(), wn]).OnlyEnforceIf(sw.Not())
+            penalties.append(sw * w.solo_work)
+
+    # ── S8: 미리 깔아둔 휴무일을 지킨다 (하드) ──
+    # 메인(정·부)은 이제 H0(fixed_cells/fixed_off)가 통째로 확정하므로 여기
+    # 오지 않는다. 남은 쓰임은 **스페어**다 — 스페어에게도 쉬는 날을 미리
+    # 깔아 주면 하루 일하고 하루 쉬는 톱니가 안 생긴다.
+    #
+    # 소프트로는 안 된다. 가중치를 900에서 5000까지 올려도 90초 안에 준수율이
+    # 67~70%에서 멈췄다 — 가중치 문제가 아니라 탐색 크기 문제다.
+    for k, want_rest in problem.preferred_rest.items():
+        for d in want_rest:
+            if (k, d) in works:
+                m.Add(works[(k, d)] == 0)
+        # 힌트로도 준다 — 이 모양 근처에서 탐색을 시작하게 한다
+        for d in dates:
+            if (k, d) in works:
+                m.AddHint(works[(k, d)], 0 if d in want_rest else 1)
+
     # H6: 오후 → 익일 오전 금지 (옵션)
     if problem.forbid_pm_to_am:
         for k in problem.drivers:
+            if problem.frame_hard and k in pinned_drivers:
+                continue  # 틀이 시프트를 확정 — H3 과 같은 이유로 겹쳐 걸지 않는다
             for i in range(len(dates) - 1):
                 d1, d2 = dates[i], dates[i + 1]
                 if (k, d1) in shift_pm and (k, d2) in shift_pm and (k, d2) in works:
@@ -214,7 +339,56 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
                     m.Add(am2 == 1).OnlyEnforceIf([works[(k, d2)], shift_pm[(k, d2)].Not()])
                     m.AddImplication(shift_pm[(k, d1)], am2.Not())
 
-    penalties: list[cp_model.LinearExpr] = list(unfilled_penalties)
+    # ── S6: 짝궁은 같은 날 함께 근무하거나 함께 쉰다 ──
+    # 성민 7월 실측: 정·부 14쌍 × 31일 = 434일 중 '한쪽만 근무'가 **0일**이다.
+    # 함께 일한 282일은 전부 본인 차량에 오전/오후로 나눠 탔고, 함께 쉰 152일
+    # 중 78일은 그 차가 나가야 해서 스페어 2명이 채웠다.
+    #
+    # 이 규칙이 없으면 솔버가 한쪽만 쉬게 만드는 해를 자유롭게 고른다. 실제로
+    # 8월 생성본의 짝궁 휴무 일치율이 33%까지 떨어졌다 — 담당자 눈에 가장 먼저
+    # 띄는 어긋남이다.
+    #
+    # 하드로 걸지 않는 이유: 승인 휴무·입퇴사·연속근무 한도와 겹치면 해가 아예
+    # 없어질 수 있다. 대신 가중치를 본인차량(1000)보다 높게 줘서, 어길 바에는
+    # 다른 걸 포기하도록 만든다.
+    # 'S6 하드 제약이 실제로 걸린' 짝 — 아래 S2 가 이걸 보고 동시휴로 판단한다
+    pair_locked: set[str] = set()
+    driver_set = set(problem.drivers)
+    for k in problem.drivers:
+        pk = problem.partner.get(k)
+        # (k, pk) 쌍을 한 번만 — 사전순으로 앞선 쪽에서만 건다
+        if not pk or pk >= k or pk not in driver_set:
+            continue
+        pair_locked.add(k)
+        pair_locked.add(pk)
+        for d in dates:
+            if (k, d) not in works or (pk, d) not in works:
+                continue
+            # 승인 휴무·결원이 한쪽에만 걸린 날은 애초에 함께 설 수 없다 —
+            # 그런 날까지 하드로 묶으면 해가 아예 없어진다.
+            blocked = (
+                d in problem.leaves.get(k, ())
+                or d in problem.leaves.get(pk, ())
+                or not available(k, d)
+                or not available(pk, d)
+            )
+            if blocked:
+                continue
+            # 하드로 건다. 7월 실측이 434일 중 위반 0일이라 이게 현실이고,
+            # 쌍을 한 덩어리로 묶으면 탐색 공간도 크게 줄어 해를 빨리 찾는다.
+            # (소프트로 뒀더니 3개 노선에서 제한 시간 안에 62% 밖에 못 맞췄다)
+            m.Add(works[(k, d)] == works[(pk, d)])
+
+            # 함께 일하는 날에는 오전/오후를 나눠 맡아야 한다. 짝궁은 한 차의
+            # 정·부이므로 둘 다 오전(또는 둘 다 오후)이면 그 차의 반대 시프트가
+            # 비고 누군가 남의 차를 타고 있다는 뜻이다 (7월 실측 0건).
+            if (k, d) in shift_pm and (pk, d) in shift_pm:
+                # 함께 일하는 날이면 오전/오후를 나눠 맡는다 (같은 차의 정·부).
+                # 둘 다 오전이면 그 차의 오후가 비고 누군가 남의 차를 탄다.
+                m.Add(
+                    shift_pm[(k, d)] + shift_pm[(pk, d)] == 1
+                ).OnlyEnforceIf(works[(k, d)])
+
 
     # 월초 페이즈 앵커 (하드): 기사별 첫 근무일의 A/P 고정
     for k, (d, is_pm) in problem.first_shift_anchor.items():
@@ -300,6 +474,14 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
     else:
         # 생성 모드: 근무일이 결정변수 — 조건부(reified) 페널티
         for k in problem.drivers:
+            if k in pinned_drivers:
+                # 기본 틀이 이 사람의 시프트를 이미 정했다. S2(휴무 복귀 시 스왑)를
+                # 겹쳐 걸면 안 된다 — 틀에서는 근무가 끊기는 이유가 휴무만이
+                # 아니라 **감차**이기도 한데, 감차로 하루 빠진 뒤에는 시프트를
+                # 그대로 이어 간다. S2 는 2~5일 간격을 전부 '휴무 복귀'로 보고
+                # 스왑을 하드로 요구해서, 블록 한가운데가 감차로 끊긴 날마다
+                # 모델이 INFEASIBLE 이 됐다.
+                continue
             for i in range(len(dates) - 1):
                 d1, d2 = dates[i], dates[i + 1]
                 if (k, d1) not in works or (k, d2) not in works:
@@ -340,13 +522,33 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
                     p1, p2 = shift_pm[(k, d1)], shift_pm[(k, d2)]
                     m.Add(p1 == p2).OnlyEnforceIf(same)
                     m.Add(p1 != p2).OnlyEnforceIf(same.Not())
-                    # joint 판정: 갭 중 짝의 승인 휴무일이 하루라도 있으면 동시휴
+                    # joint 판정 = 이 휴무를 짝과 **함께** 쉬었는가.
+                    #
+                    # 예전에는 짝의 **승인 휴무(연차)** 만 봤다. 그런데 정·부가
+                    # 로테이션으로 함께 쉬는 회사에서는 갭이 연차가 아니라서
+                    # '단독휴'로 잘못 읽히고, 그러면 규칙이 뒤집혀 **시프트 유지**를
+                    # 선호하게 된다 — 한 사람이 한 달 내내 오후만 타는 그 현상이다.
+                    #
+                    # 짝이 있으면 위 S6 하드 제약이 '같은 날 함께 쉰다'를 보장하므로
+                    # 갭에는 짝도 반드시 쉰다. 곧 언제나 동시휴다.
                     gap_days = [dates[i + g] for g in range(1, gap)]
                     joint = (
                         problem.pair_swap_rule == "always_swap"
                         or pk is None
+                        or pk in pair_locked          # 짝과 함께 쉬는 것이 보장된 경우
                         or any(gd in partner_leaves for gd in gap_days)
                     )
+                    # 짝이 있는 메인은 휴무 뒤 스왑이 실측 100%(7월 207회 중 207회)다.
+                    # 하드로 걸면 어긋남이 없어지고 탐색 공간도 줄어 더 빨리 푼다.
+                    # 다만 갭에 승인 휴무가 걸린 날은 사정이 다르므로 소프트로 남긴다.
+                    if (
+                        pk is not None
+                        and pk in pair_locked
+                        and not any(gd in problem.leaves.get(k, ()) for gd in gap_days)
+                        and not any(gd in partner_leaves for gd in gap_days)
+                    ):
+                        m.Add(p1 + p2 == 1).OnlyEnforceIf(cond)
+                        continue
                     flag = m.NewBoolVar(f"sw_{k}_{d1}_{gap}")
                     if joint:
                         # 복귀했는데 유지하면 페널티 (스왑 선호)
