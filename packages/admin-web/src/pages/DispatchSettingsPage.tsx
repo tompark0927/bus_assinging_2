@@ -198,7 +198,13 @@ export default function DispatchSettingsPage() {
     // (화면 높이로 고정하는 방법도 써 봤지만, 목록 바깥 요소만으로 높이가 차는
     //  노트북 화면에서 목록이 0px 로 접혀서 되돌렸다.)
     // 운영 정책 탭은 긴 폼이라 아래에 약간의 여유를 남긴다.
-    <div className={tab === 'engine' ? 'space-y-8 -mb-8' : 'space-y-8 pb-4'}>
+    <div
+      className={
+        tab === 'engine'
+          ? 'flex h-[calc(100vh-9rem)] flex-col gap-8'
+          : 'space-y-8 pb-4'
+      }
+    >
       {/* Header */}
       <PageHeader
         help={dispatchSettingsHelp}
@@ -635,7 +641,9 @@ export default function DispatchSettingsPage() {
         </Section>
           </>
         ) : (
-          <EngineTuningSection />
+          <div className="min-h-0 flex-1">
+            <EngineTuningSection />
+          </div>
         )}
     </div>
   );

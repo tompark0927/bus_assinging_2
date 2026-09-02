@@ -38,6 +38,13 @@ interface Slot {
   shift: string;
 }
 
+/**
+ * 대타 기능 — 정식 오픈 전까지 앱에서도 숨긴다 (웹 Layout.tsx 의 숨김과 한 세트).
+ * 되살릴 때 true 로 바꾸고 AppNavigator·App.tsx·NotificationsScreen 의 같은 주석도 함께 푼다.
+ * 코드는 그대로 두므로 이 값만 되돌리면 긴급 배너와 폴링이 다시 살아난다.
+ */
+const SHOW_SUBSTITUTE = false;
+
 export default function HomeScreen() {
   const { user } = useAuthStore();
   const navigation = useNavigation<any>();
@@ -69,6 +76,8 @@ export default function HomeScreen() {
     queryKey: ['emergency-open'],
     queryFn: () => emergencyApi.list().then(r => r.data.data),
     refetchInterval: 15000,
+    // 대타를 숨기는 동안에는 15초마다 도는 폴링도 함께 멈춘다 (불필요한 요청·배터리 소모 방지).
+    enabled: SHOW_SUBSTITUTE,
   });
 
   // ── 다음 달 휴무 미리 신청 안내 팝업 ──
@@ -221,8 +230,8 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Emergency Alert */}
-        {emergencyCount > 0 && (
+        {/* Emergency Alert — 대타 숨김 중에는 렌더하지 않는다 (숨긴 탭으로 이동하는 배너다) */}
+        {SHOW_SUBSTITUTE && emergencyCount > 0 && (
           <TouchableOpacity
             style={styles.emergencyCard}
             onPress={() => navigation.navigate('긴급/대타')}

@@ -11,7 +11,11 @@ import NotificationsScreen from '../screens/NotificationsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import DayOffScreen from '../screens/DayOffScreen';
-import EmergencyScreen from '../screens/EmergencyScreen';
+// 대타 기능 — 정식 오픈 전까지 숨김. 화면 파일(EmergencyScreen)은 그대로 두고 탭 등록만 뺀다.
+// 되살릴 때: 이 import 와 아래 TAB_ICONS·Tab.Screen 주석,
+// 그리고 App.tsx(딥링크·푸시 라우팅) · HomeScreen(SHOW_SUBSTITUTE) ·
+// NotificationsScreen(TYPE_TARGET) 의 같은 주석을 함께 푼다.
+// import EmergencyScreen from '../screens/EmergencyScreen';
 import ForceChangePasswordScreen from '../screens/ForceChangePasswordScreen';
 import OfflineBanner from '../components/OfflineBanner';
 
@@ -25,7 +29,8 @@ const Tab = createBottomTabNavigator();
 const TAB_ICONS: Record<string, { focused: string; default: string }> = {
   '홈':         { focused: 'home',             default: 'home-outline' },
   '배차표':      { focused: 'calendar',         default: 'calendar-outline' },
-  '긴급/대타':   { focused: 'alert-circle',     default: 'alert-circle-outline' },
+  // 대타 기능 숨김 (위 import 주석 참고)
+  // '긴급/대타':   { focused: 'alert-circle',     default: 'alert-circle-outline' },
   '휴무신청':    { focused: 'document-text',    default: 'document-text-outline' },
   '내정보':      { focused: 'person',           default: 'person-outline' },
 };
@@ -100,11 +105,13 @@ function MainTabs() {
         component={ScheduleScreen}
         options={{ title: '내 배차' }}
       />
+      {/* 대타 기능 숨김 (위 import 주석 참고)
       <Tab.Screen
         name="긴급/대타"
         component={EmergencyScreen}
         options={{ title: '긴급 / 대타' }}
       />
+      */}
       <Tab.Screen
         name="휴무신청"
         component={DayOffScreen}

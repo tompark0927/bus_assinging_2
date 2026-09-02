@@ -30,7 +30,9 @@ const linking: LinkingOptions<any> = {
         screens: {
           홈: 'home',
           배차표: 'schedule',
-          '긴급/대타': 'emergency',
+          // 대타 기능 숨김 — 탭이 없는 동안 이 딥링크로 들어오면 이동할 곳이 없다.
+          // 되살릴 때 AppNavigator 의 같은 주석과 함께 푼다.
+          // '긴급/대타': 'emergency',
           휴무신청: 'dayoff',
           내정보: 'profile',
         },
@@ -83,10 +85,12 @@ export default function App() {
 
         if (navigationRef.current) {
           switch (type) {
-            case 'EMERGENCY_SLOT':
-            case 'EMERGENCY_FILLED':
-              navigationRef.current.navigate('Main', { screen: '긴급/대타' });
-              break;
+            // 대타 기능 숨김 — 탭이 없는 동안 대타 푸시를 탭하면 아래 default 로 떨어져
+            // 알림 화면으로 간다. 되살릴 때 AppNavigator 의 같은 주석과 함께 푼다.
+            // case 'EMERGENCY_SLOT':
+            // case 'EMERGENCY_FILLED':
+            //   navigationRef.current.navigate('Main', { screen: '긴급/대타' });
+            //   break;
             case 'DAY_OFF_APPROVED':
             case 'DAY_OFF_REJECTED':
               navigationRef.current.navigate('Main', { screen: '휴무신청' });

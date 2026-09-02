@@ -39,8 +39,11 @@ const DEFAULT_ICON = { name: 'notifications' as const, color: colors.textMuted, 
 const TYPE_TARGET: Record<string, string> = {
   SCHEDULE_PUBLISHED: '배차표',
   SCHEDULE_CHANGE: '배차표',
-  EMERGENCY_SLOT: '긴급/대타',
-  EMERGENCY_FILLED: '긴급/대타',
+  // 대타 기능 숨김 — 매핑을 빼면 target 이 undefined 가 되어
+  // 이동(navigate)과 오른쪽 화살표가 함께 빠진다. 알림 자체는 그대로 보이고 읽음 처리도 된다.
+  // 되살릴 때 AppNavigator 의 같은 주석과 함께 푼다.
+  // EMERGENCY_SLOT: '긴급/대타',
+  // EMERGENCY_FILLED: '긴급/대타',
   DAY_OFF_APPROVED: '휴무신청',
   DAY_OFF_REJECTED: '휴무신청',
 };
