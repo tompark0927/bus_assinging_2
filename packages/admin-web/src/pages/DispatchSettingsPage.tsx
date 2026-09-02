@@ -116,12 +116,19 @@ const PRESET_VILLAGE_1SHIFT: CompanyPolicy = {
 export default function DispatchSettingsPage() {
   const queryClient = useQueryClient();
   const companyId = useAuthStore((s) => s.user?.companyId);
-  // 운영 정책 / 엔진 튜닝 — 한 화면 두 탭. 예전엔 별도 페이지였고, 그래서
+  // 운영 정책 / 공휴일 — 한 화면 두 탭. 예전엔 별도 페이지였고, 그래서
   // 두 정책이 서로 다른 값을 가리키는 사고가 났다. URL(?tab=engine)로도 열린다.
   const [searchParams, setSearchParams] = useSearchParams();
   const tab: 'policy' | 'engine' = searchParams.get('tab') === 'engine' ? 'engine' : 'policy';
   const setTab = (next: 'policy' | 'engine') =>
     setSearchParams(next === 'engine' ? { tab: 'engine' } : {}, { replace: true });
+
+  // 탭을 바꾸면 스크롤을 맨 위로 되돌린다. 운영 정책 탭은 길고 공휴일 탭은 짧아서,
+  // 스크롤 위치를 그대로 두면 공휴일 탭이 내용 아래 빈 화면에서 열린다.
+  // 스크롤 컨테이너는 페이지가 아니라 Layout 의 <main> 이다.
+  useEffect(() => {
+    document.querySelector('main')?.scrollTo({ top: 0 });
+  }, [tab]);
   const { data, isLoading } = useQuery<{ policy: CompanyPolicy; isDefault: boolean }>({
     queryKey: ['company-policy'],
     queryFn: () => companyPolicyApi.get().then((r) => r.data.data),
@@ -129,7 +136,6 @@ export default function DispatchSettingsPage() {
 
   const [policy, setPolicy] = useState<CompanyPolicy | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [engineSave, setEngineSave] = useState<{ dirty: boolean; saving: boolean; save: () => void } | null>(null);
 
   useEffect(() => {
     if (data?.policy && !policy) {
@@ -214,16 +220,6 @@ export default function DispatchSettingsPage() {
                 저장
               </button>
             )}
-            {tab === 'engine' && engineSave && (
-              <button
-                onClick={engineSave.save}
-                disabled={!engineSave.dirty || engineSave.saving}
-                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-2 text-[15px] font-medium"
-              >
-                {engineSave.saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                저장
-              </button>
-            )}
           </>
         }
       >
@@ -255,31 +251,6 @@ export default function DispatchSettingsPage() {
           </button>
         ))}
       </div>
-
-      {/* AI 엔진과의 역할 구분 — 어떤 항목이 실제로 생성에 전달되는지 명시한다.
-          (예전에는 이 화면이 구 TS 솔버 전용이라, 여기서 바꾼 값이 실제
-           배차표를 만드는 Python 엔진에 전혀 전달되지 않았다) */}
-      {tab === 'policy' && (
-      <div className="rounded-2xl border border-blue-200 dark:border-blue-800 bg-blue-50/60 dark:bg-blue-900/20 p-4">
-        <div className="flex items-start gap-3">
-          <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
-          <div className="text-[14px] leading-relaxed text-blue-900 dark:text-blue-200">
-            <p className="font-semibold mb-1">배차표 생성에 반영되는 항목</p>
-            <p>
-              월 근무일수 범위, 주간 최대 근무일, 최소 휴식 시간, 1인 승무 여부, 승인된 휴무
-            </p>
-            <p className="font-semibold mt-2 mb-1">발행 검산 기준</p>
-            <p>
-              면허 만료 배정 금지, 승인 휴무일 배정 금지, 연속근무 초과, 월 최소 주말휴무 부족
-            </p>
-            <p className="font-semibold mt-2 mb-1">아직 지원하지 않음</p>
-            <p>
-              3교대, 격일제, 승무 인원수(TRIO), 신규기사 단독 금지, 사고 노선 금지. 배차는 2교대 짝궁 구조를 전제로 생성합니다.
-            </p>
-          </div>
-        </div>
-      </div>
-      )}
 
         {tab === 'policy' ? (
           <>
@@ -659,7 +630,7 @@ export default function DispatchSettingsPage() {
         </Section>
           </>
         ) : (
-          <EngineTuningSection onGoToPolicy={() => setTab('policy')} onSaveStateChange={setEngineSave} />
+          <EngineTuningSection />
         )}
     </div>
   );

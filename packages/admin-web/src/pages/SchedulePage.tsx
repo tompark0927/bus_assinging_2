@@ -29,6 +29,7 @@ import {
   Plus,
   Layers,
   Copy,
+  CalendarDays,
 } from 'lucide-react';
 import { schedulesApi, routesApi, busesApi, usersApi, dayOffApi, companyPolicyApi, type ScheduleServiceType } from '../services/api';
 import { format, getDaysInMonth } from 'date-fns';
@@ -555,9 +556,19 @@ export default function SchedulePage() {
 
   // 생성 모달에 보여줄 현재 배차 설정 — AI 엔진 생성은 이 정책을 따른다
   // (백엔드 engine 프록시가 /generate 요청에 이 정책을 실어 보낸다)
-  const { data: companyPolicy } = useQuery<GeneratePolicySummary>({
+  //
+  // queryFn 은 배차 설정 화면과 같은 응답(`{ policy, isDefault }`)을 그대로 캐시에 넣고,
+  // 필요한 조각만 select 로 꺼낸다. 예전에는 여기서 .policy 까지 벗겨 캐시에 넣었는데,
+  // 같은 queryKey 를 쓰는 배차 설정 화면과 캐시 모양이 달라져 먼저 뜬 화면이 이겼다.
+  // 설정 화면을 먼저 열면 이 화면이 껍데기(`{ policy, isDefault }`)를 정책으로 읽어
+  // restCycle 이 undefined 가 됐다 — 생성 모달이 첫 진입에만 터지던 원인.
+  const { data: companyPolicy } = useQuery({
     queryKey: ['company-policy'],
-    queryFn: () => companyPolicyApi.get().then((r) => r.data.data.policy),
+    queryFn: () =>
+      companyPolicyApi
+        .get()
+        .then((r) => r.data.data as { policy: GeneratePolicySummary; isDefault: boolean }),
+    select: (d) => d?.policy,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -622,7 +633,7 @@ export default function SchedulePage() {
 
   // AI 배차 엔진(CP-SAT)으로 생성 → 배차표로 저장.
   // 엔진은 과거 배차표에서 로테이션·감차·짝궁 규칙을 이어받으므로 직전 월이
-  // 포함된 엑셀이 필요하다. 규칙 자체는 [배차 설정](운영 정책 + 엔진 튜닝)을 따른다.
+  // 포함된 엑셀이 필요하다. 규칙 자체는 [배차 설정](운영 정책 + 공휴일)을 따른다.
   const [engineFile, setEngineFile] = useState<File | null>(null);
   /**
    * generate = 엔진이 새로 짠다 (과거 배차표에서 규칙을 이어받음)
@@ -3010,7 +3021,7 @@ export default function SchedulePage() {
               />
             </div>
 
-            {/* 이번 생성에 적용될 정책 — 값의 주인은 [배차 설정](운영 정책·엔진 튜닝 탭)이다.
+            {/* 이번 생성에 적용될 정책 — 값의 주인은 [배차 설정](운영 정책·공휴일 탭)이다.
                 예전에는 여기서 근무일수·휴무일수·신규기사·사고기사를 받았지만,
                 그 입력은 구 v2 솔버 전용이라 AI 엔진 생성에 전혀 전달되지 않는
                 죽은 입력이었다. 설정 화면으로 일원화하고 여기서는 보여주기만 한다. */}
@@ -3034,7 +3045,7 @@ export default function SchedulePage() {
                         onClick={() => navigate('/dashboard/settings?tab=engine')}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5"
                       >
-                        <Sparkles size={14} /> 엔진 튜닝
+                        <CalendarDays size={14} /> 공휴일
                       </button>
                     </div>
                   </div>
@@ -3042,7 +3053,7 @@ export default function SchedulePage() {
                     <div className="flex justify-between gap-2">
                       <dt className="text-gray-500 dark:text-gray-400">근무 사이클</dt>
                       <dd className="font-medium text-gray-800 dark:text-gray-200">
-                        {companyPolicy
+                        {companyPolicy?.restCycle
                           ? `${companyPolicy.restCycle.workDays}근 ${companyPolicy.restCycle.restDays}휴`
                           : '—'}
                       </dd>
@@ -3050,7 +3061,7 @@ export default function SchedulePage() {
                     <div className="flex justify-between gap-2">
                       <dt className="text-gray-500 dark:text-gray-400">월 근무일수</dt>
                       <dd className="font-medium text-gray-800 dark:text-gray-200">
-                        {companyPolicy
+                        {companyPolicy?.workdayBands
                           ? `${companyPolicy.workdayBands.hardMin}~${companyPolicy.workdayBands.hardMax}일`
                           : '—'}
                       </dd>
@@ -3066,7 +3077,7 @@ export default function SchedulePage() {
                     <div className="flex justify-between gap-2">
                       <dt className="text-gray-500 dark:text-gray-400">교대·승무</dt>
                       <dd className="font-medium text-gray-800 dark:text-gray-200">
-                        {companyPolicy
+                        {companyPolicy?.shiftSystem && companyPolicy?.crewModel
                           ? `${SHIFT_KIND_LABEL[companyPolicy.shiftSystem.kind] ?? companyPolicy.shiftSystem.kind} · ${
                               CREW_KIND_LABEL[companyPolicy.crewModel.kind] ?? companyPolicy.crewModel.kind
                             }`

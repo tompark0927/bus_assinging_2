@@ -245,7 +245,7 @@ export default function InspectPage() {
 
       {reports && reports.length > 0 && (
         <p className="pb-4 text-center text-xs text-gray-400">
-          검사 기준은 <span className="font-medium">배차 설정</span>(운영 정책 + 엔진 튜닝)의 값을 그대로 씁니다.
+          검사 기준은 <span className="font-medium">배차 설정</span>(운영 정책 + 공휴일)의 값을 그대로 씁니다.
           회사 규칙과 다르면 설정을 고친 뒤 다시 올려 주세요.
         </p>
       )}
