@@ -44,6 +44,10 @@ class SolverWeights:
     solo_work: int = 500           # S7: 하루만 나오고 다시 쉬는 톱니 (실측 9%)
     spare_balance: int = 5         # S5: 예비 투입 횟수 분산
     fairness_lambda: int = 3       # λ: 공정성 분산항 (담당자 슬라이더 노출용)
+    # H5-soft: 근무일수 하한 미달 1일당. 빈 칸 페널티(10000)보다 싸서 '칸을
+    # 채우는 것'을 이기지 못하고, 톱니 페널티(300/500)보다 비싸서 사람을
+    # 놀리느니 하루를 더 주게 만든다.
+    work_days_floor: int = 600
 
 
 @dataclass
@@ -93,6 +97,10 @@ class AssignmentProblem:
     prev_last_work: dict[str, dt.date] = field(default_factory=dict)
     # H5: 근무일수 밴드 (생성 모드에서만 유효)
     work_days_band: tuple[int, int] = (0, 31)
+    # H5-soft: 틀에 박히지 않은 기사(스페어·담당 차량 미확정 메인)의 근무일수
+    # 하한 — **소프트**다. 하드로 걸면 앉을 자리보다 하한이 커지는 순간 모델이
+    # 통째로 INFEASIBLE 이 된다. 0이면 끄기.
+    work_days_floor: int = 0
     max_consecutive: int = 6
     forbid_pm_to_am: bool = False  # H6 스위치
     # S1을 하드로 (백테스트·기본 생성: 실측 위반 월 3건 수준이라 사실상 하드)
@@ -281,6 +289,26 @@ def solve(problem: AssignmentProblem, weights: SolverWeights | None = None,
                 m.Add(sum(span) <= problem.max_consecutive)
 
     penalties: list[cp_model.LinearExpr] = list(unfilled_penalties)
+
+    # H5-soft: 근무일수 하한 (틀에 안 박힌 기사)
+    #
+    # 하드 하한은 못 쓴다 — 남은 칸이 인원보다 적으면 "이만큼은 일해야 한다"와
+    # "앉을 자리가 없다"가 부딪혀 모델이 통째로 죽는다. 그렇다고 아예 없으면
+    # 솔버 입장에서는 특정인을 0일로 두는 해와 고르게 나눈 해의 값이 같아서,
+    # 실제로 기초 데이터상 메인인 기사가 한 칸도 못 받는 일이 생겼다.
+    # 그래서 미달분에 값을 매긴다 — 어길 수는 있지만 비싸다.
+    if problem.forced_work_days is None and problem.work_days_floor > 0:
+        for k in problem.drivers:
+            if k in pinned_drivers:
+                continue  # 틀이 이미 근무일을 확정했다
+            kvars = [works[(k, d)] for d in dates if (k, d) in works]
+            if not kvars:
+                continue
+            target = min(problem.work_days_floor, len(kvars))
+            short = m.NewIntVar(0, target, f"short_{k}")
+            m.Add(short >= target - sum(kvars))
+            penalties.append(short * w.work_days_floor)
+
 
     # ── S7: 근무·휴무를 덩어리로 (톱니 방지) ──
     # 성민 7월 실측(107명): 근무블록은 4일 57%·3일 17%, 휴무블록은 2일 51%.

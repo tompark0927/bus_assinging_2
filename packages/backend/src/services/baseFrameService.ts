@@ -8,6 +8,7 @@ import { monthScheduleAsCells, routeOperatingCounts } from './scheduleToCellsSer
 import { saveEngineDraft } from './engineScheduleService';
 import { approvedLeavesByName } from '../routes/engine';
 import { serviceTypeLabel } from '../utils/serviceType';
+import { rosterForEngine } from './engineRoster';
 
 /**
  * 기본 틀을 달마다 미리 깔아 둔다.
@@ -73,11 +74,12 @@ export async function requestEngineCells(
     return { error: `${py}년 ${pm}월 배차표가 없어 순번을 이어받을 수 없음` };
   }
 
-  const [enginePolicy, companyPolicy, leaves, operatingCounts] = await Promise.all([
+  const [enginePolicy, companyPolicy, leaves, operatingCounts, roster] = await Promise.all([
     loadEnginePolicy(companyId),
     loadCompanyPolicy(companyId),
     approvedLeavesByName(companyId, year, month),
     routeOperatingCounts(companyId, serviceType),
+    rosterForEngine(companyId, serviceType),
   ]);
 
   const upstream = await fetch(`${engineUrl}/generate-from-cells`, {
@@ -90,6 +92,10 @@ export async function requestEngineCells(
       policy: mergeEnginePolicy(enginePolicy, companyPolicy),
       leaves,
       operating_counts: operatingCounts,
+      // 누가 있고 누가 메인인지는 **기초 데이터가 진실**이다. 안 보내면 엔진이
+      // 지난달 배차표에서 추론하는데, 그러면 지난달에 적게 일한 메인이 계속
+      // 밀려나는 되먹임이 생긴다.
+      roster,
       mains_only: mainsOnly,
     }),
   });

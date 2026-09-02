@@ -136,9 +136,15 @@ def generate_month(
     operating_counts: Optional[dict[str, dict[str, int]]] = None,
     base_frame: Optional[BaseFrame] = None,
     mains_only: bool = False,
+    roster: Optional[list[dict]] = None,
 ) -> GenerationResult:
     """home_vehicle_config: 담당자가 확정한 이번 달 차량-고정기사 구성
-    (기사 -> 차량). 없으면 전월 실적에서 추론한다."""
+    (기사 -> 차량). 없으면 전월 실적에서 추론한다.
+
+    roster: **기초 데이터**의 기사 명단 —
+    ``[{"name": str, "main": bool, "home_vehicle": str | None}, ...]``.
+    주면 "누가 있는지"와 "누가 메인인지"를 전월 배차표에서 추론하지 않는다.
+    """
     if not history:
         raise ValueError("과거 로스터가 최소 1개월 필요합니다 (규칙·프로필 추론)")
     leaves = leaves or {}
@@ -201,6 +207,75 @@ def generate_month(
             v, n = c.most_common(1)[0]
             if n / sum(c.values()) >= 0.5 and n >= 10:
                 home_vehicle[k] = v
+    # ── 명단과 '누가 메인인가'는 **기초 데이터가 진실**이다 ──
+    #
+    # 예전에는 둘 다 전월 배차표에서 추론했다(한 차를 10일 이상, 그게 절반
+    # 이상이면 고정기사). 그러면 되먹임이 생긴다 — 지난달에 적게 일한 사람은
+    # '고정기사 아님'으로 밀려 이번 달 틀에서 빠지고, 그래서 또 적게 받고,
+    # 그 결과가 다음 달 추론의 입력이 된다. 한 번 어긋나면 아무리 그 달을
+    # 고쳐도 되돌아오지 않는다.
+    #   사장님 2026-09-02: "8월 보고 9월 짜니 9월이 이상하고, 9월 보고 10월
+    #   짜니 고친 것 같지가 않다. 첫 단추부터 잘못 끼웠다."
+    # 실제로 안정선·이금자·임미정(기초 데이터상 메인)이 지난달 10일 근무에
+    # 그쳐 스페어로 밀렸고, 그 달 배차가 다시 다음 달의 근거가 됐다.
+    roster_warnings: list[str] = []
+    if roster:
+        registered = {str(r["name"]).strip() for r in roster if r.get("name")}
+        declared_main = {
+            str(r["name"]).strip() for r in roster
+            if r.get("name") and r.get("main")
+        }
+        declared_home = {
+            str(r["name"]).strip(): str(r["home_vehicle"]).strip()
+            for r in roster if r.get("name") and r.get("home_vehicle")
+        }
+        month_vehicles = {v for g in prev_t.groups for v in g.vehicles}
+
+        # 담당 차량은 한 대에 정·부 둘까지다. 셋 이상 걸린 차가 있으면 기초
+        # 데이터가 아직 정리되지 않은 것이므로 **통째로 쓰지 않고** 알린다 —
+        # 반만 믿고 쓰면 어느 기사가 왜 밀려났는지 아무도 설명할 수 없다.
+        per_vehicle: Counter = Counter(
+            v for k, v in declared_home.items()
+            if k in declared_main and v in month_vehicles
+        )
+        crowded = sorted(v for v, n in per_vehicle.items() if n > 2)
+        if crowded:
+            roster_warnings.append(
+                f"기초 데이터의 담당 차량을 쓰지 않았습니다 — 한 대에 메인이 셋 "
+                f"이상 걸린 차가 {len(crowded)}대 있습니다({', '.join(crowded[:5])}"
+                f"{' 외' if len(crowded) > 5 else ''}). 한 차에는 정·부 두 명이어야 "
+                f"합니다. [기초 데이터 → 기사]에서 담당 차량을 바로잡아 주세요. "
+                f"이번 달은 지난달 배차표에서 추론한 값으로 짭니다."
+            )
+        else:
+            for k in declared_main:
+                v = declared_home.get(k)
+                if v in month_vehicles:
+                    home_vehicle[k] = v
+            # 기초 데이터가 스페어라고 한 사람은 메인으로 올리지 않는다.
+            for k in list(home_vehicle):
+                if k in registered and k not in declared_main:
+                    del home_vehicle[k]
+
+        stray = sorted(k for k in home_vehicle if k not in registered)
+        for k in stray:
+            del home_vehicle[k]
+        if stray:
+            roster_warnings.append(
+                f"지난달 배차표에는 있으나 기초 데이터에 없는 이름 {len(stray)}명은 "
+                f"배차하지 않았습니다: {', '.join(stray[:5])}"
+                f"{' 외' if len(stray) > 5 else ''}."
+            )
+        orphan_mains = sorted(declared_main - set(home_vehicle))
+        if orphan_mains:
+            roster_warnings.append(
+                f"기초 데이터에는 메인인데 담당 차량을 확정하지 못해 이번 달은 "
+                f"스페어로 처리한 기사 {len(orphan_mains)}명: "
+                f"{', '.join(orphan_mains[:5])}"
+                f"{' 외' if len(orphan_mains) > 5 else ''}. 담당 차량을 등록하시면 "
+                f"기본 틀에 정·부로 들어갑니다."
+            )
+
     partner: dict[str, str] = {}
     by_home: dict[str, list[str]] = defaultdict(list)
     for k, v in home_vehicle.items():
@@ -367,7 +442,12 @@ def generate_month(
                 operating.add((d, v, "P"))
 
     # ── H5 밴드 (기사별 가용일 반영 일할) ──
-    drivers = sorted(set(counts.keys()) | set(home_vehicle.keys()))  # 전월 근무자 + 확정 구성
+    # 기사 명단 — roster 를 받았으면 **기초 데이터에 등록된 사람 전원**이다.
+    # 전월 배차표에서 뽑으면 지난달에 쉰 사람이 이번 달에 통째로 사라진다.
+    if roster:
+        drivers = sorted({str(r["name"]).strip() for r in roster if r.get("name")})
+    else:
+        drivers = sorted(set(counts.keys()) | set(home_vehicle.keys()))  # 전월 근무자 + 확정 구성
     if policy.get("monthly_band_enabled"):
         lo, hi = policy.get("monthly_work_days")
     else:
@@ -426,9 +506,13 @@ def generate_month(
     # 예전에는 이 밴드를 전원(메인+스페어)에게 걸어 근무일수를 붙여 놨는데,
     # 그러려면 메인이 틀의 근무일을 스페어에게 내줘야 한다 — 실제로 메인
     # 근무일수가 20일에서 14일까지 흔들렸다. 틀 고정이 우선이다.
+    # 남은 칸을 나눠 가질 사람 = 틀에 박히지 않은 기사 전원. 스페어만 세면
+    # 안 된다 — 담당 차량이 확정 안 된 메인도 여기서 자리를 받는다.
+    pinned_names = {k for c, k in fixed_cells.items() if c in operating}
     pinned_slots = sum(1 for c in fixed_cells if c in operating)
     free_slots = len(operating) - pinned_slots
-    fair = free_slots / max(len(spares), 1)
+    free_drivers = [k for k in drivers if k not in pinned_names]
+    fair = free_slots / max(len(free_drivers), 1)
     # 하한(“이만큼은 일해야 한다”)은 **걸지 않는다**. 스페어에게도 계단대로
     # 쉬는 날이 깔려 있어 한 달에 나올 수 있는 날이 정해져 있는데, 남은 칸을
     # 인원으로 나눈 값이 그보다 크면 하한과 부딪혀 모델이 통째로 INFEASIBLE 이
@@ -439,7 +523,7 @@ def generate_month(
     lo, hi = 0, len(dates)
     warnings.append(
         f"기본 틀이 메인 {pinned_slots}칸을 확정했습니다 — 남은 {free_slots}칸을 "
-        f"스페어 {len(spares)}명이 나눠 1인당 {fair:.1f}일꼴입니다."
+        f"기사 {len(free_drivers)}명이 나눠 1인당 {fair:.1f}일꼴입니다."
     )
 
     # 스페어가 남은 칸을 감당하는가. 4근2휴면 한 사람이 한 달에 나올 수 있는
@@ -448,7 +532,7 @@ def generate_month(
     # 것이다. 담당자가 빈 칸을 보고 원인을 오해하지 않도록 먼저 알려준다.
     can_work = len(dates) * (2 * cycle.work_days) / cycle.length
     if fair > can_work + 0.5:
-        short = int((fair - can_work) * len(spares))
+        short = int((fair - can_work) * len(free_drivers))
         warnings.append(
             f"근무 주기({cycle.work_days}근 {cycle.rest_days}휴)로는 스페어 한 명이 한 달에 "
             f"최대 {can_work:.0f}일까지만 나올 수 있는데, 남은 칸은 1인당 {fair:.1f}일입니다 — "
@@ -486,6 +570,7 @@ def generate_month(
                 + " — 틀을 고정하기로 했으므로 그대로 두었습니다. "
                 "[배차 설정 → 운영 정책]의 연속 근무일을 확인해 주세요."
             )
+    warnings.extend(roster_warnings)
     warnings.extend(anchor_warnings)
     warnings.append(
         f"메인은 기본 틀(근무 {cycle.work_days}일→휴무 {cycle.rest_days}일, "
@@ -518,6 +603,11 @@ def generate_month(
         pair_swap_rule=str(policy.get("pair_swap_rule")),
         spare_balance_enabled=bool(policy.get("spare_balance_enabled")),
         fairness_lambda=int(policy.get("fairness_lambda")),
+        # 틀에 안 박힌 기사(스페어·담당 차량 미확정 메인)가 0일로 떨어지지
+        # 않게 하는 소프트 하한. 남은 칸을 그 인원으로 나눈 공평한 몫이다.
+        # 주기가 허락하는 날(can_work)을 넘겨 걸면 안 된다 — 남은 칸이 인원보다
+        # 많다고 한 사람을 27일씩 세우게 된다.
+        work_days_floor=max(0, min(int(fair), int(can_work))),
         fixed_cells=fixed_cells,
         fixed_off=fixed_off,
         # 틀 고정 — 스페어를 채우는 동안 메인 배차는 한 칸도 바뀌지 않는다.

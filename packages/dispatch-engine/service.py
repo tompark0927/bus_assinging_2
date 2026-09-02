@@ -501,7 +501,7 @@ async def generate_from_cells_endpoint(
     그걸 cells 로 만들어 여기로 보내면 파일 경로와 똑같이 처리한다.
 
     payload: {year, month, history: [{year, month, cells, groups?}], division?,
-              policy?, leaves?, home_config?, time_limit_s?}
+              policy?, leaves?, home_config?, roster?, time_limit_s?}
     """
     year = int(payload.get("year") or 0)
     month = int(payload.get("month") or 0)
@@ -549,6 +549,9 @@ async def generate_from_cells_endpoint(
             history, policy, year, month,
             leaves=leaves,
             home_vehicle_config=payload.get("home_config") or None,
+            # 기초 데이터의 기사 명단 — 누가 있고 누가 메인인지는 여기가 진실이다.
+            # 없으면 예전처럼 전월 배차표에서 추론한다(되먹임 주의).
+            roster=payload.get("roster") or None,
             time_limit_s=float(payload.get("time_limit_s") or 90.0),
             operating_counts=operating_counts,
             # mains_only: 기본 틀만 깔고 스페어 자리는 비워 둔다.
