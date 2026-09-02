@@ -193,7 +193,7 @@ export default function DispatchSettingsPage() {
   };
 
   return (
-    <div className="space-y-8 pb-20">
+    <div className="space-y-8 pb-4">
       {/* Header */}
       <PageHeader
         help={dispatchSettingsHelp}
