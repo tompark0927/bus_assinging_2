@@ -354,8 +354,11 @@ export default function HolidayReviewPanel() {
             ))}
           </div>
 
-          {/* 직접 추가 — 선거일·지역 행사 등 그 해에만 있는 날 */}
-          <div className="mt-4 rounded-lg bg-gray-50 p-3">
+          {/* 직접 추가 — 선거일·지역 행사 등 그 해에만 있는 날.
+              relative 는 장식이 아니다: 아래 sr-only 라벨이 position:absolute 인데
+              위치 기준이 될 조상이 없으면 문서 전체(html)를 기준으로 잡혀 페이지가
+              화면 아래로 늘어난다. 공휴일 탭 아래에 빈 여백이 스크롤되던 원인이었다. */}
+          <div className="relative mt-4 rounded-lg bg-gray-50 p-3">
             <p className="text-xs font-semibold text-gray-700">직접 추가</p>
             <p className="mt-0.5 text-xs text-gray-500">
               선거일이나 지역 행사처럼 그 해에만 감차하는 날을 넣습니다.

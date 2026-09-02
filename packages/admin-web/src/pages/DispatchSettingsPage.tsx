@@ -193,12 +193,12 @@ export default function DispatchSettingsPage() {
   };
 
   return (
-    // 공휴일 탭은 카드가 곧 페이지의 끝이라, 끝까지 내렸을 때 아래 여백이 그대로 보인다.
-    // -mb-8 로 Layout 의 p-8 아래쪽 여백을 상쇄해 카드가 화면 바닥에 딱 맞게 끝나도록 한다.
-    // (화면 높이로 고정하는 방법도 써 봤지만, 목록 바깥 요소만으로 높이가 차는
-    //  노트북 화면에서 목록이 0px 로 접혀서 되돌렸다.)
-    // 운영 정책 탭은 긴 폼이라 아래에 약간의 여유를 남긴다.
-    <div className={tab === 'engine' ? 'space-y-8 -mb-8' : 'space-y-8 pb-4'}>
+    // 아래 여백은 Layout 의 p-8(32px) 하나로 끝낸다 — 다른 페이지와 같은 값이다.
+    //
+    // 여기에 pb-20 을 더하면 카드 아래로 112px 이 남고, 그걸 -mb-8 로 상쇄하려 했더니
+    // 음수 마진이 main 의 overflow 클리핑을 벗어나 문서(html)가 501px 스크롤됐다.
+    // 화면 아래로 흰 여백이 딸려 나오던 원인이 그것이라, 둘 다 쓰지 않는다.
+    <div className="space-y-8">
       {/* Header */}
       <PageHeader
         help={dispatchSettingsHelp}
