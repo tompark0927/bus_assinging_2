@@ -129,6 +129,7 @@ export default function DispatchSettingsPage() {
 
   const [policy, setPolicy] = useState<CompanyPolicy | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [engineSave, setEngineSave] = useState<{ dirty: boolean; saving: boolean; save: () => void } | null>(null);
 
   useEffect(() => {
     if (data?.policy && !policy) {
@@ -210,6 +211,16 @@ export default function DispatchSettingsPage() {
                 className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-2 text-[15px] font-medium"
               >
                 {updateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                저장
+              </button>
+            )}
+            {tab === 'engine' && engineSave && (
+              <button
+                onClick={engineSave.save}
+                disabled={!engineSave.dirty || engineSave.saving}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center gap-2 text-[15px] font-medium"
+              >
+                {engineSave.saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 저장
               </button>
             )}
@@ -659,7 +670,7 @@ export default function DispatchSettingsPage() {
         </Section>
           </>
         ) : (
-          <EngineTuningSection onGoToPolicy={() => setTab('policy')} />
+          <EngineTuningSection onGoToPolicy={() => setTab('policy')} onSaveStateChange={setEngineSave} />
         )}
     </div>
   );
