@@ -193,7 +193,12 @@ export default function DispatchSettingsPage() {
   };
 
   return (
-    <div className="space-y-8 pb-4">
+    // 공휴일 탭은 카드가 곧 페이지의 끝이라, 끝까지 내렸을 때 아래 여백이 그대로 보인다.
+    // -mb-8 로 Layout 의 p-8 아래쪽 여백을 상쇄해 카드가 화면 바닥에 딱 맞게 끝나도록 한다.
+    // (화면 높이로 고정하는 방법도 써 봤지만, 목록 바깥 요소만으로 높이가 차는
+    //  노트북 화면에서 목록이 0px 로 접혀서 되돌렸다.)
+    // 운영 정책 탭은 긴 폼이라 아래에 약간의 여유를 남긴다.
+    <div className={tab === 'engine' ? 'space-y-8 -mb-8' : 'space-y-8 pb-4'}>
       {/* Header */}
       <PageHeader
         help={dispatchSettingsHelp}
