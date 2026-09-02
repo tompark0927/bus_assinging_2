@@ -40,6 +40,7 @@ import { loadCompanyPolicy } from '../services/solverDispatchService';
 import { approvedLeavesByName } from './engine';
 import { ensureBaseFrameSchedule, fillBaseFrameWindow } from '../services/baseFrameService';
 import { fillSpareSlots } from '../services/fillSpareSlotsService';
+import { rosterForEngine } from '../services/engineRoster';
 
 const router = Router();
 
@@ -305,11 +306,12 @@ router.post('/generate-from-previous', requireRole('DISPATCH'), async (req: Auth
       });
     }
 
-    const [enginePolicy, companyPolicy, leaves, operatingCounts] = await Promise.all([
+    const [enginePolicy, companyPolicy, leaves, operatingCounts, roster] = await Promise.all([
       loadEnginePolicy(companyId),
       loadCompanyPolicy(companyId),
       approvedLeavesByName(companyId, year, month),
       routeOperatingCounts(companyId, serviceType),
+      rosterForEngine(companyId, serviceType),
     ]);
 
     const upstream = await fetch(`${engineUrl}/generate-from-cells`, {
@@ -322,6 +324,9 @@ router.post('/generate-from-previous', requireRole('DISPATCH'), async (req: Auth
         leaves,
         // 요일별 운행 대수는 기초 데이터의 등록값이 진실이다 (지난달 실적 추론보다 정확)
         operating_counts: operatingCounts,
+        // 누가 있고 누가 메인인지는 **기초 데이터가 진실**이다 — 지난달
+        // 배차표에서 추론하면 지난달에 적게 일한 메인이 계속 밀려난다.
+        roster,
         // 기본 틀만 만든다 — 메인(정·부)만 깔고 **스페어 칸은 비운다**.
         // 담당자가 직접 채우거나 [스페어 자동 채우기]로 맡기거나 고르게 하는 게
         // 이 제품의 흐름이다. 엔진이 처음부터 다 채워 버리면 고를 여지가 없다.
