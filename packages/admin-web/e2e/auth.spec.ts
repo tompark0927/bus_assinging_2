@@ -1,5 +1,8 @@
 import { test, expect } from '@playwright/test';
 
+// 로그인 화면 자체를 보는 스위트라 저장된 세션을 쓰면 안 된다.
+test.use({ storageState: { cookies: [], origins: [] } });
+
 test.describe('인증 흐름', () => {
   test('로그인 페이지가 표시됨', async ({ page }) => {
     await page.goto('/login');

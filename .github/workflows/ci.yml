@@ -147,10 +147,10 @@ jobs:
         run: cd packages/backend && npm run backtest:dispatch -- --smoke --scenarios=2
 
   e2e-admin:
-    # 2026-07-28: 이 스위트는 현재 UI 이전 기준으로 작성된 채 CI에서 돈 적이
-    # 없었고(선행 잡 실패로 항상 skip), 29개 중 26개가 구식 셀렉터로 실패한다
-    # (로그인 표시·숨겨진 요금제 페이지 등). 전면 재작성 전까지 비차단으로
-    # 표시해 나머지 파이프라인 신호를 살린다. 재작성 후 이 줄을 제거할 것.
+    # 2026-09-03: 셀렉터 문제는 해소됐다 — 로컬(백엔드가 떠 있는 상태)에서
+    # 25개 통과·0 실패. CI 에서만 전멸했던 원인은 백엔드를 `&` 로만 띄우고
+    # 준비를 기다리지 않은 것이었다(아래 Start/Wait 스텝에서 고침).
+    # 다음 몇 번의 실행이 안정적으로 초록이면 이 줄을 지워 차단 잡으로 되돌릴 것.
     continue-on-error: true
     runs-on: ubuntu-latest
     needs: build-admin
@@ -169,8 +169,21 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+      # 의존성은 **백엔드를 띄우기 전에 전부** 깐다.
+      #
+      # npm workspaces 라 두 `npm ci` 가 같은 루트 node_modules 를 건드린다.
+      # 예전에는 백엔드를 띄운 **뒤** admin-web 을 설치해서, 그 설치가
+      # node_modules 를 갈아엎는 동안 이미 떠 있던 백엔드가 지연 로딩하는
+      # 모듈을 잃었다 — `iconv-lite` 의 `../encodings` 가 사라져 body-parser 가
+      # JSON 본문을 못 읽고 **로그인 POST 가 전부 500** 이 됐다.
+      # GET /health 는 본문이 없어 멀쩡했으므로 준비 확인도 통과했다.
+      # (2026-09-03 진단. 이 순서를 되돌리지 말 것)
       - name: Install backend dependencies
         run: cd packages/backend && npm ci
+      - name: Install admin-web dependencies
+        run: cd packages/admin-web && npm ci
+      - name: Install Playwright browsers
+        run: cd packages/admin-web && npx playwright install --with-deps chromium
       - name: Generate Prisma client
         run: cd packages/backend && npx prisma@5 generate
       - name: Run migrations
@@ -184,22 +197,37 @@ jobs:
           JWT_SECRET: test-secret-key-that-is-long-enough-for-validation
           ANTHROPIC_API_KEY: test-key
           NODE_ENV: test
+      # `npm run dev &` 만 두면 스텝의 셸이 끝날 때 같이 죽고, 살아남아도
+      # 준비되기 전에 테스트가 시작된다. 그러면 vite 프록시가 /api 를 못 붙여
+      # **로그인이 전부 실패**하고, 로그인이 필요한 테스트 19개가 통째로
+      # 무너진다(2026-09-03 진단: 로컬에서는 같은 스위트가 25개 통과).
       - name: Start backend
-        run: cd packages/backend && npm run dev &
+        run: |
+          cd packages/backend
+          nohup npm run dev > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/busync_test
           JWT_SECRET: test-secret-key-that-is-long-enough-for-validation
           ANTHROPIC_API_KEY: test-key
           NODE_ENV: test
           PORT: 4000
-      - name: Install admin-web dependencies
-        run: cd packages/admin-web && npm ci
-      - name: Install Playwright browsers
-        run: cd packages/admin-web && npx playwright install --with-deps chromium
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:4000/health > /dev/null; then
+              echo "backend up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::백엔드가 60초 안에 뜨지 않았습니다"; tail -50 /tmp/backend.log; exit 1
       - name: Run E2E tests
         run: cd packages/admin-web && npm run test:e2e
         env:
           CI: true
+      - name: Backend log (실패 진단용)
+        if: ${{ failure() }}
+        run: tail -100 /tmp/backend.log || true
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
