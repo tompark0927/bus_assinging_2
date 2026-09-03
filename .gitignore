@@ -30,3 +30,4 @@ packages/backend/seed-demo*.js
 # Playwright 산출물 (로컬 실행 시 생성)
 packages/admin-web/test-results/
 packages/admin-web/playwright-report/
+packages/admin-web/playwright/.auth/

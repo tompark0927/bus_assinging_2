@@ -5,16 +5,9 @@ const sidebar = (page: import('@playwright/test').Page) =>
   page.getByRole('navigation', { name: /메인 네비게이션/ });
 
 test.describe('배차표 페이지', () => {
+  // 로그인은 auth.setup.ts 에서 한 번만 한다 (storageState 재사용).
   test.beforeEach(async ({ page }) => {
-    // Login before each test
-    await page.goto('/login');
-    await page.getByLabel('회사 코드', { exact: true }).clear();
-    await page.getByLabel('회사 코드', { exact: true }).fill('DEMO');
-    await page.getByLabel('이메일', { exact: true }).clear();
-    await page.getByLabel('이메일', { exact: true }).fill('admin@demo.busync.kr');
-    await page.getByLabel('비밀번호', { exact: true }).clear();
-    await page.getByLabel('비밀번호', { exact: true }).fill('admin123!');
-    await page.getByRole('button', { name: /로그인/ }).click();
+    await page.goto('/dashboard');
     await expect(page).toHaveURL(/dashboard/, { timeout: 10000 });
   });
 
