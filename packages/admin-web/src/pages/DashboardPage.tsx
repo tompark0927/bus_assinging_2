@@ -248,9 +248,12 @@ export default function DashboardPage() {
     return ages[0] ?? 0;
   }, [pendingDayOffs]);
 
-  // 대타 관리·휴무 요청 — 정식 오픈 전까지 대시보드에서도 숨긴다.
+  // 대타 관리 — 정식 오픈 전까지 대시보드에서도 숨긴다.
   // (Layout.tsx 의 네비게이션 숨김과 한 세트. 되살릴 때 true 로 바꾸면 전부 돌아온다)
-  const showSubstituteAndDayOff = false;
+  const showSubstitute = false;
+  // 휴무 요청 — 2026-09-02 다시 열었다. 기사 앱에서는 계속 신청이 들어오는데
+  // 관리자 화면에만 승인 자리가 없어서 신청이 쌓이고 있었다.
+  const showDayOff = true;
 
   /* ── 렌더 ────────────────────────────────────── */
 
@@ -260,9 +263,9 @@ export default function DashboardPage() {
       <PageHeader icon={LayoutDashboard} title="대시보드" description={todayStr} />
 
       {/* 1. 즉시 처리 필요 — 빨간 영역 */}
-      {((showSubstituteAndDayOff && todayOpenEmergencies.length > 0) || expiringDrivers.length > 0) && (
+      {((showSubstitute && todayOpenEmergencies.length > 0) || expiringDrivers.length > 0) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {showSubstituteAndDayOff && todayOpenEmergencies.length > 0 && (
+          {showSubstitute && todayOpenEmergencies.length > 0 && (
             <UrgentCard
               icon={<AlertTriangle className="w-6 h-6" />}
               tone="red"
@@ -325,9 +328,10 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 4. 운영 큐 — 2-column */}
-      {showSubstituteAndDayOff && (
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* 4. 운영 큐 — 둘 다 열려 있을 때만 2-column */}
+      {(showDayOff || showSubstitute) && (
+      <div className={`grid gap-4 ${showDayOff && showSubstitute ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
+        {showDayOff && (
         <SectionCard
           icon={<CalendarOff className="w-5 h-5 text-gray-900 dark:text-white" />}
           title="휴무 신청 검토"
@@ -374,7 +378,9 @@ export default function DashboardPage() {
             </ul>
           )}
         </SectionCard>
+        )}
 
+        {showSubstitute && (
         <SectionCard
           icon={<AlertTriangle className="w-5 h-5 text-gray-900 dark:text-white" />}
           title="진행 중인 대타"
@@ -407,11 +413,12 @@ export default function DashboardPage() {
             </ul>
           )}
         </SectionCard>
+        )}
       </div>
       )}
 
       {/* 5. 다가오는 휴무 (1주일 내) */}
-      {showSubstituteAndDayOff && upcomingDayOffs.length > 0 && (
+      {showDayOff && upcomingDayOffs.length > 0 && (
         <SectionCard
           icon={<CalendarOff className="w-5 h-5 text-gray-900 dark:text-white" />}
           title="다가오는 휴무 (D-7)"
@@ -472,11 +479,11 @@ export default function DashboardPage() {
       {/* 7. 빠른 진입 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <QuickLink to="/dashboard/schedule" icon={<Calendar size={18} />} label="배차표 관리" />
-        {showSubstituteAndDayOff && (
-          <>
-            <QuickLink to="/dashboard/emergency" icon={<AlertTriangle size={18} />} label="대타 관리" />
-            <QuickLink to="/dashboard/dayoff" icon={<CalendarOff size={18} />} label="휴무 요청" />
-          </>
+        {showSubstitute && (
+          <QuickLink to="/dashboard/emergency" icon={<AlertTriangle size={18} />} label="대타 관리" />
+        )}
+        {showDayOff && (
+          <QuickLink to="/dashboard/dayoff" icon={<CalendarOff size={18} />} label="휴무 요청" />
         )}
         <QuickLink to="/dashboard/today" icon={<Bus size={18} />} label="오늘 운행" />
       </div>
