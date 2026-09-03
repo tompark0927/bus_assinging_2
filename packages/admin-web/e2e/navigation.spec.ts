@@ -34,8 +34,13 @@ test.describe('사이드바 네비게이션', () => {
     await expect(page).toHaveURL(/data/);
   });
 
-  test('대타 관리 페이지로 이동', async ({ page }) => {
-    await sidebar(page).getByRole('link', { name: '대타 관리', exact: true }).click();
+  // 대타 관리는 정식 오픈 전까지 사이드바에서 뺐다(Layout.tsx). 라우트는 살아
+  // 있으므로 주소로 들어가는 것만 확인한다 — 메뉴를 되살리면 위 형태로 되돌린다.
+  test('대타 관리는 사이드바에 없지만 주소로는 열린다', async ({ page }) => {
+    await expect(
+      sidebar(page).getByRole('link', { name: '대타 관리', exact: true }),
+    ).toHaveCount(0);
+    await page.goto('/dashboard/emergency');
     await expect(page).toHaveURL(/emergency/);
   });
 
