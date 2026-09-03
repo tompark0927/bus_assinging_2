@@ -54,9 +54,9 @@ const PAGE_ITEMS: SearchResult[] = [
   { id: 'page-dashboard', category: '페이지', icon: LayoutDashboard, title: '대시보드', subtitle: '메인 대시보드로 이동', path: '/dashboard' },
   { id: 'page-schedule', category: '페이지', icon: Calendar, title: '배차표 관리', subtitle: '월별 배차표 생성·관리', path: '/dashboard/schedule' },
   { id: 'page-labor', category: '페이지', icon: ClipboardList, title: '노무 관리', subtitle: '사고·지적사항 장부', path: '/dashboard/labor' },
-  // 대타 관리·휴무 요청 — 네비게이션에서 숨긴 페이지라 검색에서도 뺀다 (Layout.tsx 참조)
+  // 대타 관리 — 네비게이션에서 숨긴 페이지라 검색에서도 뺀다 (Layout.tsx 참조)
   // { id: 'page-emergency', category: '페이지', icon: AlertTriangle, title: '대타 관리', subtitle: '대타 요청 검토 및 충원', path: '/dashboard/emergency' },
-  // { id: 'page-dayoff', category: '페이지', icon: CalendarOff, title: '휴무 요청', subtitle: '기사 휴무 요청 승인/반려', path: '/dashboard/dayoff' },
+  { id: 'page-dayoff', category: '페이지', icon: CalendarOff, title: '휴무 요청', subtitle: '기사 휴무 요청 승인/반려', path: '/dashboard/dayoff' },
   { id: 'page-today', category: '페이지', icon: Bus, title: '오늘 운행 현황', subtitle: '오늘 노선별 운행 상태', path: '/dashboard/today' },
   // 일일 보고서 — 정식 출시 전까지 숨김
   { id: 'page-data', category: '페이지', icon: Users, title: '기초 데이터', subtitle: '기사·버스·노선 관리', path: '/dashboard/data' },
