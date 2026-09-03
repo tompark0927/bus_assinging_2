@@ -87,7 +87,7 @@ export const login = async (req: Request, res: Response) => {
 
     // 이메일 / 사원번호 / 전화번호로 로그인 가능
     const phoneDigits = String(email).replace(/\D/g, '');
-    const user = await prisma.user.findFirst({
+    let user = await prisma.user.findFirst({
       where: {
         companyId: company.id,
         isActive: true,
@@ -99,6 +99,37 @@ export const login = async (req: Request, res: Response) => {
         ],
       },
     });
+
+    // 하이픈 유무와 무관하게 전화번호로 로그인.
+    //
+    // 위 조회는 입력값만 정규화하고 저장된 값은 그대로 비교한다. 그래서 DB 에
+    // '010-1234-5678' 로 저장된 기사는 앱에서 로그인할 수 없었다 — 앱(LoginScreen)이
+    // 숫자만 남겨 '01012345678' 을 보내기 때문이다. 반대 조합(저장은 숫자, 입력은 하이픈)도
+    // 마찬가지다. 저장된 값도 숫자만 남겨 비교해야 두 형식이 모두 통한다.
+    //
+    // Prisma where 절로는 컬럼을 정규화할 수 없어 raw 로 id 만 찾고 본체는 다시 Prisma 로 읽는다.
+    // 1차 조회가 실패했을 때만 돌므로 이메일·사원번호 로그인 경로는 그대로다.
+    if (!user && phoneDigits.length >= 9) {
+      // LIMIT 2 — 정규화하면 같아지는 계정이 둘 이상이면 어느 쪽인지 알 수 없다.
+      // 그 경우 로그인을 허용하면 남의 계정에 들어갈 수 있으므로 실패로 둔다.
+      const matches = await prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT id FROM "User"
+        WHERE "companyId" = ${company.id}
+          AND "isActive" = true
+          AND phone IS NOT NULL
+          AND regexp_replace(phone, '[^0-9]', '', 'g') = ${phoneDigits}
+        LIMIT 2
+      `;
+      if (matches.length === 1) {
+        user = await prisma.user.findUnique({ where: { id: matches[0].id } });
+      } else if (matches.length > 1) {
+        logger.warn('로그인 실패 - 정규화 후 전화번호가 중복되는 계정', {
+          companyCode,
+          phoneDigits,
+          ip: req.ip,
+        });
+      }
+    }
     // 보안: 모든 인증 실패 케이스(존재 안함 / 비밀번호 미설정 / 비밀번호 틀림)에 대해
     // 동일한 응답을 내려 사용자 enumeration 을 차단. 차이점은 logger 에만 기록.
     const GENERIC_LOGIN_FAIL = '아이디(이메일/전화번호) 또는 비밀번호가 올바르지 않습니다.';
