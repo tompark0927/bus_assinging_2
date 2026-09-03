@@ -169,8 +169,21 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+      # 의존성은 **백엔드를 띄우기 전에 전부** 깐다.
+      #
+      # npm workspaces 라 두 `npm ci` 가 같은 루트 node_modules 를 건드린다.
+      # 예전에는 백엔드를 띄운 **뒤** admin-web 을 설치해서, 그 설치가
+      # node_modules 를 갈아엎는 동안 이미 떠 있던 백엔드가 지연 로딩하는
+      # 모듈을 잃었다 — `iconv-lite` 의 `../encodings` 가 사라져 body-parser 가
+      # JSON 본문을 못 읽고 **로그인 POST 가 전부 500** 이 됐다.
+      # GET /health 는 본문이 없어 멀쩡했으므로 준비 확인도 통과했다.
+      # (2026-09-03 진단. 이 순서를 되돌리지 말 것)
       - name: Install backend dependencies
         run: cd packages/backend && npm ci
+      - name: Install admin-web dependencies
+        run: cd packages/admin-web && npm ci
+      - name: Install Playwright browsers
+        run: cd packages/admin-web && npx playwright install --with-deps chromium
       - name: Generate Prisma client
         run: cd packages/backend && npx prisma@5 generate
       - name: Run migrations
@@ -208,10 +221,6 @@ jobs:
             sleep 1
           done
           echo "::error::백엔드가 60초 안에 뜨지 않았습니다"; tail -50 /tmp/backend.log; exit 1
-      - name: Install admin-web dependencies
-        run: cd packages/admin-web && npm ci
-      - name: Install Playwright browsers
-        run: cd packages/admin-web && npx playwright install --with-deps chromium
       - name: Run E2E tests
         run: cd packages/admin-web && npm run test:e2e
         env:
